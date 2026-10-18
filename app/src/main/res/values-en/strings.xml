@@ -18,6 +18,9 @@
     <string name="cover_style_keep">Keep wallpaper</string>
     <string name="cover_clock_section">Cover &amp; clock</string>
     <string name="lyrics_section">Lyrics</string>
+    <string name="lyrics_max_lines">Simultaneously highlighted passages</string>
+    <string name="lyrics_max_lines_summary">Keep unfinished lyrics active, up to 4 passages. Attached backing vocals do not count. Newer passages take priority above the limit.</string>
+    <string name="lyrics_font_size">Lyric font size</string>
     <string name="clock_size">Clock size</string>
     <string name="clock_force_colon">Always show the clock colon</string>
     <string name="clock_force_colon_summary">No effect on some styles</string>

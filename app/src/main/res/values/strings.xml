@@ -18,6 +18,9 @@
     <string name="cover_style_keep">保留壁纸</string>
     <string name="cover_clock_section">封面与时钟</string>
     <string name="lyrics_section">锁屏歌词</string>
+    <string name="lyrics_max_lines">同时突出显示的段落数</string>
+    <string name="lyrics_max_lines_summary">保留尚未唱完的歌词，最多 4 段；下挂和声不占名额。超出上限时优先显示较新的段落。</string>
+    <string name="lyrics_font_size">歌词字号</string>
     <string name="clock_size">时钟大小</string>
     <string name="clock_force_colon">时钟强制显示冒号</string>
     <string name="clock_force_colon_summary">部分样式不生效</string>

@@ -24,11 +24,11 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon :app:assembleRelease \
             -PmcVersionName=0.9.3 \
-            -PmcVersionSuffix=-lyrics-fix \
-            -PmcVersionCode=903001
+            -PmcVersionSuffix=-multiline \
+            -PmcVersionCode=903002
       - uses: actions/upload-artifact@v4
         with:
-          name: HyperMusicCover-v0.9.3-lyrics-fix
+          name: HyperMusicCover-v0.9.3-multiline
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14

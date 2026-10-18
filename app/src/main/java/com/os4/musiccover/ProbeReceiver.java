@@ -163,6 +163,11 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             if (LockLyrics.setStyle(key, i.getFloatExtra("v", Float.NaN))) {
                 ModuleState.saveStateSoon();
             }
+        } else if ("lyricmaxlines".equals(op)) {
+            if (LockLyrics.setMaxLines(i.getIntExtra("v", LockLyrics.sMaxLines))) {
+                LockLyrics.refresh();
+                ModuleState.saveStateSoon();
+            }
         } else if ("lyricalign".equals(op)) {
             // Same shape as the translation switch: the view notices the change and
             // lays the lines out again, refresh only has to start the frames that let
@@ -392,6 +397,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             out.putBoolean("lyrictrans", LockLyrics.sTrans);
             out.putBoolean("lyricroma", LockLyrics.sRoma);
             out.putInt("lyricalign", LockLyrics.sAlign);
+            out.putInt("lyricmaxlines", LockLyrics.sMaxLines);
             out.putFloat("lyricfill", LockLyrics.sStyle.fill);
             out.putFloat("lyricpos", LockLyrics.sStyle.pos);
             out.putFloat("lyricside", LockLyrics.sStyle.sideDp);

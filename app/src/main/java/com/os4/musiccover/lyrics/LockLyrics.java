@@ -129,6 +129,16 @@ public final class LockLyrics {
     public static volatile int sAlign = ALIGN_LEFT;
     /** Immutable snapshot: the UI, renderer and state loader all use the same validated values. */
     public static volatile LyricStyle sStyle = LyricStyle.DEFAULT;
+    public static volatile int sMaxLines = LyricFocus.DEFAULT_LIMIT;
+
+    public static boolean setMaxLines(int value) {
+        int next = LyricFocus.clampLimit(value);
+        if (next == sMaxLines) return false;
+        sMaxLines = next;
+        LyricView view = sView;
+        if (view != null) view.kick();
+        return true;
+    }
 
     /**
      * Applies one alignment pref, validated here rather than at the callers: a state file and an

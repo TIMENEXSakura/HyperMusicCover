@@ -350,6 +350,7 @@ final class LyricView extends View {
 
     /** The line the stack is on, the line whose interlude is showing (-1), and both as one key. */
     private int focus = -1;
+    private final LyricFocus singing = new LyricFocus();
     private int dotsFor = -1;
     /** The scroll spring for the current move, set per move like AMLL's policy. */
     private float springK = K_SLOW, springC = C_SLOW;
@@ -483,6 +484,11 @@ final class LyricView extends View {
         if (n == 0 || dotsTop.length != n) return -1L;
         int idx = indexAt(pos);
         long best = Long.MAX_VALUE;
+        for (LyricLine line : lines) {
+            int start = LyricFocus.startOf(line), end = LyricFocus.endOf(line);
+            if (start > pos && start < best) best = start;
+            if (end > pos && end < best) best = end;
+        }
         for (int k = Math.max(0, idx); k <= Math.min(n - 1, idx + 2); k++) {
             long t = switchAt(k);
             if (t > pos && t < best) best = t;
@@ -668,8 +674,14 @@ final class LyricView extends View {
                 }
             }
         }
+        boolean groupChanged = singing.update(lines, ms, LockLyrics.sMaxLines, sf);
+        singing.layout(base, height, GAP_DP * density);
+        if (singing.count > 0) {
+            sf = singing.last;
+            dots = -1;
+        }
         int key = dots >= 0 ? -(dots + 1) : sf;
-        if (key != focusKey) {
+        if (key != focusKey || groupChanged) {
             // Whether this was a seek is a question about the playhead, not about how many lines
             // it crossed. Counting lines got it wrong in both directions and inconsistently
             // inside one drag: eight lines is seconds of a fast song and minutes of a slow one,
@@ -683,7 +695,9 @@ final class LyricView extends View {
             dotsFor = dots;
             focusKey = key;
             focusChangedAt = now;
-            float to = dots >= 0 ? dotsTop[dots] : base[sf];
+            anchorFixWant = anchorFixTarget();
+            if (still) anchorFix = anchorFixWant;
+            float to = dots >= 0 ? dotsTop[dots] : singing.position(sf, base);
             if (first) {
                 snap(to);
                 // A freshly laid out song has nowhere to slide from, and the correction it needs
@@ -730,7 +744,7 @@ final class LyricView extends View {
                 for (int i = 0; i < n; i++) {
                     aimAt[i] = now + Math.round(delay);
                     nextAim[i] = to;
-                    float y = anchor + base[i] - to;
+                    float y = anchor + singing.position(i, base) - to;
                     if (y + height[i] >= bandTop) {
                         delay += step;
                         if (i >= sf) step *= RIPPLE_DECAY;
@@ -746,12 +760,12 @@ final class LyricView extends View {
             why |= 8;
         }
 
-        float target = dotsFor >= 0 ? dotsTop[dotsFor] : base[focus];
+        float target = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
         // Band-relative so it means the same on any screen; the fallback is for the frames
         // before the band has been measured.
         float band = bandBottom - bandTop;
         float speedCap = (band > 1f ? band : Math.max(1, getHeight())) * SEEK_SPEED_BANDS;
-        int lo = Math.max(0, focus - 6), hi = Math.min(n - 1, focus + 12);
+        int lo = Math.max(0, singing.first - 6), hi = Math.min(n - 1, focus + 12);
         for (int i = 0; i < n; i++) {
             if (i < lo || i > hi) {
                 if (scroll[i] != target || emph[i] != 0f || blur[i] != 0f) {
@@ -802,11 +816,10 @@ final class LyricView extends View {
             }
 
             LyricLine l = lines.get(i);
-            boolean focused = dotsFor < 0 && i == focus;
+            boolean focused = dotsFor < 0 && singing.contains(i);
             // Emphasis: on the scroll focus, and on a duet's overlapping answer while it is sung.
             // Off in one frame - the line that has been sung drops to the inactive level at once.
-            boolean on = focused || (dotsFor < 0 && i < focus && i >= focus - 2
-                    && ms >= l.start && ms < l.end);
+            boolean on = focused;
             float eTo = on ? 1f : 0f;
             float e = approach(emph[i], eTo, dtTo, eTo > emph[i] ? TAU_EMPH_IN : TAU_EMPH_OUT);
             if (Math.abs(e - eTo) < 0.003f) e = eTo;
@@ -872,8 +885,7 @@ final class LyricView extends View {
     /** How many rows from the focus a line counts as - lines above count one further. */
     private int rowsFromFocus(int i) {
         if (dotsFor >= 0) return i >= dotsFor ? i - dotsFor + 1 : dotsFor - i + 1;
-        if (i == focus) return 0;
-        return i > focus ? i - focus : focus - i + 1;
+        return singing.distance(i);
     }
 
     /** The blur a line is heading for: none on the focus, then by distance. */
@@ -1338,7 +1350,7 @@ final class LyricView extends View {
         if (p == ClockCollapse.Phase.ENTER || p == ClockCollapse.Phase.EXIT) return true;
         if (lines.isEmpty() || focus < 0 || show == 0f) return false;
         int n = lines.size();
-        int lo = Math.max(0, focus - 6), hi = Math.min(n - 1, focus + 12);
+        int lo = Math.max(0, singing.first - 6), hi = Math.min(n - 1, focus + 12);
         for (int i = lo; i <= hi; i++) {
             if (moving(i)) return true;
             float e = emph[i];
@@ -1417,7 +1429,8 @@ final class LyricView extends View {
     /** A held note is glowing now, or is about to - the window's HDR mode follows this. */
     private boolean glowSoon() {
         if (!LockLyrics.sHdr || focus < 0 || show == 0f || !LockLyrics.playing()) return false;
-        for (int i = Math.max(0, focus - 1); i <= focus; i++) {
+        for (int i = Math.max(0, singing.first); i <= focus; i++) {
+            if (!singing.contains(i)) continue;
             LyricLine l = lines.get(i);
             if (!l.hasWords() || emph[i] <= 0f) continue;
             for (int k = 0; k < l.sylStart.length; k++) {
@@ -1433,7 +1446,8 @@ final class LyricView extends View {
     /** A singing line's words are moving: the fill, the lift, a held note's glow. */
     private boolean wordsLive() {
         if (!LockLyrics.playing() || focus < 0 || show == 0f) return false;
-        for (int i = Math.max(0, focus - 1); i <= focus; i++) {
+        for (int i = Math.max(0, singing.first); i <= focus; i++) {
+            if (!singing.contains(i)) continue;
             LyricLine l = lines.get(i);
             if (l.hasWords() && emph[i] > 0f && ms >= l.start
                     && ms < l.end + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) {
@@ -1662,7 +1676,10 @@ final class LyricView extends View {
         // .borrowTranslations): nothing to start over, so the lines carry on where they are.
         boolean reveal = gainsTranslations(lines, b.lines) && b.width == layoutWidth
                 && b.align == builtAlign && focus >= 0 && scroll.length == b.lines.size();
-        float[] oldBase = base;
+        float[] oldBase = base.clone();
+        for (int index = 0; index < oldBase.length; index++) {
+            oldBase[index] = singing.position(index, base);
+        }
         applyPaintStyle(b.style);
         version = b.version;
         builtTrans = b.transOn;
@@ -1681,6 +1698,8 @@ final class LyricView extends View {
         height = b.height;
         charX = b.charX;
         dotsTop = b.dotsTop;
+        singing.update(lines, ms, LockLyrics.sMaxLines, Math.max(0, focus));
+        singing.layout(base, height, GAP_DP * density);
         blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
         if (reveal) {
             revealTranslations(oldBase);
@@ -1699,6 +1718,7 @@ final class LyricView extends View {
         java.util.Arrays.fill(scale, INACTIVE_SCALE);
         blur = new float[n];
         focus = -1;
+        singing.reset();
         dotsFor = -1;
         focusKey = Integer.MIN_VALUE;
         if (LockLyrics.verbose || n > 0) {
@@ -1741,18 +1761,18 @@ final class LyricView extends View {
         int n = lines.size();
         long now = now();
         if (dotsFor >= 0 && Float.isNaN(dotsTop[dotsFor])) dotsFor = -1;
-        float to = dotsFor >= 0 ? dotsTop[dotsFor] : base[focus];
+        float to = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
         springK = K_SLOW;
         springC = C_SLOW;
         float anchor = anchorY();
         float delay = 0f;
         for (int i = 0; i < n; i++) {
-            float d = base[i] - oldBase[i];
+            float d = singing.position(i, base) - oldBase[i];
             scroll[i] += d;
             aim[i] += d;
             nextAim[i] = to;
             aimAt[i] = now + Math.round(delay);
-            float y = anchor + base[i] - to;
+            float y = anchor + singing.position(i, base) - to;
             if (y + height[i] >= bandTop && y <= bandBottom) delay += RIPPLE_MS;
         }
         transRevealAt = now;
@@ -1863,6 +1883,11 @@ final class LyricView extends View {
      * band is the part that moves: step() eases this and leaves the band alone.
      */
     private float anchorFixTarget() {
+        if (focus >= 0 && singing.count > 1) {
+            float bandHeight = bandBottom - bandTop;
+            return (0.5f - ANCHOR) * bandHeight - singing.height(base, height) / 2f
+                    + singing.position(focus, base) - singing.position(singing.first, base);
+        }
         if (!centring()) return 0f;
         float bandH = bandBottom - bandTop;
         float anchor = bandTop + ANCHOR * bandH;
@@ -1931,29 +1956,37 @@ final class LyricView extends View {
             canvas.scale(sc, sc, getWidth() / 2f, homeY());
         }
         canvas.clipRect(0f, bandTop, getWidth(), bandBottom);
-        for (int i = Math.max(0, focus - 6); i < n; i++) {
+        float groupScale = singing.count > 1
+                ? LyricFocus.fit(singing.height(base, height), bandH - 2f * fade) : 1f;
+        float center = (bandTop + bandBottom) / 2f;
+        canvas.scale(groupScale, groupScale, getWidth() / 2f, center);
+        for (int i = Math.max(0, singing.first - 6); i < n; i++) {
+            if (!singing.visible(i)) continue;
             // The interlude slot above this line, if it has one: its dots move with the line, and
             // sit there dim from the start rather than leaving a hole until their turn.
-            if (!Float.isNaN(dotsTop[i])) {
-                float dy = anchor + dotsTop[i] - scroll[i];
-                if (dy > bandBottom) break;
+            if (!Float.isNaN(dotsTop[i]) && !(singing.count > 0 && i >= singing.first && i <= singing.last)) {
+                float dy = anchor + dotsTop[i] + singing.position(i, base) - base[i] - scroll[i];
+                float screenDots = center + (dy - center) * groupScale;
+                if (screenDots > bandBottom) break;
                 float dh = DOTS_SLOT_EM * textPx;
-                float dEdge = Math.min(clamp01((dy - bandTop) / fade),
-                        clamp01((bandBottom - (dy + dh)) / fade));
+                float dEdge = Math.min(clamp01((screenDots - bandTop) / fade),
+                        clamp01((bandBottom - (screenDots + dh * groupScale)) / fade));
                 float da = vis * dEdge;
                 if (dotsFor >= 0 ? i < dotsFor : i <= focus) da *= ABOVE_ALPHA;
                 if (da > 0.003f) drawDots(canvas, i, side, dy, da);
             }
-            float y = anchor + base[i] - scroll[i];
-            if (y > bandBottom) break;
-            if (y + height[i] < bandTop) continue;
+            float y = anchor + singing.position(i, base) - scroll[i];
+            float screenY = center + (y - center) * groupScale;
+            float screenBottom = screenY + height[i] * groupScale;
+            if (screenY > bandBottom) break;
+            if (screenBottom < bandTop) continue;
             // Faded by the row's own top against the top edge and its own bottom against the
             // bottom edge, so a line is already gone by the time it would be cut.
-            float edge = Math.min(clamp01((y - bandTop) / fade),
-                    clamp01((bandBottom - (y + height[i])) / fade));
+            float edge = Math.min(clamp01((screenY - bandTop) / fade),
+                    clamp01((bandBottom - screenBottom) / fade));
             float a = vis * edge;
             // Lines already sung, above the focus, sit further back than the ones to come.
-            if (dotsFor >= 0 ? i < dotsFor : i < focus) a *= ABOVE_ALPHA;
+            if (dotsFor >= 0 ? i < dotsFor : i < focus && !singing.contains(i)) a *= ABOVE_ALPHA;
             if (a <= 0.003f) continue;
             drawLine(canvas, i, side, y, a);
         }

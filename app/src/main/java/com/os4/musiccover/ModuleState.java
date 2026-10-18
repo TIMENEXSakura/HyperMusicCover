@@ -88,7 +88,8 @@ public final class ModuleState {
                     // 0 left, 1 centre, 2 right, and left when the key is absent: a file from
                     // before this setting is one where the lyrics always sat left.
                     + "\nlyricalign=" + LockLyrics.sAlign
-                    // The band's five values are fixed now and are not written; see LyricStyle.
+                    + "\nlyricmaxlines=" + LockLyrics.sMaxLines
+                    + "\nlyricsize=" + LockLyrics.sStyle.sizeSp
                     // Not a setting - whether the last lookup got its lyric from the session.
                     // Kept across restarts so the settings page does not accuse a working
                     // provider module of doing nothing merely because nothing has played yet;
@@ -206,10 +207,8 @@ public final class ModuleState {
                         else if ("lyricroma".equals(k)) LockLyrics.sRoma = "1".equals(v);
                         // Clamped in the setter; absent or unreadable means left, see saveState.
                         else if ("lyricalign".equals(k)) LockLyrics.setAlign(Integer.parseInt(v));
-                        // The dp lyricoff and lyricgap from before the shares are dropped: what
-                        // they meant depends on the room, which is not known here. lyricfill,
-                        // lyricpos, lyricside, lyricsize and lyricweight are dropped with them:
-                        // the band and its type are fixed, see LyricStyle.DEFAULT.
+                        else if ("lyricmaxlines".equals(k)) LockLyrics.setMaxLines(Integer.parseInt(v));
+                        else if ("lyricsize".equals(k)) LockLyrics.setStyle("size", Float.parseFloat(v));
                         else if ("sawlyric".equals(k)) {
                             LockLyrics.sSawSessionLyric = "1".equals(v);
                         }
