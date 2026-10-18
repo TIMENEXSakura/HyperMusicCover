@@ -342,11 +342,7 @@ object LyriconSource {
                 line.begin.toInt(), line.end.toInt(), line.isAlignedRight, null, null, null)
         }
         // The background vocal, which the renderer hangs under the line rather than beside it.
-        val second = line.secondary?.trim()
-        if (!second.isNullOrEmpty()) {
-            built.bg = LyricLine(second, null, line.begin.toInt(), line.end.toInt(),
-                line.isAlignedRight, null, null, null)
-        }
+        LyriconBackground.attach(built, line, nextStart)
         return built
     }
 

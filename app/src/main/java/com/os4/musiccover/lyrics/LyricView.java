@@ -1439,6 +1439,10 @@ final class LyricView extends View {
                     && ms < l.end + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) {
                 return true;
             }
+            if (l.bg != null && l.bg.hasWords() && emph[i] > 0f && ms >= l.bg.start
+                    && ms < l.bg.end + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) {
+                return true;
+            }
         }
         return false;
     }
@@ -1631,7 +1635,7 @@ final class LyricView extends View {
                         .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED)
                         .build();
                 h += BG_GAP_DP * density + b.bgLay[i].getHeight();
-                if (l.hasWords()) b.charXBg[i] = charXOf(b.bgLay[i], l.bg);
+                if (l.bg.hasWords()) b.charXBg[i] = charXOf(b.bgLay[i], l.bg);
             }
             // Left out of the layout entirely when the switch is off, rather than laid out and
             // skipped in the draw: the rows it would have taken are most of a line's height, and
@@ -2035,7 +2039,7 @@ final class LyricView extends View {
         // In the AOD's still mode a word-timed line is drawn whole, like a line-timed one: a fill
         // frozen at whatever syllable the one frame caught would be wrong for the whole line.
         boolean still = LockLyrics.still();
-        boolean words = l.hasWords() && e > 0f && !still;
+        boolean words = (l.hasWords() || (l.bg != null && l.bg.hasWords())) && e > 0f && !still;
         int save = canvas.save();
         canvas.translate(x, y);
         canvas.scale(sc, sc, pivotX, 0f);
@@ -2365,16 +2369,28 @@ final class LyricView extends View {
         LyricLine l = lines.get(i);
         StaticLayout lay = main[i];
         float level = INACTIVE + (1f - INACTIVE) * e;
-        drawWordRows(c, l, lay, paint, charXFor(i, lay, l, charX), e, a * level,
-                a * (INACTIVE + (1f - INACTIVE) * e * UNSUNG), 1f, true, 0);
+        if (l.hasWords()) {
+            drawWordRows(c, l, lay, paint, charXFor(i, lay, l, charX), e, a * level,
+                    a * (INACTIVE + (1f - INACTIVE) * e * UNSUNG), 1f, true, 0);
+        } else {
+            lay.getPaint().setColor(ink(a * (INACTIVE + (1f - INACTIVE) * lit[i]), 0f));
+            lay.draw(c);
+            lay.getPaint().setColor(0xFFFFFFFF);
+        }
         StaticLayout bl = bgLay[i];
         if (bl != null && l.bg != null) {
             int save = c.save();
             c.translate(0f, lay.getHeight() + BG_GAP_DP * density);
-            drawWordRows(c, l.bg, bl, bgPaint, charXFor(i, bl, l.bg, charXBg), e,
-                    a * level * BG_ALPHA,
-                    a * (INACTIVE + (1f - INACTIVE) * e * UNSUNG) * BG_ALPHA,
-                    BG_LIFT, false, 1);
+            if (l.bg.hasWords()) {
+                drawWordRows(c, l.bg, bl, bgPaint, charXFor(i, bl, l.bg, charXBg), e,
+                        a * level * BG_ALPHA,
+                        a * (INACTIVE + (1f - INACTIVE) * e * UNSUNG) * BG_ALPHA,
+                        BG_LIFT, false, 1);
+            } else {
+                bl.getPaint().setColor(ink(a * level * BG_ALPHA, 0f));
+                bl.draw(c);
+                bl.getPaint().setColor(0xFFFFFFFF);
+            }
             c.restoreToCount(save);
         }
         drawTranslation(c, i, a * level);
