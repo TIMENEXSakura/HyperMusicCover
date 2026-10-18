@@ -1782,8 +1782,10 @@ final class LyricView extends View {
         long now = now();
         if (dotsFor >= 0 && Float.isNaN(dotsTop[dotsFor])) dotsFor = -1;
         float to = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
-        springK = K_SLOW;
-        springC = C_SLOW;
+        float weight = LyricTransition.motionWeight(singing.count,
+                singing.height(base, height), bandBottom - bandTop);
+        springK = K_SLOW / weight;
+        springC = (float) Math.sqrt(springK) * (singing.count > 1 ? 1.95f : DAMPING_MULT);
         float anchor = anchorY();
         float delay = 0f;
         for (int i = 0; i < n; i++) {
