@@ -25,7 +25,7 @@ jobs:
           ./gradlew --no-daemon :app:assembleRelease \
             -PmcVersionName=0.9.3 \
             -PmcVersionSuffix=-multiline \
-            -PmcVersionCode=903002
+            -PmcVersionCode=903003
       - uses: actions/upload-artifact@v4
         with:
           name: HyperMusicCover-v0.9.3-multiline
