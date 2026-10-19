@@ -150,7 +150,7 @@ private fun PriorityRows(
     dimmed: (String) -> Boolean = { false },
     trailing: @Composable (String) -> Unit = {},
 ) {
-    var items by remember(order) { mutableStateOf(order.split(',')) }
+    var items by remember { mutableStateOf(order.split(',')) }
     val commit by rememberUpdatedState(onCommit)
     val rowHeight = with(LocalDensity.current) { 64.dp.toPx() }
     var active by remember { mutableStateOf<String?>(null) }
@@ -165,6 +165,9 @@ private fun PriorityRows(
     val moveDown = stringResource(R.string.lyrics_priority_down)
     val dragDescription = stringResource(R.string.lyrics_priority_drag)
     val skipped = stringResource(R.string.lyrics_priority_skipped)
+    LaunchedEffect(order) {
+        if (active == null) items = order.split(',')
+    }
     fun move(source: String, target: Int) {
         val index = items.indexOf(source)
         if (index < 0 || target !in items.indices || index == target) return
