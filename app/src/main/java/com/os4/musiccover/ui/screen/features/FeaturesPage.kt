@@ -566,6 +566,7 @@ private fun LyricsGroup(
         FoldUnder(module.lyrics, settled = module.alive) {
             Column {
                 BasicComponent(title = stringResource(R.string.lyrics_two_finger_tap), enabled = enabled)
+                LyricSourceSettings(enabled, module, onChange)
                 ValueSlider(
                     title = stringResource(R.string.lyrics_max_lines),
                     summary = stringResource(R.string.lyrics_max_lines_summary),

@@ -131,6 +131,36 @@ public final class LockLyrics {
     public static volatile LyricStyle sStyle = LyricStyle.DEFAULT;
     public static volatile int sMaxLines = LyricFocus.DEFAULT_LIMIT;
 
+    public static void setSourcePolicy(boolean custom, boolean network, String sources, String formats) {
+        LyricSourcePolicy.Config previous = LyricSourcePolicy.current;
+        LyricSourcePolicy.Config next = new LyricSourcePolicy.Config(custom, network, sources, formats);
+        if (previous.custom == next.custom && previous.allowNetwork == next.allowNetwork
+                && previous.sourceOrder.equals(next.sourceOrder) && previous.formatOrder.equals(next.formatOrder)) return;
+        LyricSourcePolicy.current = next;
+        LyricSource.invalidateRequests();
+        CACHE.clear();
+        Main.main().removeCallbacks(SETTLED_LOOKUP);
+        unpark();
+        sGen++;
+        sInfoSeen = null;
+        sInfoTries = 0;
+        sSource = LyricSource.SRC_NONE;
+        if (sEnabled && !sDemo && !sKey.isEmpty()) lookup(sKey, sController, false);
+    }
+
+    static void onProviderLyrics() {
+        Main.main().post(() -> {
+            if (!sEnabled || sDemo || sKey.isEmpty() || sController == null) return;
+            if (!sLines.isEmpty() && !LyricSourcePolicy.current.mayReplace(policySource(sSource), "lyricon")) return;
+            CACHE.remove(sKey);
+            lookup(sKey, sController, !sLines.isEmpty());
+        });
+    }
+
+    private static String policySource(int source) {
+        return source == LyricSource.SRC_LYRIC_INFO ? "metadata" : srcName(source);
+    }
+
     public static boolean setMaxLines(int value) {
         int next = LyricFocus.clampLimit(value);
         if (next == sMaxLines) return false;
@@ -870,6 +900,7 @@ public final class LockLyrics {
             sLoading = false;
             sSource = hit.source;
             setLines(hit.lines, "cached");
+            rereadIfNewPayload(key, c);
             return;
         }
         // What the lookup about to start will read the session as, so a payload that turns up
@@ -925,6 +956,7 @@ public final class LockLyrics {
                 sLoading = false;
                 sSource = hit.source;
                 setLines(hit.lines, "cached");
+                rereadIfNewPayload(key, c);
                 return;
             }
             sInfoSeen = LyricSource.infoFor(c);
@@ -957,6 +989,7 @@ public final class LockLyrics {
         // away, Apple's lyric - on the session 0.55s after the track change - waited out ten
         // seconds of catalogues that had nothing (2026-10-06, Here's to Never Growing Up).
         if (!sEnabled || key.isEmpty() || sDemo) return;
+        if (!sLines.isEmpty() && !LyricSourcePolicy.current.mayReplace(policySource(sSource), "metadata")) return;
         if (sLoading && sParked == null && !sLines.isEmpty()) return;
         if (sParked != null && sParked.rereading) return;
         String info = LyricSource.infoFor(c);
@@ -1004,6 +1037,12 @@ public final class LockLyrics {
                     Xp.log(TAG + "lyrics for " + want + " arrived after the track changed");
                     return;
                 }
+                if (keepCurrent && !sLines.isEmpty() && !lines.isEmpty()
+                        && !LyricSourcePolicy.current.mayReplace(policySource(sSource), policySource(source))) {
+                    sLoading = false;
+                    refresh();
+                    return;
+                }
                 Parked parked = sParked;
                 if (parked != null && parked.rereading) {
                     // The re-read the parked answer was waiting for. Whatever it found goes up in
@@ -1029,6 +1068,7 @@ public final class LockLyrics {
                     return;
                 }
                 if (!keepCurrent && source != LyricSource.SRC_LYRIC_INFO
+                        && LyricSourcePolicy.current.mayReplace(policySource(source), "metadata")
                         && pkgOf(want).equals(sSessionPkg)) {
                     long left = sTrackAt + SESSION_WAIT_MS - SystemClock.uptimeMillis();
                     if (left > 0L) {

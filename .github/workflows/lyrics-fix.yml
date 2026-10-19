@@ -22,13 +22,15 @@ jobs:
       - name: Build APK
         run: |
           chmod +x gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest --tests 'com.os4.musiccover.lyrics.*'
           ./gradlew --no-daemon :app:assembleRelease \
             -PmcVersionName=0.9.3 \
-            -PmcVersionSuffix=-multiline \
-            -PmcVersionCode=903003
+            -PmcVersionSuffix=-Plus \
+            -PmcVersionCode=903005
+          cp app/build/outputs/apk/release/app-release.apk HyperMusicCover-0.9.3-Plus.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: HyperMusicCover-v0.9.3-multiline
-          path: app/build/outputs/apk/release/*.apk
+          name: HyperMusicCover-0.9.3-Plus
+          path: HyperMusicCover-0.9.3-Plus.apk
           if-no-files-found: error
           retention-days: 14

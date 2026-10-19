@@ -5,6 +5,40 @@ import java.util.Arrays;
 import static org.junit.Assert.*;
 
 public class LyricTransitionTest {
+    @Test public void resizingPreservesVisibleTopAndSpringDisplacement() {
+        float[] oldHeight = {80}, height = {160}, scale = {0.97f};
+        float[] scroll = {20}, aim = {40}, next = {60};
+        float top = LyricTransition.scaledTop(100 - scroll[0], oldHeight[0], scale[0]);
+        float displacement = scroll[0] - aim[0];
+        LyricTransition.resize(oldHeight, height, 0.5f, scale, scroll, aim, next);
+        assertEquals(top, LyricTransition.scaledTop(100 - scroll[0], height[0], scale[0]), 0.001f);
+        assertEquals(displacement, scroll[0] - aim[0], 0.001f);
+        assertEquals(20, next[0] - aim[0], 0.001f);
+        assertEquals(80 * 0.97f, height[0] * scale[0], 0.001f);
+    }
+
+    @Test public void scalingKeepsTextCenterAtEveryFontSize() {
+        for (float font : new float[]{18, 25, 36}) {
+            for (float scale : new float[]{0.90f, 0.97f, 1f, 1.025f, 1.4f}) {
+                float height = 90 * font / 25;
+                float top = LyricTransition.scaledTop(150, height, scale);
+                assertEquals(150 + height / 2, top + height * scale / 2, 0.001f);
+            }
+        }
+    }
+
+    @Test public void centeringRetargetKeepsPositionAndVelocityDisplacementContinuous() {
+        float anchor = 300;
+        float[] scroll = {40, 70}, aim = {100, 100}, next = {120, 120};
+        float oldY = anchor + 200 - scroll[1];
+        float oldDisplacement = scroll[1] - aim[1];
+        LyricTransition.shift(80, scroll, aim, next);
+        anchor += 80;
+        assertEquals(oldY, anchor + 200 - scroll[1], 0);
+        assertEquals(oldDisplacement, scroll[1] - aim[1], 0);
+        assertEquals(20, next[1] - aim[1], 0);
+    }
+
     private LyricFocus focusAt(int position, float[] base, float[] heights) {
         LyricFocus focus = new LyricFocus();
         focus.update(Arrays.asList(

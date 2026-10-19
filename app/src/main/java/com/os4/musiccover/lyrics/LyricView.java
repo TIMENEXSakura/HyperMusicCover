@@ -110,23 +110,6 @@ final class LyricView extends View {
      */
     /** A band shorter than this many rows of text is not worth showing lyrics in. */
     private static final float MIN_BAND_ROWS = 2.4f;
-    /**
-     * How long the block takes to slide to a new centre, once the band or the rows in it change.
-     *
-     * The centring is a step function: it asks how many of the rows fit between the clock and the
-     * card, and one row more or less moves the block half a row at once. The band crosses those
-     * thresholds while it is still moving - on the way into cover mode the clock is collapsing and
-     * the card rising, so the count goes 4, 5, 6 as the room appears - and each crossing used to
-     * land in a single frame. Same when a line long enough to wrap scrolls into the block: it is
-     * two rows tall where its neighbours are one, so the block's height and its centre move
-     * together. Easing the correction turns both into a slide.
-     *
-     * Short enough to read as the block settling rather than as the lyrics lagging behind: the
-     * band's own ends are not eased at all, so everything the clock and the card do is still
-     * tracked frame for frame.
-     */
-    private static final float TAU_ANCHOR = 0.09f;
-
     // ---- depth
     /**
      * Blur radius per row of distance beyond the first, up to BLUR_MAX_ROWS. The lines right
@@ -375,12 +358,7 @@ final class LyricView extends View {
     private float bandTop, bandBottom;
     private final float[] bandBounds = new float[2];
     private boolean bandOk;
-    /**
-     * The centring correction in force this frame, and the one the geometry is asking for, both
-     * off the uncentred anchor and both in this view's pixels. Equal at rest; they differ only
-     * while the block is sliding to a new centre (see TAU_ANCHOR).
-     */
-    private float anchorFix, anchorFixWant;
+    private float anchorFix;
 
     private long lastStep;
 
@@ -584,25 +562,6 @@ final class LyricView extends View {
             why |= 2;
         }
 
-        // The block's centre, slid to rather than cut to. Snapped whenever there is nothing to
-        // slide: hidden or not yet shown, so each arrival starts from the right place instead of
-        // easing up from wherever the last one left off, and whenever there is no block to
-        // centre, so a correction from the previous song cannot outlive it.
-        anchorFixWant = anchorFixTarget();
-        float before = anchorFix;
-        if (dt <= 0f || still || show < 0.02f || !centring()) {
-            anchorFix = anchorFixWant;
-        } else {
-            anchorFix = approach(anchorFix, anchorFixWant, dt, TAU_ANCHOR);
-            // Land on it exactly: a correction that keeps closing by a hundredth of a pixel keeps
-            // the view invalidating forever, and nothing here is drawn at that resolution anyway.
-            if (Math.abs(anchorFixWant - anchorFix) < 0.01f) anchorFix = anchorFixWant;
-        }
-        if (anchorFix != before) {
-            changed = true;
-            why |= 512;
-        }
-
         float showTo = showTarget();
         if (turnPop(now, showTo, still || gone)) changed = true;
         // Going into the island, the page stays up and the pop's alpha is its fade; coming out
@@ -680,11 +639,28 @@ final class LyricView extends View {
         }
         int previousCount = singing.count;
         boolean groupChanged = singing.update(lines, ms, LockLyrics.sMaxLines, sf);
-        singing.layout(base, height, lyricGap(GAP_DP));
-        if (focus >= 0) transition.rebase(singing, base, scroll, aim, nextAim);
+        if (groupChanged || focus < 0) {
+            singing.layout(base, height, lyricGap(GAP_DP));
+            if (focus >= 0) transition.rebase(singing, base, scroll, aim, nextAim);
+        }
         if (singing.count > 0) {
             sf = singing.last;
             dots = -1;
+        }
+        boolean initialFocus = focus < 0;
+        int oldFocus = focus;
+        int oldDots = dotsFor;
+        focus = sf;
+        dotsFor = dots;
+        float centeredAnchor = anchorFixTarget();
+        focus = oldFocus;
+        dotsFor = oldDots;
+        boolean centerChanged = Math.abs(centeredAnchor - anchorFix) > 0.01f;
+        if (centerChanged) {
+            if (!initialFocus) LyricTransition.shift(centeredAnchor - anchorFix, scroll, aim, nextAim);
+            anchorFix = centeredAnchor;
+            changed = true;
+            why |= 512;
         }
         int key = dots >= 0 ? -(dots + 1) : sf;
         if (key != focusKey || groupChanged) {
@@ -701,14 +677,12 @@ final class LyricView extends View {
             dotsFor = dots;
             focusKey = key;
             focusChangedAt = now;
-            anchorFixWant = anchorFixTarget();
-            if (still) anchorFix = anchorFixWant;
             float to = dots >= 0 ? dotsTop[dots] : singing.position(sf, base);
             if (first) {
                 snap(to);
                 // A freshly laid out song has nowhere to slide from, and the correction it needs
                 // is not the one the song before it left behind: taken, not eased into.
-                anchorFix = anchorFixWant = anchorFixTarget();
+                anchorFix = anchorFixTarget();
             } else if (seek) {
                 // A drag scrolls there rather than cutting, however far it went - watching the
                 // lyrics travel is what makes a seek legible, and the direction it travels says
@@ -747,7 +721,7 @@ final class LyricView extends View {
                 float weight = LyricTransition.motionWeight(Math.max(previousCount, singing.count),
                         singing.height(base, height), bandBottom - bandTop);
                 springK /= weight;
-                springC = (float) Math.sqrt(springK) * (singing.count > 1 || previousCount > 1 ? 1.95f : DAMPING_MULT);
+                springC = (float) Math.sqrt(springK) * DAMPING_MULT;
                 // The ripple, counted from the first line whose target is on screen.
                 float anchor = anchorY();
                 float delay = 0f, step = RIPPLE_MS;
@@ -768,6 +742,12 @@ final class LyricView extends View {
             }
             changed = true;
             why |= 8;
+        } else if (centerChanged) {
+            float destination = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
+            for (int index = 0; index < n; index++) {
+                aim[index] = nextAim[index] = destination;
+                aimAt[index] = now;
+            }
         }
 
         float availableBand = bandBottom - bandTop;
@@ -1359,10 +1339,6 @@ final class LyricView extends View {
         // nothing else.
         if (getTransitionAlpha() != dimTarget()) return true;
         if (bouncerP != Main.bouncerLevel()) return true;
-        // The block sliding to a new centre is a movement like any other, and the slowest one
-        // here: without this the loop would stop the moment the springs settled and leave the
-        // correction half way.
-        if (anchorFix != anchorFixWant) return true;
         ClockCollapse.Phase p = ClockCollapse.phase();
         if (p == ClockCollapse.Phase.ENTER || p == ClockCollapse.Phase.EXIT) return true;
         if (lines.isEmpty() || focus < 0 || show == 0f) return false;
@@ -1698,6 +1674,7 @@ final class LyricView extends View {
                 && b.align == builtAlign && focus >= 0 && scroll.length == b.lines.size();
         boolean preserve = reveal || (version == b.version && focus >= 0 && scroll.length == b.lines.size());
         float previousTextPx = textPx;
+        float[] previousHeights = height;
         applyPaintStyle(b.style);
         version = b.version;
         builtTrans = b.transOn;
@@ -1721,7 +1698,8 @@ final class LyricView extends View {
         blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
         if (preserve) {
             transition.rebase(singing, base, scroll, aim, nextAim);
-            for (int index = 0; index < n; index++) scale[index] *= previousTextPx / textPx;
+            LyricTransition.resize(previousHeights, height, previousTextPx / textPx,
+                    scale, scroll, aim, nextAim);
             retargetLayout(reveal);
             return;
         }
@@ -1785,7 +1763,7 @@ final class LyricView extends View {
         float weight = LyricTransition.motionWeight(singing.count,
                 singing.height(base, height), bandBottom - bandTop);
         springK = K_SLOW / weight;
-        springC = (float) Math.sqrt(springK) * (singing.count > 1 ? 1.95f : DAMPING_MULT);
+        springC = (float) Math.sqrt(springK) * DAMPING_MULT;
         float anchor = anchorY();
         float delay = 0f;
         for (int i = 0; i < n; i++) {
@@ -1898,11 +1876,10 @@ final class LyricView extends View {
      * a whole line's travel: this cannot fight the spring, and it changes only when the band or
      * the rows under it do.
      *
-     * A correction, not a position, because it is the part of the placement that steps and the
-     * band is the part that moves: step() eases this and leaves the band alone.
+     * Changes are rebased into the scroll coordinates before the spring is retargeted.
      */
     private float anchorFixTarget() {
-        if (centring() && singing.count > 1) {
+        if (centring() && dotsFor < 0 && singing.first >= 0 && singing.last < lines.size()) {
             float bandHeight = bandBottom - bandTop;
             return (0.5f - ANCHOR) * bandHeight - singing.height(base, height) / 2f
                     + singing.position(focus, base) - singing.position(singing.first, base);
@@ -1940,7 +1917,8 @@ final class LyricView extends View {
     private boolean rowOnScreen(int index) {
         if (transition.alpha(index) <= 0.003f) return false;
         float center = (bandTop + bandBottom) / 2f;
-        float top = center + (anchorY() + transition.position(index) - scroll[index] - center) * transition.fit;
+        float top = center + (LyricTransition.scaledTop(anchorY() + transition.position(index) - scroll[index],
+                height[index], scale[index]) - center) * transition.fit;
         return top <= bandBottom && top + height[index] * scale[index] * transition.fit >= bandTop;
     }
 
@@ -2000,7 +1978,7 @@ final class LyricView extends View {
                 if (da > 0.003f) drawDots(canvas, i, side, dy, da);
             }
             float y = anchor + transition.position(i) - scroll[i];
-            float screenY = center + (y - center) * groupScale;
+            float screenY = center + (LyricTransition.scaledTop(y, height[i], scale[i]) - center) * groupScale;
             float screenBottom = screenY + height[i] * scale[i] * groupScale;
             if (screenY > bandBottom) continue;
             if (screenBottom < bandTop) continue;
@@ -2097,7 +2075,7 @@ final class LyricView extends View {
         boolean words = (l.hasWords() || (l.bg != null && l.bg.hasWords())) && e > 0f && !still;
         int save = canvas.save();
         canvas.translate(x, y);
-        canvas.scale(sc, sc, pivotX, 0f);
+        canvas.scale(sc, sc, pivotX, height[i] / 2f);
         if (words) {
             // From the first frame of emphasis, so the first syllable lifts from the start. While
             // the line's blur is still clearing, its blurred picture is crossfaded out underneath

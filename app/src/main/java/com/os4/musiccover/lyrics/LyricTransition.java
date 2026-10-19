@@ -34,6 +34,31 @@ final class LyricTransition {
         return jumpedAt != Long.MIN_VALUE && now >= jumpedAt && now - jumpedAt < window;
     }
 
+    static float scaledTop(float top, float height, float scale) {
+        return top + height * (1f - scale) / 2f;
+    }
+
+    static void shift(float delta, float[] scroll, float[] aim, float[] nextAim) {
+        if (delta == 0f) return;
+        for (int index = 0; index < scroll.length; index++) {
+            scroll[index] += delta;
+            aim[index] += delta;
+            nextAim[index] += delta;
+        }
+    }
+
+    static void resize(float[] oldHeights, float[] heights, float ratio, float[] scale,
+                       float[] scroll, float[] aim, float[] nextAim) {
+        for (int index = 0; index < scale.length; index++) {
+            float oldTop = scaledTop(0f, oldHeights[index], scale[index]);
+            scale[index] *= ratio;
+            float delta = scaledTop(0f, heights[index], scale[index]) - oldTop;
+            scroll[index] += delta;
+            aim[index] += delta;
+            nextAim[index] += delta;
+        }
+    }
+
     boolean update(LyricFocus focus, float[] base, int dots, float aboveAlpha,
                    float fitTarget, float dt, boolean snap) {
         if (positions.length != base.length) reset(base);
@@ -51,7 +76,7 @@ final class LyricTransition {
             positions[index] = nextPosition;
             moving |= nextAlpha != targetAlpha;
         }
-        float nextFit = snap ? fitTarget : ease(fit, fitTarget, dt, 0.14f, 0.0005f);
+        float nextFit = snap ? fitTarget : ease(fit, fitTarget, dt, 0.20f, 0.0005f);
         changed |= nextFit != fit;
         fit = nextFit;
         moving |= fit != fitTarget;
