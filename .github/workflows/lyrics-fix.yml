@@ -19,10 +19,12 @@ jobs:
         with:
           packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build APK
+      - name: Test lyrics
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :app:testDebugUnitTest --tests 'com.os4.musiccover.lyrics.*'
+          ./gradlew --no-daemon :app:testDebugUnitTest -PmcLyricTestsOnly=true
+      - name: Build APK
+        run: |
           ./gradlew --no-daemon :app:assembleRelease \
             -PmcVersionName=0.9.3 \
             -PmcVersionSuffix=-Plus \

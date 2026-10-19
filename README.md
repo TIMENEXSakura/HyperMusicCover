@@ -33,6 +33,8 @@ HyperOS 4 音乐锁屏
 
 歌词缩放改为围绕段落中心，多段布局与居中共用滚动弹簧，字号变化同步补偿绘制位置。保留 HDR 开关及原有发光效果。实际流畅度仍需在目标设备验证。
 
+工作流先运行歌词专项测试（`./gradlew :app:testDebugUnitTest -PmcLyricTestsOnly=true`），再构建 APK。该参数只编译歌词测试目录；仓库其余旧测试存在包名迁移后未同步的问题，未纳入本次验证。
+
 也可以在电脑上安装 JDK 21、Android SDK（API 37），设置 `ANDROID_HOME`，接受 SDK 许可后，在源码根目录执行：
 
 ```sh

@@ -108,6 +108,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    if (providers.gradleProperty("mcLyricTestsOnly").orNull == "true") {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test/java/com/os4/musiccover/lyrics"))
+            kotlin.setSrcDirs(listOf("src/test/java/com/os4/musiccover/lyrics"))
+        }
+    }
+
     buildFeatures {
         compose = true
         // The module and the app both log a full account of the preview pipeline in debug
