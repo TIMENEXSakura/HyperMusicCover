@@ -1,11 +1,12 @@
 package com.os4.musiccover.ui.screen.features
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -27,12 +29,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -45,9 +49,18 @@ import com.os4.musiccover.R
 import com.os4.musiccover.app.ModuleBridge
 import com.os4.musiccover.lyrics.LyricSourcePolicy
 import kotlin.math.roundToInt
+import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.icon.extended.Sort
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -87,15 +100,23 @@ internal fun LyricSourceSettings(
             onCommit = { update(currentModule.copy(lyricSourceOrder = it)) },
             trailing = { source ->
                 if (source == "local") {
-                    TextButton(
-                        text = stringResource(R.string.lyrics_format_settings),
+                    IconButton(
+                        modifier = Modifier.size(48.dp),
                         enabled = enabled,
                         onClick = { formatsOpen = true },
-                    )
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Settings,
+                            contentDescription = stringResource(R.string.lyrics_format_settings),
+                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                 }
             },
         )
         TextButton(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             text = stringResource(R.string.lyrics_priority_reset),
             enabled = enabled,
             onClick = { update(currentModule.copy(lyricSourceOrder = LyricSourcePolicy.DEFAULT_SOURCES)) },
@@ -114,15 +135,23 @@ internal fun LyricSourceSettings(
                 label = { it.uppercase() },
                 onCommit = { update(currentModule.copy(lyricFormatOrder = it)) },
             )
-            TextButton(
-                text = stringResource(R.string.lyrics_priority_reset),
-                enabled = enabled,
-                onClick = { update(currentModule.copy(lyricFormatOrder = LyricSourcePolicy.DEFAULT_FORMATS)) },
-            )
-            TextButton(
-                text = stringResource(R.string.lyrics_priority_done),
-                onClick = { formatsOpen = false },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(
+                    modifier = Modifier.weight(1f),
+                    text = stringResource(R.string.lyrics_priority_reset),
+                    enabled = enabled,
+                    onClick = { update(currentModule.copy(lyricFormatOrder = LyricSourcePolicy.DEFAULT_FORMATS)) },
+                )
+                TextButton(
+                    modifier = Modifier.weight(1f),
+                    text = stringResource(R.string.lyrics_priority_done),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                    onClick = { formatsOpen = false },
+                )
+            }
         }
     }
 }
@@ -152,7 +181,8 @@ private fun PriorityRows(
 ) {
     var items by remember { mutableStateOf(order.split(',')) }
     val commit by rememberUpdatedState(onCommit)
-    val rowHeight = with(LocalDensity.current) { 64.dp.toPx() }
+    val rowHeight = with(LocalDensity.current) { 72.dp.toPx() }
+    val haptics = LocalHapticFeedback.current
     var active by remember { mutableStateOf<String?>(null) }
     var displacement by remember { mutableFloatStateOf(0f) }
     var original by remember { mutableStateOf(items) }
@@ -172,6 +202,7 @@ private fun PriorityRows(
         val index = items.indexOf(source)
         if (index < 0 || target !in items.indices || index == target) return
         items = items.toMutableList().apply { add(target, removeAt(index)) }
+        if (active == source) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
     fun drag(source: String) {
         val top = (pointerY - viewportTop + scroll.value - grabOffset)
@@ -207,66 +238,88 @@ private fun PriorityRows(
             key(source) {
                 val name = label(source)
                 var handle by remember { mutableStateOf<LayoutCoordinates?>(null) }
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(64.dp)
+                val rowColor by animateColorAsState(
+                    targetValue = if (active == source) MiuixTheme.colorScheme.secondaryContainer
+                        else MiuixTheme.colorScheme.surfaceContainer,
+                    label = "priorityRowColor",
+                )
+                BasicComponent(
+                    title = name,
+                    summary = if (dimmed(source)) skipped else null,
+                    titleColor = BasicComponentDefaults.titleColor(
+                        color = if (dimmed(source)) MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            else MiuixTheme.colorScheme.onBackground,
+                    ),
+                    enabled = enabled,
+                    insideMargin = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth().height(72.dp)
                         .zIndex(if (active == source) 1f else 0f)
                         .offset { IntOffset(0, if (active == source) displacement.roundToInt() else 0) }
-                        .background(MiuixTheme.colorScheme.background)
-                        .padding(start = 16.dp, end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("${index + 1}", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    Column(Modifier.weight(1f)) {
-                        Text(name, color = if (dimmed(source)) MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            else MiuixTheme.colorScheme.onBackground)
-                        if (dimmed(source)) Text(skipped, style = MiuixTheme.textStyles.body2)
-                    }
-                    trailing(source)
-                    Box(
-                        Modifier.size(48.dp).onGloballyPositioned { handle = it }.semantics {
-                            contentDescription = "$name: $dragDescription"
-                            if (enabled) customActions = listOf(
-                                CustomAccessibilityAction(moveUp) {
-                                    move(source, items.indexOf(source) - 1)
-                                    commit(items.joinToString(","))
-                                    true
-                                },
-                                CustomAccessibilityAction(moveDown) {
-                                    move(source, items.indexOf(source) + 1)
-                                    commit(items.joinToString(","))
-                                    true
-                                },
+                        .squircleSurface(color = rowColor, cornerRadius = 12.dp),
+                    startAction = {
+                        Text(
+                            text = "${index + 1}",
+                            modifier = Modifier.width(24.dp),
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    },
+                    endActions = {
+                        trailing(source)
+                        Box(
+                            Modifier.size(48.dp).onGloballyPositioned { handle = it }.semantics {
+                                contentDescription = "$name: $dragDescription"
+                                if (enabled) customActions = listOf(
+                                    CustomAccessibilityAction(moveUp) {
+                                        move(source, items.indexOf(source) - 1)
+                                        commit(items.joinToString(","))
+                                        true
+                                    },
+                                    CustomAccessibilityAction(moveDown) {
+                                        move(source, items.indexOf(source) + 1)
+                                        commit(items.joinToString(","))
+                                        true
+                                    },
+                                )
+                            }.pointerInput(source, enabled, rowHeight) {
+                                if (!enabled) return@pointerInput
+                                detectDragGestures(
+                                    onDragStart = { position ->
+                                        pointerY = handle?.localToWindow(position)?.y ?: viewportTop
+                                        grabOffset = pointerY - viewportTop + scroll.value - items.indexOf(source) * rowHeight
+                                        active = source
+                                        original = items
+                                        displacement = 0f
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragCancel = {
+                                        items = original
+                                        active = null
+                                        displacement = 0f
+                                    },
+                                    onDragEnd = {
+                                        active = null
+                                        displacement = 0f
+                                        commit(items.joinToString(","))
+                                    },
+                                ) { change, _ ->
+                                    change.consume()
+                                    pointerY = handle?.localToWindow(change.position)?.y ?: pointerY
+                                    drag(source)
+                                }
+                            },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.Sort,
+                                contentDescription = null,
+                                tint = if (active == source) MiuixTheme.colorScheme.primary
+                                    else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                modifier = Modifier.size(24.dp),
                             )
-                        }.pointerInput(source, enabled, rowHeight) {
-                            if (!enabled) return@pointerInput
-                            detectDragGestures(
-                                onDragStart = { position ->
-                                    pointerY = handle?.localToWindow(position)?.y ?: viewportTop
-                                    grabOffset = pointerY - viewportTop + scroll.value - items.indexOf(source) * rowHeight
-                                    active = source
-                                    original = items
-                                    displacement = 0f
-                                },
-                                onDragCancel = {
-                                    items = original
-                                    active = null
-                                    displacement = 0f
-                                },
-                                onDragEnd = {
-                                    active = null
-                                    displacement = 0f
-                                    commit(items.joinToString(","))
-                                },
-                            ) { change, _ ->
-                                change.consume()
-                                pointerY = handle?.localToWindow(change.position)?.y ?: pointerY
-                                drag(source)
-                            }
-                        },
-                        contentAlignment = Alignment.Center,
-                    ) { Text("☰") }
-                }
+                        }
+                    },
+                )
             }
         }
     }

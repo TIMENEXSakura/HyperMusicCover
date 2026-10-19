@@ -28,7 +28,7 @@ jobs:
           ./gradlew --no-daemon :app:assembleRelease \
             -PmcVersionName=0.9.3 \
             -PmcVersionSuffix=-Plus \
-            -PmcVersionCode=903005
+            -PmcVersionCode=903006
           cp app/build/outputs/apk/release/app-release.apk HyperMusicCover-0.9.3-Plus.apk
       - uses: actions/upload-artifact@v4
         with:

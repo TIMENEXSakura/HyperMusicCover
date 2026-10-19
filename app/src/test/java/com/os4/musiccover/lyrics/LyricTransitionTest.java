@@ -89,6 +89,22 @@ public class LyricTransitionTest {
         assertFalse(transition.moving);
     }
 
+    @Test public void departingOverlapRemainsVisibleDuringFade() {
+        float[] base = {0, 120, 240}, heights = {100, 100, 100};
+        LyricTransition transition = new LyricTransition();
+        transition.reset(base);
+        LyricFocus compact = focusAt(150, base, heights);
+        for (int frame = 0; frame < 15; frame++) {
+            transition.update(compact, base, -1, 0.6f, 1, 0.016f, false);
+        }
+        assertTrue(transition.alpha(1) > 0.15f && transition.alpha(1) < 0.9f);
+        for (int frame = 0; frame < 200; frame++) {
+            transition.update(compact, base, -1, 0.6f, 1, 0.016f, false);
+        }
+        assertEquals(0, transition.alpha(1), 0);
+        assertFalse(transition.moving);
+    }
+
     @Test public void stillModeSettlesImmediately() {
         float[] base = {0, 120, 240}, heights = {100, 100, 100};
         LyricTransition transition = new LyricTransition();

@@ -69,7 +69,8 @@ final class LyricTransition {
                     : (dots >= 0 ? index < dots : index < focus.last && !focus.contains(index))
                     ? aboveAlpha : 1f;
             float targetPosition = focus.position(index, base);
-            float nextAlpha = snap ? targetAlpha : ease(alpha[index], targetAlpha, dt, 0.10f, 0.003f);
+            float nextAlpha = snap ? targetAlpha : ease(alpha[index], targetAlpha, dt,
+                    targetAlpha < alpha[index] ? 0.22f : 0.10f, 0.003f);
             float nextPosition = targetPosition;
             changed |= nextAlpha != alpha[index] || nextPosition != positions[index];
             alpha[index] = nextAlpha;

@@ -83,6 +83,7 @@ final class LyricView extends View {
     private static final float TINT_SAT = 0.28f;
     private static final float TRANS_ALPHA = 0.62f;
     private static final float INACTIVE_SCALE = 0.97f;
+    private static final float ACTIVE_SCALE = 1.025f;
     /** Half the width of the soft edge between sung and unsung, in text sizes. */
     private static final float FEATHER_EM = 0.45f;
     /**
@@ -119,8 +120,7 @@ final class LyricView extends View {
     private static final float BLUR_NEXT_DP = 0.9f;
     private static final float BLUR_DP_PER_ROW = 1.6f;
     private static final int BLUR_MAX_ROWS = 4;
-    /** A line going out of focus does it fast; one coming in clears a little slower. */
-    private static final float TAU_BLUR_IN = 0.05f;
+    private static final float TAU_BLUR_IN = 0.18f;
     private static final float TAU_BLUR_OUT = 0.07f;
     /**
      * How much brighter than SDR white the singing words are drawn when HDR is on - Apple
@@ -176,7 +176,7 @@ final class LyricView extends View {
     /** The stack moves to a line this long before its first word (measured 1.07s). */
     private static final long LEAD_MS = 1000L;
     private static final float TAU_EMPH_IN = 0.08f;
-    private static final float TAU_EMPH_OUT = 0.10f;
+    private static final float TAU_EMPH_OUT = 0.22f;
     /** AMLL's scale spring (stiffness 100, damping 25) settles in about this time constant. */
     private static final float TAU_SCALE = 0.15f;
     private static final float TAU_SHOW = 0.18f;
@@ -833,8 +833,7 @@ final class LyricView extends View {
                 changed = true;
                 why |= 64;
             }
-            // Size: the focus at full size, the rest a little smaller, travelling with the scroll.
-            float scTo = focused ? 1f : INACTIVE_SCALE;
+            float scTo = focused ? ACTIVE_SCALE : INACTIVE_SCALE;
             float scaleTau = TAU_SCALE * LyricTransition.motionWeight(singing.count,
                     height[i], Math.max(1f, bandBottom - bandTop));
             float sc = started ? approach(scale[i], scTo, dtTo, scaleTau) : scale[i];
@@ -844,8 +843,6 @@ final class LyricView extends View {
                 changed = true;
                 why |= 64;
             }
-            // Depth: the line leaving goes out of focus fast, the one arriving clears a little
-            // slower (about 100ms and 200ms in the frames).
             float bt = blurTarget(i);
             float b = approach(blur[i], bt, dtTo, bt > blur[i] ? TAU_BLUR_IN : TAU_BLUR_OUT);
             if (Math.abs(b - bt) < 0.05f) b = bt;
@@ -1353,7 +1350,7 @@ final class LyricView extends View {
             if (e != 0f && e != 1f) return true;
             float lv = lit[i];
             if (lv != 0f && lv != 1f) return true;
-            if (scale[i] != 1f && scale[i] != INACTIVE_SCALE) return true;
+            if (scale[i] != ACTIVE_SCALE && scale[i] != INACTIVE_SCALE) return true;
             if (now() < aimAt[i]) return true;
             if (blur[i] != blurTarget(i)) return true;
         }
@@ -2086,7 +2083,8 @@ final class LyricView extends View {
             if (k > 0f) {
                 float r = blurFor(1);
                 for (int d = 1; d <= BLUR_MAX_ROWS && blurFor(d) < blur[i]; d++) r = blurFor(d + 1);
-                drawBlurLevel(canvas, i, r, a * INACTIVE * k, r);
+                float fading = dotsFor < 0 && singing.contains(i) ? 0f : e;
+                drawBlurLevel(canvas, i, r, a * (INACTIVE + (1f - INACTIVE) * fading) * k, r, fading);
             }
         } else {
             // The radius sits between two of the fixed ones - sharp, or a distance's blur - and is
