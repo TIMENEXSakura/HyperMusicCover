@@ -9,7 +9,7 @@
 | 音乐胶囊有提示、歌词透明 | `MediaCard.setCardProgressFrom()` 在非封面模式将进度归零，`LyricView.showTarget()` 又将此值用于独立歌词页。改用歌词页自身进度：独立页为 1，封面页仍跟随媒体卡。原有歌词可用性、时钟、控制中心、解锁和容器透明度门控保留。 | `lyrics/LyricView.java`、`lyrics/LockLyrics.java`、`lyrics/LyricPageVisibility.java` |
 | 重建时错误裁切区域 | 附着但尚未布局的零尺寸媒体卡不能提供有效下边界，改走原有记录值／默认值回退。 | `lyrics/LockLyrics.java` |
 | 计时器／闹钟没有实际操作入口 | 原 CLOCK 分支先打开只有表盘和常亮开关的 CountdownScene，跳过实际功能入口；其后读取 `row.mOnClickListener` 也没有复用上游针对折叠行 flow 丢弃事件的处理。现在复用 `getInjector().clickListener`，由系统处理功能启动和必要认证；无可用入口时再尝试已有 contentIntent，最后请求对应单条原生卡片。没有猜测 Activity，也不发送暂停／结束命令。 | `island/MiniPlayerController.kt` |
-| 导航提示不能证明页面出现 | 原入口仅记录打开请求就返回成功。打开时现在主动恢复 Host 容器、触发正常页面准备；区分请求、内容、附着、shown 和 fade。页面尚未显示时提示“正在打开导航界面”，不虚报“已进入”。同步回调或异常不能把失效的 sceneKey 恢复成已打开。 | `immersive/ImmersiveHost.java`、`island/LockIslands.kt`、`island/MiniPlayerController.kt` |
+| 导航提示不能证明页面出现 | 原入口仅记录打开请求就返回成功。打开时现在主动恢复 Host 容器、触发正常页面准备；区分请求、内容、附着、shown 和 fade。页面尚未显示时提示“正在打开导航界面”，沿已有帧观察器确认实际呈现后才替换成“已进入”；新点按、视图换绑、熄屏和销毁取消旧反馈，不新增长轮询或延迟成功回调。同步回调或异常不能把失效的 sceneKey 恢复成已打开。 | `immersive/ImmersiveHost.java`、`island/LockIslands.kt`、`island/MiniPlayerController.kt` |
 | “词”太短 | 完整可见阶段由 100 ms 延长到 300 ms，再过渡至对勾。仍是单个可反向打断的时间线，整个提示 1300 ms；真实播放状态和歌词切换不依赖动画完成。 | `island/CapsuleFeedbackState.kt`、`island/PressFeedbackButton.kt` |
 
 音乐的透明度阻断和 CLOCK 的入口问题已由源码确认。导航没有发现相同的恒零透明度问题；容器恢复和请求／呈现区分属于已确定的链路缺口，但**不能据此断言已复现并解决本机导航界面不出现的唯一根因**。仍须检查高德运行框架回报、远端页面就绪与真实绘制。

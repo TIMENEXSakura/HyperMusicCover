@@ -235,6 +235,7 @@ internal class MiniPlayerController(
         }
         updateDiscs()
         lottiesFollowSight()
+        updateSceneFeedback()
         true
     } finally { android.os.Trace.endSection() } }
 
@@ -4580,8 +4581,28 @@ internal class MiniPlayerController(
         tapIsland(key, if (small) smallIsland else player)
     }
 
+    private data class PendingSceneFeedback(val key: String, val view: CapsuleFeedback,
+                                          val navigation: Boolean)
+    private var pendingSceneFeedback: PendingSceneFeedback? = null
+
+    /** Use the existing frame observer: no delayed success callback can overwrite a later tap. */
+    private fun updateSceneFeedback() {
+        val pending = pendingSceneFeedback ?: return
+        val bound = if (pending.view === player) selectedIsland == pending.key
+            else pending.view === smallIsland && smallKey == pending.key
+        if (!bound || !Main.screenOnCached() || !LockIslands.sceneOpenRequested(pending.key)) {
+            pendingSceneFeedback = null
+            return
+        }
+        if (!LockIslands.sceneIsPresented(pending.key)) return
+        pendingSceneFeedback = null
+        pending.view.showStatus(if (pending.navigation) "已进入导航界面" else "已打开")
+        MiniPlayerRuntime.noteTouch("scene presented: " + LockIslands.scenePresentationState(pending.key))
+    }
+
     /** Resolve special actions before the generic notification expansion path. Swipes are separate. */
     private fun tapIsland(key: String, tapped: CapsuleFeedback? = null) {
+        pendingSceneFeedback = null
         val view: CapsuleFeedback? = tapped ?: if (key == smallKey) smallIsland else player
         val note = LockIslands.noteFor(key)
         val scene = note?.takeUnless { it.redacted }?.let {
@@ -4612,6 +4633,9 @@ internal class MiniPlayerController(
                     presented -> if (navigation) "已进入导航界面" else "已打开"
                     else -> if (navigation) "正在打开导航界面" else "正在打开"
                 })
+                if (entered == true && !presented && view != null) {
+                    pendingSceneFeedback = PendingSceneFeedback(key, view, navigation)
+                }
                 MiniPlayerRuntime.noteTouch("scene action: " + LockIslands.scenePresentationState(key))
             }
             CapsuleTapPolicy.Action.CLOCK -> {
@@ -7215,6 +7239,7 @@ internal class MiniPlayerController(
 
     fun destroy() {
         destroyed = true
+        pendingSceneFeedback = null
         prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
         runCatching { host.viewTreeObserver.removeOnPreDrawListener(preDraw) }
         runCatching { sessions?.removeOnActiveSessionsChangedListener(sessionListener) }
