@@ -460,6 +460,11 @@ public final class LockLyrics {
         return wanted() && (sCapsulePage || Main.coverModeOn()) && hasLyrics();
     }
 
+    /** Visual progress after the window, clock and lyric-data gates have admitted the page. */
+    static float pageProgress() {
+        return LyricPageVisibility.progress(sCapsulePage, Main.coverModeOn(), MediaCard.cardProgress());
+    }
+
     /**
      * Whether the lyric page should be *drawn* right now: the cover's answer, and the lock screen
      * actually being the thing in front.
@@ -780,7 +785,10 @@ public final class LockLyrics {
     static float bandBottomOnScreen() {
         View c = card();
         int y = Integer.MIN_VALUE;
-        if (c != null && c.isShown() && c.isAttachedToWindow()) {
+        // A folded/rebuilt card may be attached before its first layout. Its zero-size
+        // rectangle is not an edge to clip against; use the recorded/default band until ready.
+        if (c != null && c.isShown() && c.isAttachedToWindow()
+                && c.getWidth() > 0 && c.getHeight() > 0) {
             int[] loc = new int[2];
             c.getLocationOnScreen(loc);
             y = loc[1];
@@ -825,6 +833,7 @@ public final class LockLyrics {
         String id = " view@" + Integer.toHexString(System.identityHashCode(c))
                 + " h=" + c.getHeight();
         if (!c.isAttachedToWindow()) return "detached" + id;
+        if (c.getWidth() <= 0 || c.getHeight() <= 0) return "not laid out" + id;
         if (!c.isShown()) {
             String by = c.getVisibility() != View.VISIBLE ? "itself" : "?";
             for (android.view.ViewParent p = c.getParent(); p instanceof View; p = p.getParent()) {
@@ -1530,6 +1539,7 @@ public final class LockLyrics {
                 + " still=" + sStill + " display=" + displayState()
                 + " stillLog=[" + sStillLog + "]"
                 + " cardP=" + MediaCard.cardProgress()
+                + " pageP=" + pageProgress()
                 + " container=" + (c == null ? "none" : c.getAlpha() + "/shown=" + c.isShown())
                 + " card=" + (card == null ? "none" : "shown=" + card.isShown())
                 // Where the band's lower edge came from: live is the card's own top this frame,

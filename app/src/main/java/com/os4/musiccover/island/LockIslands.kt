@@ -204,21 +204,44 @@ internal object LockIslands {
     fun toggleScene(key: String): Boolean? {
         val target = sceneOf(key) ?: return null
         if (sceneKey == key) {
-            ImmersiveHost.close(scene ?: target)
+            val closing = scene ?: target
             sceneKey = null
             scene = null
             sceneMissingSince = 0L
+            ImmersiveHost.close(closing)
             return false
         }
         if (!target.ready()) return null
         scene?.let { ImmersiveHost.close(it) }
-        ImmersiveHost.open(target)
+        // Publish the request before opening: synchronous readiness/content callbacks may
+        // invalidate it. Writing it afterwards would resurrect a page those callbacks closed.
         sceneKey = key
         scene = target
         sceneMissingSince = 0L
+        try {
+            ImmersiveHost.open(target)
+        } catch (error: Throwable) {
+            if (sceneKey == key && scene === target) {
+                sceneKey = null
+                scene = null
+            }
+            runCatching { ImmersiveHost.close(target) }
+            Xp.w("MCIsland: ${target.id()} open failed: $error")
+            return null
+        }
         // Keep its capsule available for the next tap; release() is reserved for swipe-to-panel.
-        return true
+        return true.takeIf { sceneOpenRequested(key) }
     }
+
+    /** The scene request may still be loading. It is not a claim that its page is visible. */
+    fun sceneOpenRequested(key: String): Boolean =
+        sceneKey == key && scene?.let(ImmersiveHost::isOpenRequested) == true
+
+    fun sceneIsPresented(key: String): Boolean =
+        sceneKey == key && scene?.let(ImmersiveHost::isPresented) == true
+
+    fun scenePresentationState(key: String): String =
+        ImmersiveHost.presentationState(if (sceneKey == key) scene else sceneOf(key))
 
     /** What a clear of [released] leaves: the open page's island, if there is one. */
     private fun clearReleased() {

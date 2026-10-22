@@ -4599,27 +4599,52 @@ internal class MiniPlayerController(
                 Main.miniPlayerToggleLyrics()?.let { view?.showLyricStatus(it) }
             }
             CapsuleTapPolicy.Action.NAVIGATION, CapsuleTapPolicy.Action.SCENE -> {
-                val entered = runCatching { LockIslands.toggleScene(key) }.getOrNull()
-                view?.showStatus(if (entered == null) "内容尚未就绪" else if (scene?.isNavigation() == true) {
-                    if (entered) "已进入导航界面" else "已退出导航界面"
-                } else if (entered) "已打开" else "已收起")
+                val entered = runCatching { LockIslands.toggleScene(key) }.onFailure {
+                    Xp.w("MCIsland: scene action failed: $it")
+                }.getOrNull()
+                val navigation = scene?.isNavigation() == true
+                // Opening a remote page is asynchronous. Do not announce success merely
+                // because the capsule accepted the click; the host must actually present it.
+                val presented = entered == true && LockIslands.sceneIsPresented(key)
+                view?.showStatus(when {
+                    entered == null -> "内容尚未就绪"
+                    !entered -> if (navigation) "已退出导航界面" else "已收起"
+                    presented -> if (navigation) "已进入导航界面" else "已打开"
+                    else -> if (navigation) "正在打开导航界面" else "正在打开"
+                })
+                MiniPlayerRuntime.noteTouch("scene action: " + LockIslands.scenePresentationState(key))
             }
             CapsuleTapPolicy.Action.CLOCK -> {
-                // Reuse the countdown's existing operation page when one is available.
-                val opened = scene?.let { runCatching { LockIslands.toggleScene(key) }.getOrNull() }
-                if (opened != null) {
-                    view?.showStatus(if (opened) "已打开" else "已收起")
-                    return
-                }
-                // The OEM clicker retains keyguard/authentication handling for the content intent.
+                // The countdown scene draws a dial and a keep-awake switch; its operation
+                // controls belong to the clock's entry or native card. Do not replace those
+                // controls with a successful-looking scene toggle.
                 val row = rowFor(key)
-                val clicker = row?.let { runCatching {
-                    Xp.getObjectField(it, "mOnClickListener") as? View.OnClickListener
-                }.getOrNull() }
-                if (row != null && clicker != null && runCatching { clicker.onClick(row) }.isSuccess) return
-                if (note?.intent != null && runCatching { note.intent.send() }.isSuccess) return
-                // A clock with no usable entry still owns this tap: do not open a notification list.
-                view?.showStatus("功能入口暂不可用")
+                val clicker = row?.let(::notificationClicker)
+                if (row != null && clicker != null) {
+                    val invoked = runCatching { clicker.onClick(row) }.onFailure {
+                        MiniPlayerRuntime.noteTouch("clock entry: notification clicker failed ${it.javaClass.simpleName}")
+                    }.isSuccess
+                    if (invoked) {
+                        // Invocation does not prove the destination has appeared; the OEM may
+                        // still be asking the user to unlock. Keep its authentication handling.
+                        MiniPlayerRuntime.noteTouch("clock entry: notification clicker invoked")
+                        return
+                    }
+                }
+                val intent = note?.intent
+                if (intent != null) {
+                    val sent = runCatching { intent.send() }.onFailure {
+                        MiniPlayerRuntime.noteTouch("clock entry: content intent failed ${it.javaClass.simpleName}")
+                    }.isSuccess
+                    if (sent) {
+                        MiniPlayerRuntime.noteTouch("clock entry: content intent sent")
+                        return
+                    }
+                }
+                // The existing single-card path exposes this notification's actual controls;
+                // it does not spread the notification list or end a running timer.
+                MiniPlayerRuntime.noteTouch("clock entry: no usable direct entry; requesting native card")
+                expandNote(key)
             }
             CapsuleTapPolicy.Action.NOTIFICATION -> expandNote(key)
         }
@@ -5000,12 +5025,15 @@ internal class MiniPlayerController(
         // flow, whose collector dropped it for a row folded away: tapped, nothing happened
         // (2026-10-07). NotificationClicker, which the flow ends in, is the injector's
         // clickListener (NotificationRowBinderImpl): called straight, as the flow would.
-        val clicker = runCatching {
-            Xp.getObjectField(Xp.callMethod(row, "getInjector"), "clickListener") as? View.OnClickListener
-        }.getOrNull()
+        val clicker = notificationClicker(row)
         if (clicker != null) clicker.onClick(row) else row.performClick()
         return true
     }
+
+    /** The OEM's real content entry, shared by stack and clock capsules. */
+    private fun notificationClicker(row: View): View.OnClickListener? = runCatching {
+        Xp.getObjectField(Xp.callMethod(row, "getInjector"), "clickListener") as? View.OnClickListener
+    }.getOrNull()
 
     /**
      * The stack island tapped or pulled open: the whole row out. With another motion under way -

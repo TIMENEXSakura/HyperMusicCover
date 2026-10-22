@@ -27,8 +27,8 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         feedbackInk = color
         feedback.begin(enabled)
         val token = feedbackGeneration
-        feedbackAnimator = ValueAnimator.ofFloat(0f, 1100f).apply {
-            duration = 1100L
+        feedbackAnimator = ValueAnimator.ofFloat(0f, LyricFeedbackState.DURATION_MS.toFloat()).apply {
+            duration = LyricFeedbackState.DURATION_MS
             interpolator = android.view.animation.LinearInterpolator()
             addUpdateListener {
                 if (token == feedbackGeneration) {

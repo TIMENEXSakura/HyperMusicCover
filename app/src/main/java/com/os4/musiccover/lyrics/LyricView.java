@@ -1,5 +1,4 @@
 package com.os4.musiccover.lyrics;
-import com.os4.musiccover.MediaCard;
 import com.os4.musiccover.ClockCollapse;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.Xp;
@@ -933,9 +932,9 @@ final class LyricView extends View {
     }
 
     /**
-     * How visible the lyrics should be: the card's own progress into the cover look (so they
-     * arrive and leave with the card's thumbnail), and the clock container's alpha (so they go
-     * wherever the OEM fades the clock - the bouncer, the shade over the lock screen).
+     * How visible the lyrics should be: the page's progress and the clock container's alpha
+     * (so they go wherever the OEM fades the clock - the bouncer, the shade over the lock
+     * screen). Only a cover page follows the media card: a capsule page keeps that card folded.
      */
     private float showTarget() {
         if (!LockLyrics.wantsShown() || !bandOk || lines.isEmpty()) return 0f;
@@ -948,7 +947,7 @@ final class LyricView extends View {
             centreHeld = true;
             return 0f;
         }
-        float v = clamp01(MediaCard.cardProgress());
+        float v = LockLyrics.pageProgress();
         View c = Main.sContainer;
         if (c != null) v *= clamp01(c.getAlpha());
         return v;

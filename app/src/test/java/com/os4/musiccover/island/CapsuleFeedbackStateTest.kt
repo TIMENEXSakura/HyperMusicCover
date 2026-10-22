@@ -7,20 +7,31 @@ class CapsuleFeedbackStateTest {
         val state = LyricFeedbackState()
         state.begin(true)
         assertEquals(1f, state.at(200).word)
-        assertEquals(1f, state.at(600).mark)
+        assertEquals(1f, state.at(700).mark)
         assertEquals(0f, state.frame.cross)
-        assertEquals(1f, state.at(1100).playback)
+        assertEquals(1f, state.at(LyricFeedbackState.DURATION_MS).playback)
         assertEquals(0f, state.frame.mark)
     }
     @Test fun closingAfterCompletedHintStillStartsWithCheck() {
         val state = LyricFeedbackState()
         state.begin(true)
-        state.at(1100)
+        state.at(LyricFeedbackState.DURATION_MS)
         state.begin(false)
         assertEquals(0f, state.at(0).cross)
         assertEquals(1f, state.frame.mark)
         assertEquals(1f, state.at(200).cross)
-        assertEquals(1f, state.at(1100).playback)
+        assertEquals(1f, state.at(LyricFeedbackState.DURATION_MS).playback)
+    }
+    @Test fun wordRemainsFullyVisibleForThreeHundredMillisecondsBeforeCheck() {
+        val state = LyricFeedbackState()
+        state.begin(true)
+        for (ms in 160L..460L) {
+            assertEquals(1f, state.at(ms).word)
+            assertEquals(0f, state.frame.mark)
+        }
+        assertTrue(state.at(461L).word < 1f)
+        assertEquals(0f, state.at(640L).word)
+        assertEquals(1f, state.frame.mark)
     }
     @Test fun rapidReversalsContinueFromCurrentFrameAndLastRequestWins() {
         val state = LyricFeedbackState()

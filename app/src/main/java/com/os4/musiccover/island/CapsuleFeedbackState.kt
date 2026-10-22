@@ -2,6 +2,15 @@ package com.os4.musiccover.island
 
 /** A single timeline per hint. Sampling never schedules a delayed restore. */
 internal class LyricFeedbackState {
+    companion object {
+        private const val FADE_IN_MS = 160L
+        const val WORD_HOLD_MS = 300L
+        private const val MARK_START_MS = FADE_IN_MS + WORD_HOLD_MS
+        private const val MARK_SHOWN_MS = MARK_START_MS + 180L
+        private const val RESTORE_MS = MARK_SHOWN_MS + 480L
+        const val DURATION_MS = RESTORE_MS + 180L
+    }
+
     data class Frame(val word: Float = 0f, val mark: Float = 0f, val cross: Float = 0f,
                      val playback: Float = 1f)
     private var origin = Frame()
@@ -22,11 +31,11 @@ internal class LyricFeedbackState {
             else Frame(mark = 1f, cross = 1f, playback = 0f)
         val mark = Frame(mark = 1f, cross = if (enabled) 0f else 1f, playback = 0f)
         frame = when {
-            ms < 160L -> mix(origin, first, ms / 160f)
-            ms < 260L -> first
-            ms < 440L -> mix(first, mark, (ms - 260L) / 180f)
-            ms < 920L -> mark
-            else -> mix(mark, Frame(cross = mark.cross), (ms - 920L) / 180f)
+            ms < FADE_IN_MS -> mix(origin, first, ms / FADE_IN_MS.toFloat())
+            ms < MARK_START_MS -> first
+            ms < MARK_SHOWN_MS -> mix(first, mark, (ms - MARK_START_MS) / 180f)
+            ms < RESTORE_MS -> mark
+            else -> mix(mark, Frame(cross = mark.cross), (ms - RESTORE_MS) / 180f)
         }
         return frame
     }
