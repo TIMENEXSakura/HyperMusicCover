@@ -29,8 +29,93 @@ import kotlin.math.sqrt
  * (MiniPlayerRuntime.material): this frame is the blur container, [element] replays the card's
  * recorded calls. It never takes a touch - the button above it keeps its own.
  */
-internal class ShortcutDisc(context: Context) : FrameLayout(context) {
+internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFeedback {
     private val element = MaterialElement(context)
+
+    private var feedbackIdentity: String? = null
+    private var feedback: String? = null
+    private var feedbackColor = Color.WHITE
+    private var feedbackAmount = 0f
+    private var feedbackAnimator: android.animation.ValueAnimator? = null
+    private val feedbackPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = android.graphics.Paint.Align.CENTER
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+    }
+    private val restoreFeedback = Runnable {
+        feedbackAnimator?.cancel()
+        feedbackAnimator = android.animation.ValueAnimator.ofFloat(feedbackAmount, 0f).apply {
+            duration = 180L
+            addUpdateListener { feedbackAmount = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
+
+    fun bindIdentity(key: String) {
+        if (feedbackIdentity == key) return
+        feedbackIdentity = key
+        clearFeedback()
+    }
+
+    override fun showLyricStatus(enabled: Boolean) {
+        showFeedback("词", if (enabled) cardTitle.currentTextColor else 0xff888888.toInt())
+    }
+
+    override fun showStatus(text: String) = showFeedback(text, cardTitle.currentTextColor)
+
+    private fun showFeedback(text: String, color: Int) {
+        removeCallbacks(restoreFeedback)
+        feedbackAnimator?.cancel()
+        feedback = text
+        feedbackColor = color
+        feedbackAmount = 1f
+        announceForAccessibility(text)
+        invalidate()
+        postDelayed(restoreFeedback, 900L)
+    }
+
+    private fun clearFeedback() {
+        removeCallbacks(restoreFeedback)
+        feedbackAnimator?.cancel()
+        feedbackAnimator = null
+        feedback = null
+        feedbackAmount = 0f
+        invalidate()
+    }
+
+    override fun drawChild(canvas: android.graphics.Canvas, child: View, drawingTime: Long): Boolean {
+        if (feedbackAmount <= 0f || child === element) return super.drawChild(canvas, child, drawingTime)
+        val saved = canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(),
+            ((1f - feedbackAmount) * 255f).toInt())
+        val drawn = super.drawChild(canvas, child, drawingTime)
+        canvas.restoreToCount(saved)
+        return drawn
+    }
+
+    override fun dispatchDraw(canvas: android.graphics.Canvas) {
+        super.dispatchDraw(canvas)
+        val text = feedback ?: return
+        if (feedbackAmount <= 0f || shapeW <= 0 || shapeH <= 0) return
+        // The round secondary island has no play button or text column. Keep the complete
+        // message inside its existing shape, on two lines when necessary, without expanding it.
+        val rows = if (text.length > 4) text.chunked((text.length + 1) / 2) else listOf(text)
+        feedbackPaint.color = feedbackColor
+        feedbackPaint.alpha = (255f * feedbackAmount).toInt()
+        feedbackPaint.textSize = 14f * resources.displayMetrics.scaledDensity
+        val available = (shapeW * 0.72f).coerceAtLeast(1f)
+        val widest = rows.maxOf { feedbackPaint.measureText(it) }
+        if (widest > available) feedbackPaint.textSize *= available / widest
+        val lineHeight = feedbackPaint.descent() - feedbackPaint.ascent()
+        val top = height / 2f - rows.size * lineHeight / 2f
+        rows.forEachIndexed { index, row ->
+            canvas.drawText(row, width / 2f + shapeDx,
+                top - feedbackPaint.ascent() + index * lineHeight, feedbackPaint)
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        clearFeedback()
+        super.onDetachedFromWindow()
+    }
 
     private val cardTitle = TextView(context)
     private val cardText = TextView(context)

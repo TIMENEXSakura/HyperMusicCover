@@ -31,7 +31,7 @@ import kotlin.math.roundToInt
 import org.json.JSONObject
 
 /** HyperChanger's compact card, hosted in SystemUI's shortcut area. */
-internal class MiniPlayerView(context: Context) : FrameLayout(context) {
+internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleFeedback {
     private var materialLayer = MaterialElement(context)
     private val artwork = ImageView(context)
 
@@ -177,11 +177,11 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context) {
         toggle.clearLabel()
     }
 
-    fun showLyricStatus(enabled: Boolean) {
+    override fun showLyricStatus(enabled: Boolean) {
         toggle.showLabel("词", if (enabled) ink else 0xff888888.toInt())
     }
 
-    fun showStatus(text: String) {
+    override fun showStatus(text: String) {
         removeCallbacks(restoreStatus)
         statusAnimator?.cancel()
         status = text

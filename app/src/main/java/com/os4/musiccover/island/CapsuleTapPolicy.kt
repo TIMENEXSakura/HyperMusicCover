@@ -14,3 +14,9 @@ internal object CapsuleTapPolicy {
         else -> Action.NOTIFICATION
     }
 }
+
+/** Both the full pill and the small disc acknowledge the same resolved action. */
+internal interface CapsuleFeedback {
+    fun showLyricStatus(enabled: Boolean)
+    fun showStatus(text: String)
+}

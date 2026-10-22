@@ -755,6 +755,7 @@ internal class MiniPlayerController(
         // while it still showed, took it anyway on the next refresh, mid-shrink. It takes the
         // flight's picture once the flight is landing on it (flightLanding).
         if (key == held && !flightLanding) return
+        view.bindIdentity(key)
         val showing = view.visibility == View.VISIBLE && !(smallGrowing && smallGrow.target == 0f)
         val note = if (key == MUSIC_ISLAND) null
             else notes.firstOrNull { it.key == key } ?: LockIslands.noteFor(key)
@@ -4578,8 +4579,8 @@ internal class MiniPlayerController(
     }
 
     /** Resolve special actions before the generic notification expansion path. Swipes are separate. */
-    private fun tapIsland(key: String, tapped: MiniPlayerView? = null) {
-        val view = tapped ?: if (key == smallKey) smallIsland else player
+    private fun tapIsland(key: String, tapped: CapsuleFeedback? = null) {
+        val view: CapsuleFeedback? = tapped ?: if (key == smallKey) smallIsland else player
         val note = LockIslands.noteFor(key)
         val scene = note?.takeUnless { it.redacted }?.let {
             runCatching {
