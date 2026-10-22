@@ -200,9 +200,11 @@ public final class LockLyrics {
     static void onProviderUnavailable() {
         Main.main().post(() -> {
             CACHE.entrySet().removeIf(entry -> entry.getValue().source == LyricSource.SRC_LYRICON);
-            if (sSource != LyricSource.SRC_LYRICON || sDemo || !sEnabled || sKey.isEmpty()) return;
+            if (sDemo || !sEnabled || sKey.isEmpty()) return;
+            if (!sLoading && sSource != LyricSource.SRC_LYRICON) return;
             LyricSource.invalidateRequests();
             sGen++;
+            sSource = LyricSource.SRC_NONE;
             lookup(sKey, sController, false);
         });
     }

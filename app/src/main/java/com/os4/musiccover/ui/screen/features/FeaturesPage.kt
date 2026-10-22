@@ -219,6 +219,10 @@ internal fun CoverPageView(
             if (reply.lyricSource.isNotEmpty() && reply.lyricSource != module.lyricSource) {
                 module = module.copy(lyricSource = reply.lyricSource)
             }
+            if (reply.lyriconState.isNotEmpty() && (reply.lyriconState != module.lyriconState ||
+                    reply.lyriconInstalled != module.lyriconInstalled)) {
+                module = module.copy(lyriconState = reply.lyriconState, lyriconInstalled = reply.lyriconInstalled)
+            }
             // Only while the slider has never been moved: the size is then the dp default in
             // the style's terms, and it changes with the style. Once set, the slider owns it.
             if (module.clockSize <= 0f && reply.clockSize > 0f) {
@@ -302,7 +306,7 @@ internal fun CoverPageView(
                         ClockGroup(enabled, module.coverFeature, module) { module = it }
                     }
                     1 -> CardGroup(enabled, module) { module = it }
-                    else -> LyricsGroup(coverOn, module) { module = it }
+                    else -> LyricsGroup(enabled, module) { module = it }
                 }
             }
         }

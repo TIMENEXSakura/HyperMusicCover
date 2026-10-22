@@ -2537,6 +2537,11 @@ public class Main extends XposedModule {
         return sCoverHeld || LockHold.exitingFor(LockHold.Owner.COVER);
     }
 
+    static boolean lyricsDimWanted() {
+        return (keepsWallpaper() && coverHoldsClock()) || sCapsuleLyricsHeld ||
+                LockHold.exitingFor(LockHold.Owner.LYRICS);
+    }
+
     /**
      * Takes or gives the lock screen's clock and cut-out for cover mode.
      *
@@ -2760,7 +2765,10 @@ public class Main extends XposedModule {
         if (wanted == sCapsuleLyricsHeld) return;
         sCapsuleLyricsHeld = wanted;
         if (wanted) LockHold.take(LockHold.Owner.LYRICS, screenOnCached(), "capsule lyrics");
-        else LockHold.give(LockHold.Owner.LYRICS, screenOnCached());
+        else {
+            LockHold.give(LockHold.Owner.LYRICS, screenOnCached());
+            if (!screenOnCached()) KeepDim.apply(0f);
+        }
     }
 
     public static void miniPlayerEnterCover() {

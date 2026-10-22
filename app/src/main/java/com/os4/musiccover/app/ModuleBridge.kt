@@ -731,6 +731,8 @@ object ModuleBridge {
         val clockSize: Float = 0f,
         /** See State.lyricSource. Carried with the pictures so the row keeps up mid-track. */
         val lyricSource: String = "",
+        val lyriconInstalled: Boolean = false,
+        val lyriconState: String = "",
         val left: Shot? = null,
         val right: Shot? = null,
     )
@@ -774,6 +776,8 @@ object ModuleBridge {
             clockHasGlass = b.getBoolean("clockglass", false),
             clockSize = sizeOf(b),
             lyricSource = b.getString("lyricsrc") ?: "",
+            lyriconInstalled = b.getBoolean("lyricon", false),
+            lyriconState = b.getString("lyriconstate") ?: "",
         )
     }
 

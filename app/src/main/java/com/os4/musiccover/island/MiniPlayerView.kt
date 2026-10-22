@@ -230,7 +230,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     private var onNext: (() -> Unit)? = null
     private var onShowNative: (() -> Unit)? = null
     private var onOpenCover: (() -> Unit)? = null
-    private var tracking = false
+    private val bodyTouch = CapsuleBodyTouch()
     private var toggleShown = true
     private var lastHeightRadiusDp = 27f
 
@@ -399,12 +399,12 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     override fun onTouchEvent(event: MotionEvent): Boolean { android.os.Trace.beginSection("MC pillTouch"); try {
         if (!acceptsTouch()) return false
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> tracking = true
+            MotionEvent.ACTION_DOWN -> bodyTouch.down()
             MotionEvent.ACTION_UP -> {
-                if (tracking && event.x >= 0f && event.x < width && event.y >= 0f && event.y < height) performClick()
-                tracking = false
+                if (bodyTouch.up(event.x, event.y, width, height)) performClick()
             }
-            MotionEvent.ACTION_CANCEL -> tracking = false
+            MotionEvent.ACTION_MOVE -> bodyTouch.move(event.x, event.y, width, height)
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> bodyTouch.cancel()
         }
         return true
     } finally { android.os.Trace.endSection() } }
@@ -739,7 +739,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     }
 
     private fun finish() {
-        tracking = false
+        bodyTouch.cancel()
     }
 
     override fun onAttachedToWindow() {
@@ -749,6 +749,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     }
 
     override fun onDetachedFromWindow() {
+        bodyTouch.cancel()
         finish()
         context.getSystemService(android.hardware.display.DisplayManager::class.java)
             ?.unregisterDisplayListener(displayListener)

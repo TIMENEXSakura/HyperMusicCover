@@ -41,8 +41,7 @@ object LyriconSource {
     @Volatile
     private var sSong: Song? = null
 
-    /** The last connection state, for the probe. Words rather than the enum, which is internal. */
-    @Volatile
+    /** Live subscriber status, shared with the settings and lookup paths. */
     private val availability = LyriconAvailability()
 
     /** How many songs have arrived, so a probe can tell "connected" from "connected and working". */
@@ -94,19 +93,23 @@ object LyriconSource {
     @JvmStatic fun status(): String = availability.status()
 
     private fun connection(state: String) {
-        availability.connection(state)
-        if (!availability.connected()) {
-            synchronized(sSongLock) {
-                sSong = null
-                sProvider = null
-                sPlayer = null
-                sPlayerSongs = 0
-                sSongLock.notifyAll()
+        try {
+            availability.connection(state)
+            if (!availability.connected()) {
+                synchronized(sSongLock) {
+                    sSong = null
+                    sProvider = null
+                    sPlayer = null
+                    sPlayerSongs = 0
+                    sSongLock.notifyAll()
+                }
+                LockLyrics.onProviderUnavailable()
             }
-            LockLyrics.onProviderUnavailable()
+            // No song titles, lyric text or notification payloads in connection diagnostics.
+            Xp.log("[MCLyricon] framework=" + status() + " observed=" + installed())
+        } catch (t: Throwable) {
+            sError = t.toString()
         }
-        // No song titles, lyric text or notification payloads in connection diagnostics.
-        Xp.log("[MCLyricon] framework=" + status() + " observed=" + installed())
     }
 
     /**
@@ -191,7 +194,10 @@ object LyriconSource {
                     sSongLock.notifyAll()
                     changed
                 }
-                if (changed && !song?.lyrics.isNullOrEmpty()) LockLyrics.onProviderLyrics()
+                if (changed) {
+                    if (song?.lyrics.isNullOrEmpty()) LockLyrics.onProviderUnavailable()
+                    else LockLyrics.onProviderLyrics()
+                }
             } catch (t: Throwable) {
                 sError = t.toString()
             }
@@ -298,7 +304,7 @@ object LyriconSource {
         }
         if (out.isEmpty()) return null
         out.sortBy { it.start }
-        return out
+        return out.takeIf { connected() && song === sSong }
     }
 
     /**
