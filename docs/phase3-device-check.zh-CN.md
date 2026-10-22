@@ -17,7 +17,10 @@
 ## 验证
 
 - 本地独立 JVM：120 项通过，包含 4 项新增歌词页进度回归，以及“词”完整停留 300 ms 的边界验证。既有 TTML、LRC、和声、优先级与回退、动画打断、取消触摸测试保留。
-- Android 编译、全量单元测试和 lint 由 GitHub Actions 验证，结果待本轮云构建回填。
+- 最终云构建 [Actions 39872334880](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39872334880) 成功，代码提交 `cefa98e6dd637280a25f50e690b52e2c3ae42eb5`。Android Release APK、全量单元测试（49 组 309 项，0 失败／错误／跳过）、lint 与 Xposed 入口检查通过。Lint 为 310 条警告、5 条提示、0 错误。
+- 最终产物位于源码目录上一级 `artifacts/cefa98e/HyperMusicCover-0.9.45-Plus3.apk`，版本 `0.9.45-Plus3` / `945007`，11,575,711 字节。SHA-256：`f466fd71e0b45679266ccafd952905bfd3dc87e9d9c8520d9e6b4da04a3d806f`。压缩包与 GitHub 返回的摘要一致，APK 与产物校验文件一致；已核对 APK 内版本文本及本轮新增诊断进入 DEX。
+- APK v2 签名验证通过，证书 SHA-256 为 `bd0321e574c677952778bdad9cecb8f164e64eb59840ad96f63282eed0b8c340`，与上一版不同。项目未提供发布密钥时使用临时 Debug 签名，不能普通覆盖上一测试版；先导出配置再更换安装，并确认框架启用状态／作用域。未自动卸载或安装应用。
+- 同目录保存压缩包、JUnit／lint 报告、完整云构建日志、本地测试结果、签名验证、`verification.json` 与 `BUILD-INFO.txt`。前两个中间提交的云任务已取消，交付仅以本次最终提交构建为准。
 - 未在当前环境安装 APK、自动操作锁屏或运行 SystemUI 真机测试。纯状态测试不等于 Android 触摸分发、Intent 启动或页面像素已经验证。
 
 ## 真机验收与必要日志
