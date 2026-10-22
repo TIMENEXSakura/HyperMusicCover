@@ -1138,6 +1138,11 @@ object MiniPlayerRuntime {
      */
     @JvmStatic fun routeTouch(ev: MotionEvent): Boolean { android.os.Trace.beginSection("MC t.route"); try {
         val action = ev.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) failedRoute = false
+        else if (failedRoute) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) failedRoute = false
+            return true
+        }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) releasePress()
         if (action == MotionEvent.ACTION_DOWN) {
             routedX = ev.rawX
@@ -1399,6 +1404,22 @@ object MiniPlayerRuntime {
     /** The side a press is on: the pill, or a disc's index (0 the torch, 1 the camera). */
     internal const val PRESS_PILL = -1
     internal const val PRESS_SMALL = -2
+
+    private var failedRoute = false
+
+    /** An exception in our click handler must not open the system panel under our capsule. */
+    @JvmStatic fun cancelOwnedTouch(): Boolean {
+        val target = routed?.get()
+        failedRoute = target != null
+        if (target != null) {
+            val now = android.os.SystemClock.uptimeMillis()
+            val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+            try { runCatching { target.dispatchTouchEvent(cancel) } } finally { cancel.recycle() }
+        }
+        runCatching { releasePress() }
+        runCatching { endRoute() }
+        return failedRoute
+    }
 
     private fun endRoute() {
         routedOwner?.stopAnticipating()

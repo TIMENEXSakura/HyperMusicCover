@@ -104,6 +104,9 @@ object LyriconSource {
                     sSongLock.notifyAll()
                 }
                 LockLyrics.onProviderUnavailable()
+            } else if (!sSong?.lyrics.isNullOrEmpty()) {
+                // bindService can synchronously deliver the initial song before onConnected.
+                LockLyrics.onProviderLyrics()
             }
             // No song titles, lyric text or notification payloads in connection diagnostics.
             Xp.log("[MCLyricon] framework=" + status() + " observed=" + installed())
@@ -183,7 +186,6 @@ object LyriconSource {
     private object Listener : ActivePlayerListener {
         override fun onSongChanged(song: Song?) {
             try {
-                if (!connected()) return
                 val changed = synchronized(sSongLock) {
                     val changed = song != sSong
                     sSong = song
@@ -194,7 +196,7 @@ object LyriconSource {
                     sSongLock.notifyAll()
                     changed
                 }
-                if (changed) {
+                if (changed && connected()) {
                     if (song?.lyrics.isNullOrEmpty()) LockLyrics.onProviderUnavailable()
                     else LockLyrics.onProviderLyrics()
                 }
@@ -211,7 +213,7 @@ object LyriconSource {
                 val player = providerInfo?.playerPackageName
                 availability.provider(providerInfo != null)
                 synchronized(sSongLock) {
-                    if (player != sPlayer || player == null) {
+                    if ((sPlayer != null && player != sPlayer) || player == null) {
                         sPlayerSongs = 0
                         sSong = null
                     }

@@ -89,7 +89,15 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
 
     private fun renderCardText() {
         val message = statusFeedback.text
-        val title = message ?: normalTitle
+        val title = if (message != null && shapeW <= shapeH * 2)
+            message.chunked((message.length + 1) / 2).joinToString("\n") else message ?: normalTitle
+        val baseTextPx = 12.8f * MiniPlayerGeometry.STACK_BACK_SCALE * resources.displayMetrics.scaledDensity
+        val inset = min(shapeW, shapeH) * (1f - ICON_SHARE) / 2f
+        val maxWidth = (shapeW - 2f * inset).coerceAtLeast(1f)
+        val measured = title?.toString()?.lineSequence()?.maxOfOrNull { cardTitle.paint.measureText(it) } ?: 0f
+        val size = if (message != null && measured > 0f)
+            min(baseTextPx, cardTitle.textSize * maxWidth / measured) else baseTextPx
+        if (abs(cardTitle.textSize - size) > 0.1f) cardTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, size)
         val text = if (message != null) null else normalText
         cardWords.visibility = if (title == null && text == null) View.GONE else View.VISIBLE
         cardWords.alpha = statusFeedback.alpha

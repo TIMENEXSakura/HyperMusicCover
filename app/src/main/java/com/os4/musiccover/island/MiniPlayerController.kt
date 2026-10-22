@@ -4589,10 +4589,12 @@ internal class MiniPlayerController(
                 com.os4.musiccover.immersive.ImmersiveHost.sceneFor(it.pkg, it.focus, key)
             }.getOrNull()
         }
-        when (CapsuleTapPolicy.resolve(key == MUSIC_ISLAND, note?.redacted == true,
+        val action = CapsuleTapPolicy.resolve(key == MUSIC_ISLAND, note?.redacted == true,
             scene?.isNavigation() == true,
             note?.let { it.timer != null || it.category == android.app.Notification.CATEGORY_ALARM } == true,
-            scene != null)) {
+            scene != null)
+        MiniPlayerRuntime.noteTouch("body action=$action small=${view === smallIsland}")
+        when (action) {
             CapsuleTapPolicy.Action.MUSIC -> {
                 Main.miniPlayerToggleLyrics()?.let { view?.showLyricStatus(it) }
             }

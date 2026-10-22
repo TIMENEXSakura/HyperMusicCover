@@ -3,6 +3,17 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyriconAvailabilityTest {
+    @Test public void initialProviderBeforeConnectedIsBufferedButNotAssumedRunning() {
+        LyriconAvailability state = new LyriconAvailability();
+        state.connection("connecting");
+        state.provider(true);
+        assertFalse(state.observed());
+        assertFalse(state.active());
+        state.connection("connected");
+        assertTrue(state.observed());
+        assertTrue(state.active());
+        assertEquals("active", state.status());
+    }
     @Test public void noPackageInferenceBeforeFrameworkHandshake() {
         LyriconAvailability state = new LyriconAvailability();
         state.connection("connecting");

@@ -12,7 +12,9 @@ public final class LyriconAvailability {
         else provider = false;
     }
 
-    public synchronized void provider(boolean active) { provider = active && connected(); }
+    // subscriber 0.1.70 binds its active-player listener BEFORE onConnected. Remember the
+    // initial provider callback, but do not report it running until the handshake completes.
+    public synchronized void provider(boolean active) { provider = active; }
     public synchronized boolean observed() { return observed; }
     public synchronized boolean connected() {
         return "connected".equals(connection) || "reconnected".equals(connection);

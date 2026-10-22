@@ -178,7 +178,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                     i.getBooleanExtra("network", current.allowNetwork),
                     i.hasExtra("sources") ? i.getStringExtra("sources") : current.sourceOrder,
                     i.hasExtra("localformat") ? i.getStringExtra("localformat") : current.localFormat);
-            ModuleState.saveStateSoon();
+            ModuleState.saveState();
         } else if ("lyricmaxlines".equals(op)) {
             if (LockLyrics.setMaxLines(i.getIntExtra("v", LockLyrics.sMaxLines))) {
                 LockLyrics.refresh();
