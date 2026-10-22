@@ -61,7 +61,7 @@
 | 配置传递与保存 | ModuleState.java、ProbeReceiver.java、app/ModuleBridge.kt、app/SettingsBackup.kt |
 | 胶囊行为 | island/CapsuleTapPolicy.kt、MiniPlayerController.kt、MiniPlayerView.kt、PressFeedbackButton.kt、LockIslands.kt、Main.java |
 
-## 验证与交付状态
+## 第一阶段构建记录
 
 云构建已于 2026-10-22 通过：[Actions 39810626165](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39810626165)。代码提交为 `595eef47410c7a35b724568e96309df69593691a`。工作流使用 `workflow_dispatch` 手动触发，尚未提交任何上游 PR。
 

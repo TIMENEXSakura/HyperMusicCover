@@ -22,6 +22,10 @@ TTML 同一主唱行携带多段和声时，当前转换只保留第一段；部
 
 ## 验证
 
+- 第二阶段代码 `bbd7e33` 已通过 [Actions 39818946091](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39818946091)：304 项全量单元测试、release 打包、lint 与 Xposed 入口检查通过；本地独立 JVM 115 项通过。Lint 仍有 310 条警告、5 条提示，无错误。真机行为尚待验收，测试签名与第一阶段不同。
+
+以下为第一阶段历史记录：
+
 - 本地独立 JVM 回归通过 99 项，资源 XML 与差异检查通过；具体范围与限制见 [修改说明](lyrics-v0.9.45-migration.md)。
 - 云构建已通过：[Actions 39810626165](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39810626165)，代码 `595eef4`。全量单元测试 288 项通过、无失败／跳过；release APK、lint 与 Xposed 入口检查通过。Lint 仍有 309 条警告和 5 条提示，详见修改说明。
 - 真机锁屏／SystemUI：等待用户安装验证，提交 PR 前补充设备环境与实测结果。
