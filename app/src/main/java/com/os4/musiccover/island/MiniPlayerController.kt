@@ -669,20 +669,8 @@ internal class MiniPlayerController(
      */
     fun selectSmallIsland() { android.os.Trace.beginSection("MC t.selectSmall"); try {
         val key = smallKey ?: return
-        // The music opens the cover from the small island as from the pill.
-        if (key == MUSIC_ISLAND && config.getBoolean(MiniPlayerConfig.ENABLED)) {
-            tapIsland(key)
-            return
-        }
-        // With one island out as its card, a tap on another opens it in that one's stead.
-        if (key != MUSIC_ISLAND || expandedKey() != null) {
-            expandNote(key)
-            return
-        }
-        val oldBig = selectedIsland
-        selectedIsland = key
-        refresh()
-        startSwap(oldBig, key)
+        tapIsland(key, smallIsland)
+        return
     } finally { android.os.Trace.endSection() } }
 
     /**
@@ -4586,24 +4574,41 @@ internal class MiniPlayerController(
         }
         val seats = x.seats ?: return
         val key = (if (small) seats.small else seats.big) ?: return
-        if (key == x.expanded) return
-        if (key == STACK_ISLAND && LockIslands.foldsNatively()) {
-            if (!openSingleApp("tap during a switch")) openSpread("tap during a switch")
-            return
-        }
-        trace("switch tap ${key.takeLast(6)} small=$small")
-        val wasOut = x.movers[key]?.morph != null
-        requestUp(x, key, fromPill = !small, cover = key == MUSIC_ISLAND)
-        // The music opens the cover from any place, as from the pill (tapIsland).
-        if (key == MUSIC_ISLAND && !wasOut) {
-            MiniPlayerRuntime.forgetRestoreScene()
-            Main.miniPlayerEnterCover()
-        }
+        tapIsland(key, if (small) smallIsland else player)
     }
 
     /** What a tap on an island does: the music opens the cover, a notification its row. */
-    private fun tapIsland(key: String) {
-        if (key == MUSIC_ISLAND) openCover() else expandNote(key)
+    private fun tapIsland(key: String, tapped: MiniPlayerView? = null) {
+        val view = tapped ?: if (key == smallKey) smallIsland else player
+        if (key == MUSIC_ISLAND) {
+            val enabled = Main.miniPlayerToggleLyrics() ?: return
+            view?.showLyricStatus(enabled)
+            return
+        }
+        val note = LockIslands.noteFor(key)
+        if (note != null && !note.redacted) {
+            val scene = runCatching {
+                com.os4.musiccover.immersive.ImmersiveHost.sceneFor(note.pkg, note.focus, key)
+            }.getOrNull()
+            if (scene != null) {
+                val entered = runCatching { LockIslands.toggleScene(key) }.getOrNull()
+                val status = if (entered == null) "内容尚未就绪" else if (scene.isNavigation()) {
+                    if (entered) "已进入导航界面" else "已退出导航界面"
+                } else if (entered) "已打开" else "已收起"
+                view?.showStatus(status)
+                return
+            }
+            if (note.timer != null || note.category == android.app.Notification.CATEGORY_ALARM) {
+                val row = rowFor(key)
+                val clicker = row?.let { runCatching { Xp.getObjectField(it, "mOnClickListener") as? View.OnClickListener }.getOrNull() }
+                if (row != null && clicker != null) {
+                    runCatching { clicker.onClick(row) }.onFailure { Xp.w("MCIsland: direct entry failed: $it") }
+                    return
+                }
+                if (note.intent != null && runCatching { note.intent.send() }.isSuccess) return
+            }
+        }
+        expandNote(key)
     }
 
     /**
@@ -7989,9 +7994,10 @@ internal class MiniPlayerController(
      * the pill's own alphas say how strong each line is.
      */
     private fun ink(): Int {
-        val card = Main.miniPairTitle() as? TextView
-        val color = card?.takeIf { it.isAttachedToWindow }?.currentTextColor ?: rowInk() ?: materialInk()
-        return color or 0xFF000000.toInt()
+        // Notification titles may belong to a light expanded card while this capsule wears
+        // glass. Their black tint must not leak into our monochrome controls. App artwork is
+        // drawn separately and retains its colors and themed resource selection.
+        return materialInk() or 0xFF000000.toInt()
     }
 
     private var materialInkAt = 0L
@@ -8090,6 +8096,7 @@ internal class MiniPlayerController(
     }
 
     private fun bindMusic(view: MiniPlayerView, current: MediaController, config: JSONObject) {
+        view.bindIdentity(MUSIC_ISLAND)
         view.setArtworkBare(false)
         view.setToggleFace(null)
         view.setSecondFace(null)
@@ -8118,7 +8125,7 @@ internal class MiniPlayerController(
                 if (MiniPlayerRuntime.takeRestoreScene()) Main.miniPlayerEnterCover()
                 else MiniPlayerRuntime.selectNative(current.sessionToken)
             },
-            { openCover() },
+            { tapIsland(MUSIC_ISLAND, view) },
         )
     }
 
@@ -8128,6 +8135,7 @@ internal class MiniPlayerController(
      * come.
      */
     private fun bindNote(view: MiniPlayerView, note: LockIslands.Note, config: JSONObject) {
+        view.bindIdentity(note.key)
         // A focus notification shown in full is its template: its picture bare, as its row has
         // it, and its main button where the music's play button is.
         val template = note.focus && !note.redacted
@@ -8160,7 +8168,7 @@ internal class MiniPlayerController(
             {},
             {},
             {},
-            { expandNote(note.key) },
+            { tapIsland(note.key, view) },
         )
         showTimer(view, note.timer)
         showFocusAnim(view, note.anim, note.live)

@@ -156,6 +156,49 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context) {
     /** A picture that moves (a focus template's Lottie), shown over whatever bitmap is bound. */
     private var artworkOverride: android.graphics.drawable.Drawable? = null
     private var lastPlaying: Boolean? = null
+    private var boundIdentity: String? = null
+    private var status: String? = null
+    private var statusAmount = 0f
+    private var statusAnimator: android.animation.ValueAnimator? = null
+    private val statusPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val restoreStatus = Runnable {
+        statusAnimator?.cancel()
+        statusAnimator = android.animation.ValueAnimator.ofFloat(statusAmount, 0f).apply {
+            duration = 180L
+            addUpdateListener { statusAmount = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
+
+    fun bindIdentity(key: String) {
+        if (boundIdentity == key) return
+        boundIdentity = key
+        clearStatus()
+        toggle.clearLabel()
+    }
+
+    fun showLyricStatus(enabled: Boolean) {
+        toggle.showLabel("词", if (enabled) ink else 0xff888888.toInt())
+    }
+
+    fun showStatus(text: String) {
+        removeCallbacks(restoreStatus)
+        statusAnimator?.cancel()
+        status = text
+        statusAmount = 1f
+        invalidate()
+        announceForAccessibility(text)
+        postDelayed(restoreStatus, 900L)
+    }
+
+    private fun clearStatus() {
+        removeCallbacks(restoreStatus)
+        statusAnimator?.cancel()
+        statusAnimator = null
+        status = null
+        statusAmount = 0f
+    }
+
 
     /**
      * The colour of the words and the play button: the system's own card's (MiniPlayerController
@@ -696,6 +739,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context) {
             ?.unregisterDisplayListener(displayListener)
         rest(title)
         rest(artist)
+        clearStatus()
         super.onDetachedFromWindow()
     }
 
@@ -981,6 +1025,27 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context) {
     override fun dispatchDraw(canvas: Canvas) {
         if (transitionAlpha <= 0f) return
         super.dispatchDraw(canvas)
+    }
+
+    override fun drawChild(canvas: Canvas, child: View, drawingTime: Long): Boolean {
+        // Replace only the text column while preserving artwork, controls and hit regions.
+        if (child !== content || statusAmount <= 0f) return super.drawChild(canvas, child, drawingTime)
+        val saved = textColumn.alpha
+        textColumn.alpha = saved * (1f - statusAmount)
+        val result = super.drawChild(canvas, child, drawingTime)
+        textColumn.alpha = saved
+        statusPaint.color = ink
+        statusPaint.alpha = (255f * statusAmount * contentAlpha).toInt()
+        statusPaint.textSize = 12f * resources.displayMetrics.scaledDensity
+        val available = textColumn.width.toFloat().coerceAtLeast(1f)
+        val text = status.orEmpty()
+        val measured = statusPaint.measureText(text)
+        if (measured > available) statusPaint.textSize *= available / measured
+        val x = content.left + textColumn.left.toFloat()
+        val y = content.top + textColumn.top + textColumn.height / 2f -
+            (statusPaint.ascent() + statusPaint.descent()) / 2f
+        canvas.drawText(text, x, y, statusPaint)
+        return result
     }
 
     fun setContentAlpha(alpha: Float) {

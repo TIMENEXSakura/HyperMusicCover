@@ -65,6 +65,7 @@ internal fun LyricAppearanceSettings(
         stringResource(R.string.lyrics_color_official),
         stringResource(R.string.lyrics_color_cover),
         stringResource(R.string.lyrics_color_custom),
+        stringResource(R.string.lyrics_color_system),
     )
     for (backing in listOf(false, true)) {
         val role = if (backing) "bg" else "main"

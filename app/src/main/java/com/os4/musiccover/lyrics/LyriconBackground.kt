@@ -53,7 +53,8 @@ internal object LyriconBackground {
         }
         val text = plain.ifEmpty { visible(joined) }
         if (text.isEmpty()) return null
-        return LyricLine(text, null, line.begin.toInt(), line.end.toInt(),
+        return LyricLine(text, null, line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+            line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
             line.isAlignedRight, null, null, null)
     }
 

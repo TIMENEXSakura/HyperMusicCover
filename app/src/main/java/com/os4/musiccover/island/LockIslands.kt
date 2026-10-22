@@ -54,6 +54,7 @@ internal object LockIslands {
         val summary: Boolean,
         /** Shown as the lock screen shows it: the public version. */
         val redacted: Boolean = false,
+        val category: String? = null,
         /**
          * The super island's own ranking of it, from the focus notification's param_island:
          * islandProperty, islandPriority (1 and 1 without one, as FocusNotifUtils fills in), and
@@ -198,6 +199,26 @@ internal object LockIslands {
 
     private fun sceneOf(key: String): ImmersiveScene? =
         noteFor(key)?.let { runCatching { ImmersiveHost.sceneFor(it.pkg, it.focus, key) }.getOrNull() }
+
+    /** Toggle only the module's immersive content. The real navigation session is untouched. */
+    fun toggleScene(key: String): Boolean? {
+        val target = sceneOf(key) ?: return null
+        if (sceneKey == key) {
+            ImmersiveHost.close(target)
+            sceneKey = null
+            scene = null
+            sceneMissingSince = 0L
+            return false
+        }
+        if (!target.ready()) return null
+        scene?.let { ImmersiveHost.close(it) }
+        ImmersiveHost.open(target)
+        sceneKey = key
+        scene = target
+        sceneMissingSince = 0L
+        // Keep its capsule available for the next tap; release() is reserved for swipe-to-panel.
+        return true
+    }
 
     /** What a clear of [released] leaves: the open page's island, if there is one. */
     private fun clearReleased() {
@@ -1185,6 +1206,7 @@ internal object LockIslands {
             focus = focus,
             time = if (n.`when` > 0) n.`when` else sbn.postTime,
             intent = n.contentIntent,
+            category = n.category,
             group = if (sbn.isGroup) sbn.groupKey else null,
             summary = n.flags and Notification.FLAG_GROUP_SUMMARY != 0,
             redacted = redacted,

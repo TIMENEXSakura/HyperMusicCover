@@ -5,7 +5,7 @@ import java.util.LinkedHashSet;
 import java.util.Locale;
 
 public final class LyricSourcePolicy {
-    public static final String DEFAULT_SOURCES = "metadata,local,lyricon,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
+    public static final String DEFAULT_SOURCES = "lyricon,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
     public static final String DEFAULT_FORMATS = "ttml,lrc,yrc,krc,lys";
     public static volatile Config current = new Config(false, true, DEFAULT_SOURCES, DEFAULT_FORMATS);
 
@@ -30,6 +30,27 @@ public final class LyricSourcePolicy {
         }
         result.addAll(allowed);
         return String.join(",", result);
+    }
+
+    /** Ordinal positions are unique: moving one source shifts the others stably. */
+    public static String move(String order, String source, int position) {
+        java.util.List<String> items = new java.util.ArrayList<>(Arrays.asList(order.split(",")));
+        if (!items.remove(source)) return order;
+        items.add(Math.max(0, Math.min(items.size(), position - 1)), source);
+        return String.join(",", items);
+    }
+
+    /** Sequential selection: a fast lower-priority answer cannot race the preferred source. */
+    static <T> T first(Config config, java.util.function.Function<String, T> read,
+                       java.util.function.BooleanSupplier stillCurrent) {
+        for (String source : config.sources()) {
+            if (!stillCurrent.getAsBoolean()) return null;
+            if (!config.permits(source)) continue;
+            T result = read.apply(source);
+            if (!stillCurrent.getAsBoolean()) return null;
+            if (result != null) return result;
+        }
+        return null;
     }
 
     public static boolean network(String source) {

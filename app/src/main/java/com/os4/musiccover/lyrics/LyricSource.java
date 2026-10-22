@@ -887,10 +887,8 @@ public final class LyricSource {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                Rows r = new Rows();
-                for (String source : policy.sources()) {
-                    if (superseded(gen) || policy != LyricSourcePolicy.current) return;
-                    if (!policy.permits(source)) continue;
+                Rows selected = LyricSourcePolicy.first(policy, source -> {
+                    Rows r = new Rows();
                     try {
                         switch (source) {
                             case "metadata":
@@ -915,9 +913,9 @@ public final class LyricSource {
                     } catch (Throwable error) {
                         Xp.w("[MCLyric] " + source + " failed: " + error);
                     }
-                    if (dropPlaceholder(r)) continue;
-                    if (!r.lines.isEmpty()) break;
-                }
+                    return !dropPlaceholder(r) && !r.lines.isEmpty() ? r : null;
+                }, () -> !superseded(gen) && policy == LyricSourcePolicy.current);
+                final Rows r = selected != null ? selected : new Rows();
                 // A translation left on the line itself by its tag writer (#95) is hung on the
                 // line before anything reads it: borrow() must see it and not go and fetch a
                 // second one, and the layout must draw it as a translation.
@@ -1663,6 +1661,7 @@ public final class LyricSource {
         long started = android.os.SystemClock.uptimeMillis();
         HttpURLConnection conn = null;
         try {
+            if (!LyricSourcePolicy.current.allowNetwork) return new Answer(UNREACHABLE, null);
             conn = (HttpURLConnection) new URL(url).openConnection();
             // Short on purpose. A lyric that arrives after the lock screen has been put away is
             // worth nothing, and four mirrors running at once means the slow one is never waited

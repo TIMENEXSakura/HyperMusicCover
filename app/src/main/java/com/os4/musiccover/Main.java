@@ -2745,6 +2745,19 @@ public class Main extends XposedModule {
     }
 
     /** Enter through the same route as the OEM artwork, with MiniPlayerRuntime owning the bridge. */
+    /** Capsule body only: change the lyric page, never open the detailed media panel. */
+    public static Boolean miniPlayerToggleLyrics() {
+        if (!miniPlayerCanShow() || !sCoverFeatureOn || !LockLyrics.sEnabled) return null;
+        if (!sCoverMode) {
+            if (LockLyrics.sTapHidden) LockLyrics.toggleByTap(sTrackKey, sWatched);
+            miniPlayerEnterCover();
+        } else {
+            LockLyrics.toggleByTap(sTrackKey, sWatched);
+            MediaCard.kickCardFrame();
+        }
+        return !LockLyrics.sTapHidden;
+    }
+
     public static void miniPlayerEnterCover() {
         if (!miniPlayerCanShow()) return;
         // No cover to open: the island opens into the plain card, as a pull up on it does.
