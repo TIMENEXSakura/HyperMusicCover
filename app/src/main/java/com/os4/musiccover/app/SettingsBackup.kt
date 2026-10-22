@@ -85,7 +85,7 @@ object SettingsBackup {
             json.put("lyricsMaxLines", module.lyricsMaxLines)
             json.put("lyricSourcePolicy", JSONObject()
                 .put("custom", module.lyricSourceCustom).put("network", module.lyricNetwork)
-                .put("sources", module.lyricSourceOrder).put("formats", module.lyricFormatOrder))
+                .put("sources", module.lyricSourceOrder).put("localFormat", module.lyricLocalFormat))
         }
         return json.toString(2)
     }
@@ -100,7 +100,9 @@ object SettingsBackup {
                     lyricSourceCustom = policy.optBoolean("custom", false),
                     lyricNetwork = policy.optBoolean("network", true),
                     lyricSourceOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeSources(policy.optString("sources")),
-                    lyricFormatOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeFormats(policy.optString("formats")),
+                    lyricLocalFormat = com.os4.musiccover.lyrics.LocalLyricFormat.migrate(
+                        if (policy.has("localFormat")) policy.optString("localFormat") else null,
+                        policy.optString("formats")),
                 ))
             }
             if (obj.has("lyricAppearance")) {

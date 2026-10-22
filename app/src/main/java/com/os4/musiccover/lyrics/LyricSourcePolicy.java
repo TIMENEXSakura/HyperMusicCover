@@ -6,17 +6,12 @@ import java.util.Locale;
 
 public final class LyricSourcePolicy {
     public static final String DEFAULT_SOURCES = "lyricon,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
-    public static final String DEFAULT_FORMATS = "ttml,lrc,yrc,krc,lys";
-    public static volatile Config current = new Config(false, true, DEFAULT_SOURCES, DEFAULT_FORMATS);
+    public static volatile Config current = new Config(false, true, DEFAULT_SOURCES, LocalLyricFormat.TTML);
 
     private LyricSourcePolicy() { }
 
     public static String normalizeSources(String order) {
         return normalize(order, DEFAULT_SOURCES);
-    }
-
-    public static String normalizeFormats(String order) {
-        return normalize(order, DEFAULT_FORMATS);
     }
 
     private static String normalize(String order, String defaults) {
@@ -61,13 +56,13 @@ public final class LyricSourcePolicy {
         public final boolean custom;
         public final boolean allowNetwork;
         public final String sourceOrder;
-        public final String formatOrder;
+        public final String localFormat;
 
-        public Config(boolean custom, boolean allowNetwork, String sourceOrder, String formatOrder) {
+        public Config(boolean custom, boolean allowNetwork, String sourceOrder, String localFormat) {
             this.custom = custom;
             this.allowNetwork = allowNetwork;
             this.sourceOrder = normalizeSources(sourceOrder);
-            this.formatOrder = normalizeFormats(formatOrder);
+            this.localFormat = LocalLyricFormat.normalize(localFormat);
         }
 
         public String[] sources() {
@@ -75,7 +70,7 @@ public final class LyricSourcePolicy {
         }
 
         public String[] formats() {
-            return formatOrder.split(",");
+            return LocalLyricFormat.formats(localFormat);
         }
 
         public boolean permits(String source) {

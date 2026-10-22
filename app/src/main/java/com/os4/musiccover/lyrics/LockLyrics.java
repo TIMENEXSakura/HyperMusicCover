@@ -65,6 +65,24 @@ public final class LockLyrics {
      * cover. Written by setEnabled, toggleByTap and the state file, and nowhere else.
      */
     public static volatile boolean sTapHidden;
+    /** Transient page request, separate from cover mode and the media-card morph. */
+    private static boolean sCapsulePage;
+
+    public static boolean toggleFromCapsule(String key, MediaController controller) {
+        boolean visible = wanted() && (sCapsulePage || Main.coverModeOn());
+        sCapsulePage = !visible && !Main.coverModeOn();
+        sTapHidden = visible;
+        if (!visible) notePopOrigin(com.os4.musiccover.island.MiniPlayerRuntime.musicIslandCentreOnScreen());
+        show(!visible, key, controller, "hidden by capsule");
+        ModuleState.saveState();
+        return !visible;
+    }
+
+    public static void clearCapsulePage() {
+        sCapsulePage = false;
+        refresh();
+    }
+
 
     private static String sKey = "";
     private static List<LyricLine> sLines = Collections.emptyList();
@@ -157,7 +175,7 @@ public final class LockLyrics {
         LyricSourcePolicy.Config previous = LyricSourcePolicy.current;
         LyricSourcePolicy.Config next = new LyricSourcePolicy.Config(custom, network, sources, formats);
         if (previous.custom == next.custom && previous.allowNetwork == next.allowNetwork
-                && previous.sourceOrder.equals(next.sourceOrder) && previous.formatOrder.equals(next.formatOrder)) return;
+                && previous.sourceOrder.equals(next.sourceOrder) && previous.localFormat.equals(next.localFormat)) return;
         LyricSourcePolicy.current = next;
         LyricSource.invalidateRequests();
         CACHE.clear();
@@ -176,6 +194,16 @@ public final class LockLyrics {
             if (!sLines.isEmpty() && !LyricSourcePolicy.current.mayReplace(policySource(sSource), "lyricon")) return;
             CACHE.remove(sKey);
             lookup(sKey, sController, !sLines.isEmpty());
+        });
+    }
+
+    static void onProviderUnavailable() {
+        Main.main().post(() -> {
+            CACHE.entrySet().removeIf(entry -> entry.getValue().source == LyricSource.SRC_LYRICON);
+            if (sSource != LyricSource.SRC_LYRICON || sDemo || !sEnabled || sKey.isEmpty()) return;
+            LyricSource.invalidateRequests();
+            sGen++;
+            lookup(sKey, sController, false);
         });
     }
 
@@ -427,7 +455,7 @@ public final class LockLyrics {
 
     /** Whether the view belongs in the keyguard right now. */
     public static boolean wantsAttached() {
-        return wanted() && Main.coverModeOn() && hasLyrics();
+        return wanted() && (sCapsulePage || Main.coverModeOn()) && hasLyrics();
     }
 
     /**
@@ -1346,6 +1374,7 @@ public final class LockLyrics {
     }
 
     public static void refresh() {
+        Main.syncCapsuleLyricsHold(sCapsulePage && wanted() && hasLyrics());
         // 保留壁纸 hangs the clock on the lyric page, and this is where the page comes and goes.
         Main.syncCoverHold(Main.screenOnCached());
         updateBlur();
@@ -1361,6 +1390,7 @@ public final class LockLyrics {
     /** The app's switch. The setting: it is written to the state file and the app reads it back. */
     public static void setEnabled(boolean on, String key, MediaController c) {
         sEnabled = on;
+        if (!on) sCapsulePage = false;
         // The switch is the master, so it takes the tap's answer with it. Switching the lyrics
         // off and on again brings them back; without this, turning them on while a previous tap
         // had hidden them would leave the lock screen on the cover with the switch saying on.
@@ -1488,7 +1518,7 @@ public final class LockLyrics {
                 + " (" + sWhy + ") src=" + srcName(sSource)
                 + " sessionHasLyric=" + LyricSource.hasLyricInfo(sController)
                 + " pos=" + positionMs() + " playing=" + playing()
-                + " cover=" + Main.coverModeOn() + " screen=" + Main.screenOnCached()
+                + " capsule=" + sCapsulePage + " cover=" + Main.coverModeOn() + " screen=" + Main.screenOnCached()
                 // What the wallpaper process was last told, and when: the other side prints the
                 // answer it holds and when it was decided, so the two readings side by side say
                 // whether a switch was lost on the way rather than guessing at the cover.

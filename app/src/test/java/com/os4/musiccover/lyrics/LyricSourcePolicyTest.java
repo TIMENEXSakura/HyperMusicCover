@@ -16,11 +16,11 @@ public class LyricSourcePolicyTest {
         assertEquals(10, config.sources().length);
         assertEquals("qq", config.sources()[0]);
         assertEquals("local", config.sources()[1]);
-        assertEquals(LyricSourcePolicy.DEFAULT_FORMATS, config.formatOrder);
+        assertEquals(LocalLyricFormat.TTML, config.localFormat);
     }
 
     @Test public void formatsAreWhitelistedAndKeepRequestedPriority() {
-        assertEquals("lrc,ttml,yrc,krc,lys", LyricSourcePolicy.normalizeFormats("LRC,lrc,../ttml,ttml"));
+        assertArrayEquals(new String[]{"lrc", "ttml", "yrc", "krc", "lys"}, LocalLyricFormat.formats("LRC"));
         assertEquals(LyricSourcePolicy.DEFAULT_SOURCES, LyricSourcePolicy.normalizeSources(null));
     }
 

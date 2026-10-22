@@ -2746,15 +2746,21 @@ public class Main extends XposedModule {
 
     /** Capsule body only: change the lyric page, never open the detailed media panel. */
     public static Boolean miniPlayerToggleLyrics() {
-        if (!miniPlayerCanShow() || !sCoverFeatureOn || !LockLyrics.sEnabled) return null;
-        if (!sCoverMode) {
-            if (LockLyrics.sTapHidden) LockLyrics.toggleByTap(sTrackKey, sWatched);
-            miniPlayerEnterCover();
-        } else {
-            LockLyrics.toggleByTap(sTrackKey, sWatched);
-            MediaCard.kickCardFrame();
-        }
-        return !LockLyrics.sTapHidden;
+        if (!miniPlayerCanShow() || !LockLyrics.sEnabled) return null;
+        boolean visible = LockLyrics.toggleFromCapsule(sTrackKey, sWatched);
+        Xp.log(TAG + "capsule lyrics=" + visible + " source=" + LockLyrics.sourceName()
+                + " attached=" + LockLyrics.wantsAttached());
+        return visible;
+    }
+
+    private static boolean sCapsuleLyricsHeld;
+
+    /** A lyric page owns the clock without selecting the expanded media card or album cover. */
+    public static void syncCapsuleLyricsHold(boolean wanted) {
+        if (wanted == sCapsuleLyricsHeld) return;
+        sCapsuleLyricsHeld = wanted;
+        if (wanted) LockHold.take(LockHold.Owner.LYRICS, screenOnCached(), "capsule lyrics");
+        else LockHold.give(LockHold.Owner.LYRICS, screenOnCached());
     }
 
     public static void miniPlayerEnterCover() {
@@ -3988,6 +3994,7 @@ public class Main extends XposedModule {
                     Xp.w(TAG + "registerCallback failed: " + t);
                 }
             } else {
+                LockLyrics.clearCapsulePage();
                 Xp.log(TAG + "no active media session");
             }
         }

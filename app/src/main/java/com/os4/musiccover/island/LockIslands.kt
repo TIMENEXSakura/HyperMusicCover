@@ -1189,8 +1189,15 @@ internal object LockIslands {
         // the island shows what the row does, so the landing is one and the same.
         val template = if (focus && !redacted) focusTemplate(n) ?: rowTemplate(entry) else null
         val picture = template?.let { focusPicture(n, sbn, entry, it.pics + islandPics(island)) }
-        val icon = picture?.icon ?: iconOf(sbn, shown ?: n, redacted)
+        val original = picture?.icon ?: iconOf(sbn, shown ?: n, redacted)
         val iconFrom = picture?.from ?: lastIconFrom
+        // Only navigation's functional artwork. App icons, photos and multicolor resources
+        // retain their colors; the raster classifier also rejects opaque tiles.
+        val navigation = sbn.packageName == "com.autonavi.minimap" && focus && !redacted &&
+            iconFrom != "app" && iconFrom != "row-app"
+        val icon = if (navigation) Main.sAppCtx?.resources?.let {
+            NavigationIconRenderer.prepare(original, it, darkCapsule(), iconFrom)
+        } ?: original else original
         val round = roundIcon(icon)
         return Note(
             key = sbn.key,
@@ -1496,7 +1503,7 @@ internal object LockIslands {
             if (from.lastOrNull() != p.toString()) from += p.toString()
             return Picture(still, anim, live, from.joinToString("+"))
         }
-        runCatching { rowIcon(entry) }.getOrNull()?.let { return Picture(it, anim, live, (from + "row").joinToString("+")) }
+        runCatching { rowIcon(entry, sbn.packageName == "com.autonavi.minimap") }.getOrNull()?.let { return Picture(it, anim, live, (from + "row").joinToString("+")) }
         return if (anim != null || live != null) Picture(null, anim, live, from.joinToString("+")) else null
     }
 
@@ -1642,10 +1649,15 @@ internal object LockIslands {
     }
 
     /** The picture the row's focus template shows now, drawn once into a bitmap of its own. */
-    private fun rowIcon(entry: Any): Drawable? {
+    private fun rowIcon(entry: Any, diagnostic: Boolean = false): Drawable? {
         val row = Xp.getObjectField(entry, "row") as? View ?: return null
         val view = focusIconView(row) ?: anyRowPicture(row) ?: return null
         val d = view.drawable ?: return null
+        if (diagnostic) {
+            NavigationIconRenderer.report("row=${runCatching { view.resources.getResourceEntryName(view.id) }.getOrDefault("unknown")} " +
+                "tint=${view.imageTintList} filter=${view.colorFilter?.javaClass?.simpleName} " +
+                "drawableFilter=${d.colorFilter?.javaClass?.simpleName}")
+        }
         val side = maxOf(view.width, d.intrinsicWidth, 1).coerceAtMost(512)
         val bitmap = android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888)
         val old = android.graphics.Rect(d.bounds)

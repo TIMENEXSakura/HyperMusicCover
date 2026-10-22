@@ -96,7 +96,7 @@ public final class ModuleState {
                     + "\nlyricsourcecustom=" + (LyricSourcePolicy.current.custom ? 1 : 0)
                     + "\nlyricnetwork=" + (LyricSourcePolicy.current.allowNetwork ? 1 : 0)
                     + "\nlyricsourceorder=" + LyricSourcePolicy.current.sourceOrder
-                    + "\nlyricformatorder=" + LyricSourcePolicy.current.formatOrder
+                    + "\nlyriclocalformat=" + LyricSourcePolicy.current.localFormat
                     // Not a setting - whether the last lookup got its lyric from the session.
                     // Kept across restarts so the settings page does not accuse a working
                     // provider module of doing nothing merely because nothing has played yet;
@@ -160,6 +160,17 @@ public final class ModuleState {
         sLoading = true;
         try {
             String body = new String(f.readFully()).trim();
+            String localFormat = null, legacyFormats = null;
+            for (String line : body.split("\n")) {
+                int eq = line.indexOf('=');
+                if (eq <= 0) continue;
+                String key = line.substring(0, eq).trim();
+                if ("lyriclocalformat".equals(key)) localFormat = line.substring(eq + 1).trim();
+                if ("lyricformatorder".equals(key)) legacyFormats = line.substring(eq + 1).trim();
+            }
+            LyricSourcePolicy.Config policy = LyricSourcePolicy.current;
+            LyricSourcePolicy.current = new LyricSourcePolicy.Config(policy.custom, policy.allowNetwork,
+                    policy.sourceOrder, com.os4.musiccover.lyrics.LocalLyricFormat.migrate(localFormat, legacyFormats));
             // The first version of this file was a bare "1"/"0"; keep reading those so an
             // upgrade does not silently drop a cover that is still on the phone.
             if (body.length() <= 1) {
@@ -220,16 +231,13 @@ public final class ModuleState {
                         else if ("lyricappearance".equals(k)) LockLyrics.setAppearance(v);
                         else if ("lyricsourcecustom".equals(k)) {
                             LyricSourcePolicy.Config old = LyricSourcePolicy.current;
-                            LyricSourcePolicy.current = new LyricSourcePolicy.Config("1".equals(v), old.allowNetwork, old.sourceOrder, old.formatOrder);
+                            LyricSourcePolicy.current = new LyricSourcePolicy.Config("1".equals(v), old.allowNetwork, old.sourceOrder, old.localFormat);
                         } else if ("lyricnetwork".equals(k)) {
                             LyricSourcePolicy.Config old = LyricSourcePolicy.current;
-                            LyricSourcePolicy.current = new LyricSourcePolicy.Config(old.custom, "1".equals(v), old.sourceOrder, old.formatOrder);
+                            LyricSourcePolicy.current = new LyricSourcePolicy.Config(old.custom, "1".equals(v), old.sourceOrder, old.localFormat);
                         } else if ("lyricsourceorder".equals(k)) {
                             LyricSourcePolicy.Config old = LyricSourcePolicy.current;
-                            LyricSourcePolicy.current = new LyricSourcePolicy.Config(old.custom, old.allowNetwork, v, old.formatOrder);
-                        } else if ("lyricformatorder".equals(k)) {
-                            LyricSourcePolicy.Config old = LyricSourcePolicy.current;
-                            LyricSourcePolicy.current = new LyricSourcePolicy.Config(old.custom, old.allowNetwork, old.sourceOrder, v);
+                            LyricSourcePolicy.current = new LyricSourcePolicy.Config(old.custom, old.allowNetwork, v, old.localFormat);
                         }
                         else if ("sawlyric".equals(k)) {
                             LockLyrics.sSawSessionLyric = "1".equals(v);
@@ -289,5 +297,7 @@ public final class ModuleState {
         }
         // Always follow the card, whatever the file said.
         Main.setAuto(true);
+        // Persist the new format key once; subsequent starts no longer consume legacy order.
+        saveState();
     }
 }

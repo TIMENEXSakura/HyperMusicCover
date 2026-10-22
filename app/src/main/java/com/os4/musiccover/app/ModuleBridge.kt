@@ -149,7 +149,7 @@ object ModuleBridge {
         val lyricSourceCustom: Boolean = false,
         val lyricNetwork: Boolean = true,
         val lyricSourceOrder: String = com.os4.musiccover.lyrics.LyricSourcePolicy.DEFAULT_SOURCES,
-        val lyricFormatOrder: String = com.os4.musiccover.lyrics.LyricSourcePolicy.DEFAULT_FORMATS,
+        val lyricLocalFormat: String = com.os4.musiccover.lyrics.LocalLyricFormat.TTML,
         /** The lyric band's height as a share of the room between the clock and the card. */
         val lyricFill: Float = 1f,
         /** Where the band sits in the height it leaves: 0 top, 0.5 centre, 1 bottom. */
@@ -182,6 +182,8 @@ object ModuleBridge {
          * installed, there is nothing on the phone that reads a player's lyric.
          */
         val lyriconInstalled: Boolean = false,
+        /** Live subscriber connection and active-provider feedback from SystemUI. */
+        val lyriconState: String = "not started",
         /** 0 system default, 1 never avoid the fingerprint icon, 2 always avoid it. */
         val fpAvoid: Int = 0,
         /** 「高德公交地铁」: the trip's island and lock screen page (AmapTransitScene.sOn). */
@@ -518,7 +520,7 @@ object ModuleBridge {
             putExtra("custom", state.lyricSourceCustom)
             putExtra("network", state.lyricNetwork)
             putExtra("sources", state.lyricSourceOrder)
-            putExtra("formats", state.lyricFormatOrder)
+            putExtra("localformat", state.lyricLocalFormat)
         }
 
     /**
@@ -945,7 +947,7 @@ object ModuleBridge {
             lyricSourceCustom = b.getBoolean("lyricsourcecustom", false),
             lyricNetwork = b.getBoolean("lyricnetwork", true),
             lyricSourceOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeSources(b.getString("lyricsourceorder")),
-            lyricFormatOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeFormats(b.getString("lyricformatorder")),
+            lyricLocalFormat = com.os4.musiccover.lyrics.LocalLyricFormat.normalize(b.getString("lyriclocalformat")),
             lyricFill = b.getFloat("lyricfill", 1f),
             lyricPos = b.getFloat("lyricpos", 0.5f),
             lyricSideDp = b.getFloat("lyricside", 30f),
@@ -954,6 +956,7 @@ object ModuleBridge {
             sessionLyric = b.getBoolean("sessionlyric", false),
             lyricSource = b.getString("lyricsrc") ?: "none",
             lyriconInstalled = b.getBoolean("lyricon", false),
+            lyriconState = b.getString("lyriconstate") ?: "not started",
             fpAvoid = b.getInt("fpavoid", 0),
             transit = b.getBoolean("transit", true),
             fpQuick = b.getString("fpquick") ?: "{}",

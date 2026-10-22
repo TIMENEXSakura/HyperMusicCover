@@ -10,38 +10,47 @@ import android.widget.ImageButton
 internal class PressFeedbackButton(context: Context) : ImageButton(context) {
     private var press = 0f
     private var animator: ValueAnimator? = null
-    private var label: String? = null
-    private var labelAmount = 0f
-    private var labelAnimator: ValueAnimator? = null
-    private val labelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    private val feedback = LyricFeedbackState()
+    private var feedbackAnimator: ValueAnimator? = null
+    private var feedbackGeneration = 0
+    private var feedbackInk = android.graphics.Color.WHITE
+    private val feedbackPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = android.graphics.Paint.Align.CENTER
         typeface = android.graphics.Typeface.DEFAULT_BOLD
-    }
-    private val restoreLabel = Runnable {
-        labelAnimator?.cancel()
-        labelAnimator = ValueAnimator.ofFloat(labelAmount, 0f).apply {
-            duration = 180L
-            addUpdateListener { labelAmount = it.animatedValue as Float; invalidate() }
-            start()
-        }
+        strokeCap = android.graphics.Paint.Cap.ROUND
     }
 
-    fun showLabel(text: String, color: Int) {
-        removeCallbacks(restoreLabel)
-        labelAnimator?.cancel()
-        label = text
-        labelPaint.color = color
-        labelAmount = 1f
-        invalidate()
-        postDelayed(restoreLabel, 700L)
+    fun setFeedbackInk(color: Int) { feedbackInk = color; invalidate() }
+
+    fun showLyricStatus(enabled: Boolean, color: Int) {
+        cancelFeedback()
+        feedbackInk = color
+        feedback.begin(enabled)
+        val token = feedbackGeneration
+        feedbackAnimator = ValueAnimator.ofFloat(0f, 1100f).apply {
+            duration = 1100L
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener {
+                if (token == feedbackGeneration) {
+                    feedback.at((it.animatedValue as Float).toLong())
+                    invalidate()
+                }
+            }
+            start()
+        }
+        announceForAccessibility(if (enabled) "歌词已开启" else "歌词已关闭")
+    }
+
+    private fun cancelFeedback() {
+        feedbackGeneration++
+        feedbackAnimator?.removeAllUpdateListeners()
+        feedbackAnimator?.cancel()
+        feedbackAnimator = null
     }
 
     fun clearLabel() {
-        removeCallbacks(restoreLabel)
-        labelAnimator?.cancel()
-        labelAnimator = null
-        label = null
-        labelAmount = 0f
+        cancelFeedback()
+        feedback.clear()
         invalidate()
     }
 
@@ -74,15 +83,32 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         val save = canvas.save()
         val scale = (1f - 0.35f * press).coerceIn(0.65f, 1f)
         canvas.scale(scale, scale, width / 2f, height / 2f)
-        val imageLayer = canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(),
-            ((1f - labelAmount) * 255f).toInt())
-        super.onDraw(canvas)
-        canvas.restoreToCount(imageLayer)
-        if (labelAmount > 0f) {
-            labelPaint.textSize = 18f * resources.displayMetrics.scaledDensity
-            labelPaint.alpha = (labelAmount * 255f).toInt()
-            val baseline = height / 2f - (labelPaint.ascent() + labelPaint.descent()) / 2f
-            canvas.drawText(label.orEmpty(), width / 2f, baseline, labelPaint)
+        val frame = feedback.frame
+        if (frame.playback > 0f) {
+            val imageLayer = canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(),
+                (frame.playback * 255f).toInt())
+            // The underlying drawable always comes from the latest playback state.
+            super.onDraw(canvas)
+            canvas.restoreToCount(imageLayer)
+        }
+        feedbackPaint.style = android.graphics.Paint.Style.FILL
+        feedbackPaint.color = feedbackInk
+        if (frame.word > 0f) {
+            feedbackPaint.textSize = 18f * resources.displayMetrics.scaledDensity
+            feedbackPaint.alpha = (frame.word * 255f).toInt()
+            val baseline = height / 2f - (feedbackPaint.ascent() + feedbackPaint.descent()) / 2f
+            canvas.drawText("词", width / 2f, baseline, feedbackPaint)
+        }
+        if (frame.mark > 0f) {
+            val c = frame.cross
+            feedbackPaint.alpha = (frame.mark * (255f - 80f * c)).toInt()
+            feedbackPaint.style = android.graphics.Paint.Style.STROKE
+            feedbackPaint.strokeWidth = 2.2f * resources.displayMetrics.density
+            val d = resources.displayMetrics.density
+            fun x(a: Float, b: Float) = width / 2f + (a + (b - a) * c) * d
+            fun y(a: Float, b: Float) = height / 2f + (a + (b - a) * c) * d
+            canvas.drawLine(x(-6f, -5f), y(0f, -5f), x(-1f, 5f), y(5f, 5f), feedbackPaint)
+            canvas.drawLine(x(-1f, -5f), y(5f, 5f), x(8f, 5f), y(-6f, -5f), feedbackPaint)
         }
         canvas.restoreToCount(save)
     }

@@ -474,33 +474,14 @@ private fun LyricsGroup(
             }
         }
     }
-    // What this row says, and there are two things it can be saying.
-    //
-    // The one it says nearly always is WHERE the words on the lock screen came from. The module
-    // tries its routes best-first - the session's own lyricInfo, the Lyricon bridge, the song's
-    // own file, then two catalogues over the network - and reports which one answered; the row
-    // names it. That is a better answer than the one this row used to give, which was whether
-    // LyricInfo was installed. A phone with no LyricInfo at all still gets lyrics from its own
-    // files and from the network, and a phone that has it still gets most of them elsewhere: the
-    // old row warned about a problem that in practice was not one, in red, on a working phone.
-    //
-    // The other is the one case worth a warning: neither LyricInfo nor a Lyricon central is on
-    // the phone, so nothing here reads a player's own lyric and every word has to come from a
-    // file or a lookup. Both are checked because they are two different modules doing the same
-    // job - LyricInfo hooks eight players, Lyricon takes whatever publishes to it - and either
-    // one is enough.
-    val missingModule = !providerInstalled && !module.lyriconInstalled
+    // Package presence is installation evidence only. Runtime status comes from SystemUI's
+    // subscriber callbacks; no framework response does not prove the app is uninstalled.
+    val missingModule = !providerInstalled && !module.lyriconInstalled && !module.sessionLyric &&
+        module.lyriconState == "no service"
     val source = lyricSourceLabel(module.lyricSource)
-    val title = when {
-        missingModule -> stringResource(R.string.lyrics_provider_title_missing)
-        source == null -> stringResource(R.string.lyrics_source_none)
-        else -> stringResource(R.string.lyrics_source, source)
-    }
-    val summary = if (missingModule) R.string.lyrics_provider_missing
-                  else R.string.lyrics_provider_ready
-    // Said twice, because once was not enough. The row standing at the top of the group is
-    // always there; this is the interruption, and it is only worth interrupting for the one
-    // state that asks for something to be done.
+    val title = source?.let { stringResource(R.string.lyrics_source, it) }
+        ?: stringResource(R.string.lyrics_source_none)
+    val summary = if (missingModule) R.string.lyrics_provider_missing else R.string.lyrics_provider_ready
     var showNotice by remember { mutableStateOf(false) }
     var countdown by remember { mutableIntStateOf(PROVIDER_NOTICE_SECONDS) }
     LaunchedEffect(missingModule, module.alive) {

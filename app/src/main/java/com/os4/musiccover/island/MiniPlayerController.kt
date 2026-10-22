@@ -755,7 +755,8 @@ internal class MiniPlayerController(
         // while it still showed, took it anyway on the next refresh, mid-shrink. It takes the
         // flight's picture once the flight is landing on it (flightLanding).
         if (key == held && !flightLanding) return
-        view.bindIdentity(key)
+        view.bindIdentity(if (key == MUSIC_ISLAND && music != null)
+            "$key:${music.sessionToken}:${TrackName.songKey(music)}" else key)
         val showing = view.visibility == View.VISIBLE && !(smallGrowing && smallGrow.target == 0f)
         val note = if (key == MUSIC_ISLAND) null
             else notes.firstOrNull { it.key == key } ?: LockIslands.noteFor(key)
@@ -787,6 +788,7 @@ internal class MiniPlayerController(
                 else -> null
             })
         }
+        if (note?.pkg == "com.autonavi.minimap") view.reportNavigationIcon()
     } finally { android.os.Trace.endSection() } }
 
     private fun hideSmallIsland() {
@@ -1496,7 +1498,7 @@ internal class MiniPlayerController(
         schedulePosition()
         pendingExpand?.let { key ->
             pendingExpand = null
-            if (selectedIsland == key) expandNote(key)
+            if (selectedIsland == key) tapIsland(key)
         }
     }
 
@@ -8090,7 +8092,7 @@ internal class MiniPlayerController(
     }
 
     private fun bindMusic(view: MiniPlayerView, current: MediaController, config: JSONObject) {
-        view.bindIdentity(MUSIC_ISLAND)
+        view.bindIdentity("$MUSIC_ISLAND:${current.sessionToken}:${TrackName.songKey(current)}")
         view.setArtworkBare(false)
         view.setToggleFace(null)
         view.setSecondFace(null)
@@ -8165,6 +8167,7 @@ internal class MiniPlayerController(
         )
         showTimer(view, note.timer)
         showFocusAnim(view, note.anim, note.live)
+        if (note.pkg == "com.autonavi.minimap") view.reportNavigationIcon()
     }
 
     /**

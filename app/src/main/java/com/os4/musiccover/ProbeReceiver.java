@@ -177,7 +177,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             LockLyrics.setSourcePolicy(i.getBooleanExtra("custom", current.custom),
                     i.getBooleanExtra("network", current.allowNetwork),
                     i.hasExtra("sources") ? i.getStringExtra("sources") : current.sourceOrder,
-                    i.hasExtra("formats") ? i.getStringExtra("formats") : current.formatOrder);
+                    i.hasExtra("localformat") ? i.getStringExtra("localformat") : current.localFormat);
             ModuleState.saveStateSoon();
         } else if ("lyricmaxlines".equals(op)) {
             if (LockLyrics.setMaxLines(i.getIntExtra("v", LockLyrics.sMaxLines))) {
@@ -421,6 +421,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             // LyricInfo package are absent. See FeaturesPage.
             out.putString("lyricsrc", LockLyrics.sourceName());
             out.putBoolean("lyricon", LyriconSource.installed());
+            out.putString("lyriconstate", LyriconSource.status());
             out.putBoolean("lyrickeep", LockLyrics.sKeepOn);
             out.putBoolean("lyrichdr", LockLyrics.sHdr);
             out.putBoolean("lyrictrans", LockLyrics.sTrans);
@@ -432,7 +433,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             out.putBoolean("lyricsourcecustom", LyricSourcePolicy.current.custom);
             out.putBoolean("lyricnetwork", LyricSourcePolicy.current.allowNetwork);
             out.putString("lyricsourceorder", LyricSourcePolicy.current.sourceOrder);
-            out.putString("lyricformatorder", LyricSourcePolicy.current.formatOrder);
+            out.putString("lyriclocalformat", LyricSourcePolicy.current.localFormat);
             out.putFloat("lyricfill", LockLyrics.sStyle.fill);
             out.putFloat("lyricpos", LockLyrics.sStyle.pos);
             out.putFloat("lyricside", LockLyrics.sStyle.sideDp);

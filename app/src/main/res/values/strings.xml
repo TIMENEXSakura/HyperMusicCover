@@ -20,13 +20,13 @@
     <string name="lyrics_section">锁屏歌词</string>
     <string name="lyrics_network">允许从网络源获取歌词</string>
     <string name="lyrics_network_summary">开启后按歌词来源优先级使用网络歌词源；关闭后仅使用歌曲元数据、歌曲目录文件和词幕。词幕提供者自身的联网不受此开关控制。</string>
-    <string name="lyrics_priority">歌词来源优先级</string>
-    <string name="lyrics_priority_summary">数字越小越优先；移动一项时其余项顺移，不存在并列优先级。最终顺序如下。</string>
+    <string name="lyrics_priority">全局歌词来源优先级</string>
+    <string name="lyrics_priority_summary">拖动右侧手柄调整顺序，越靠上越优先。无可用歌词时依次尝试下一来源。</string>
     <string name="lyrics_priority_metadata">歌曲元数据</string>
     <string name="lyrics_priority_local">歌曲目录文件</string>
     <string name="lyrics_format_settings">格式设置</string>
-    <string name="lyrics_format_priority">同目录歌词格式优先级</string>
-    <string name="lyrics_format_summary">仅尝试与音频同目录、同名的歌词文件。默认 TTML → LRC → YRC → KRC → LYS；使用滑块调整先后顺序，无效文件自动跳过。KRC 仅支持已解密文本；无法定位音频路径时跳过目录来源。</string>
+    <string name="lyrics_format_priority">歌曲目录文件优先级</string>
+    <string name="lyrics_format_summary">只调整同目录歌词文件的格式顺序；首选文件不存在、为空或解析失败时尝试另一格式。</string>
     <string name="lyrics_priority_drag">拖动调整优先级</string>
     <string name="lyrics_priority_up">提高优先级</string>
     <string name="lyrics_priority_down">降低优先级</string>
@@ -179,12 +179,12 @@
     <!-- The lyric source row. Its title names where the words on the lock screen came from, or
          says there is none; only when neither provider module is on the phone does it warn. -->
     <string name="lyrics_provider_title_missing">未安装歌词模块</string>
-    <string name="lyrics_provider_missing">显示歌词可能不准或缺失；如未正确安装 LyricInfo 或Lyricon带来的问题请勿向开发者反馈</string>
+    <string name="lyrics_provider_missing">尚未收到歌词框架的运行反馈。请检查歌词模块是否启用；仍可从歌曲元数据、本地文件及允许的网络来源获取歌词。</string>
     <string name="lyrics_provider_ready">作用域外的应用仍存在匹配失败可能</string>
     <string name="lyrics_source">取词方式：%1$s</string>
     <string name="lyrics_source_none">无歌词来源</string>
     <string name="lyrics_source_session">播放器提供</string>
-    <string name="lyrics_source_lyricon">Lyricon 插件</string>
+    <string name="lyrics_source_lyricon">词幕</string>
     <string name="lyrics_source_local">歌曲文件</string>
     <string name="lyrics_source_amll">AMLL 数据库</string>
     <string name="lyrics_source_ttmlhub">AMLL TTML 库</string>
@@ -363,4 +363,12 @@
     <string name="fpquick_a_screenshot">截屏</string>
     <string name="fpquick_a_recorder">录音</string>
     <string name="lyrics_color_system">莫奈／系统动态取色</string>
+    <string name="lyrics_format_ttml">TTML 优先</string>
+    <string name="lyrics_format_lrc">LRC 优先</string>
+    <string name="lyricon_active">框架已连接，歌词提供方正在运行</string>
+    <string name="lyricon_connected">框架已连接，等待歌词提供方</string>
+    <string name="lyricon_disconnected">曾检测到词幕框架，当前连接已断开</string>
+    <string name="lyricon_unavailable">未收到词幕框架响应；请检查框架是否启用</string>
+    <string name="lyricon_failed">连接失败，请查看诊断日志</string>
+    <string name="lyricon_waiting">等待词幕框架反馈</string>
 </resources>

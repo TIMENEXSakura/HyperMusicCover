@@ -1184,6 +1184,7 @@ object MiniPlayerRuntime {
             val pill = routed?.get()
             val pillOwner = pill?.let { p -> live().firstOrNull { it.pill() === p } }
             routedSmall = pillOwner?.smallIslandAt(ev.rawX, ev.rawY) == true
+            routedControl = !routedSmall && pill?.controlAt(ev.rawX, ev.rawY) == true
             if (routedSmall && pillOwner != null && !routedMorph) {
                 // Taken where it is, the pill's nudge left alone.
                 pill?.springNudgeBack(0f, 0f)
@@ -1241,7 +1242,7 @@ object MiniPlayerRuntime {
             } else {
                 // An exchange running: a tap turns it round or cuts it short, and nothing else.
                 val exchanging = live().firstOrNull { it.pill() === target }?.takeIf { it.exchangeRunning() }
-                if (exchanging != null) {
+                if (exchanging != null && !routedControl) {
                     if (action == MotionEvent.ACTION_UP) exchanging.tapDuringExchange(routedSmall)
                     if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                         // A press the pill heard before the exchange began is let go.
@@ -1369,6 +1370,7 @@ object MiniPlayerRuntime {
 
     /** The gesture began on the small island, not the pill. */
     private var routedSmall = false
+    private var routedControl = false
 
     /** A sideways pull on a row of islands, and the row it pulls on. */
     private var routedIsland = false

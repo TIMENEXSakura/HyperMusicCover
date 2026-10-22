@@ -43,7 +43,7 @@ object LyriconSource {
 
     /** The last connection state, for the probe. Words rather than the enum, which is internal. */
     @Volatile
-    private var sState = "not started"
+    private val availability = LyriconAvailability()
 
     /** How many songs have arrived, so a probe can tell "connected" from "connected and working". */
     @Volatile
@@ -88,20 +88,25 @@ object LyriconSource {
     /** The package this subscriber registers as - see attach. Our applicationId, so it is unique. */
     private const val SUBSCRIBER_NAME = "com.github.zyl6932.HyperMusicCover"
 
-    /**
-     * Whether there is a Lyricon service on this phone at all - what "Lyricon is installed" means
-     * for the settings page's lyric-source row.
-     *
-     * Not a package to look up: what a subscriber talks to is the Lyricon central, which may be
-     * an app of its own or built into another module's, so the only thing that can answer the
-     * question is whether one replied. "no service" is the connect timeout and is the one state
-     * that means no; "failed" is our own subscriber throwing, which says nothing about the phone
-     * and is left as a no for that reason.
-     */
-    @JvmStatic
-    fun installed(): Boolean = when (sState) {
-        "connected", "reconnected", "disconnected" -> true
-        else -> false
+    /** A framework handshake has been observed in this process, even if it later disconnected. */
+    @JvmStatic fun installed(): Boolean = availability.observed()
+    @JvmStatic fun connected(): Boolean = availability.connected()
+    @JvmStatic fun status(): String = availability.status()
+
+    private fun connection(state: String) {
+        availability.connection(state)
+        if (!availability.connected()) {
+            synchronized(sSongLock) {
+                sSong = null
+                sProvider = null
+                sPlayer = null
+                sPlayerSongs = 0
+                sSongLock.notifyAll()
+            }
+            LockLyrics.onProviderUnavailable()
+        }
+        // No song titles, lyric text or notification payloads in connection diagnostics.
+        Xp.log("[MCLyricon] framework=" + status() + " observed=" + installed())
     }
 
     /**
@@ -124,6 +129,7 @@ object LyriconSource {
             sAttached = true
         }
         try {
+            connection("connecting")
             // Under a name of our own. The central keys a subscriber by (package, process) and a
             // second one under a key it already has is handed the FIRST one's connection, which
             // holds a single listener - so ours, registered from SystemUI as
@@ -137,19 +143,19 @@ object LyriconSource {
             })
             subscriber.addConnectionListener(object : ConnectionListener {
                 override fun onConnected(subscriber: LyriconSubscriber) {
-                    sState = "connected"
+                    connection("connected")
                 }
 
                 override fun onReconnected(subscriber: LyriconSubscriber) {
-                    sState = "reconnected"
+                    connection("reconnected")
                 }
 
                 override fun onDisconnected(subscriber: LyriconSubscriber) {
-                    sState = "disconnected"
+                    connection("disconnected")
                 }
 
                 override fun onConnectTimeout(subscriber: LyriconSubscriber) {
-                    sState = "no service"
+                    connection("no service")
                 }
             })
             subscriber.subscribeActivePlayer(Listener)
@@ -157,7 +163,7 @@ object LyriconSource {
             subscriber.register()
             Xp.log("[MCLyricon] subscribed: " + describe())
         } catch (t: Throwable) {
-            sState = "failed"
+            connection("failed")
             sError = t.toString()
             Xp.log("[MCLyricon] could not subscribe: " + t)
         }
@@ -174,6 +180,7 @@ object LyriconSource {
     private object Listener : ActivePlayerListener {
         override fun onSongChanged(song: Song?) {
             try {
+                if (!connected()) return
                 val changed = synchronized(sSongLock) {
                     val changed = song != sSong
                     sSong = song
@@ -196,8 +203,17 @@ object LyriconSource {
                     it.providerPackageName + " -> " + it.playerPackageName
                 }
                 val player = providerInfo?.playerPackageName
-                if (player != sPlayer) sPlayerSongs = 0
-                sPlayer = player
+                availability.provider(providerInfo != null)
+                synchronized(sSongLock) {
+                    if (player != sPlayer || player == null) {
+                        sPlayerSongs = 0
+                        sSong = null
+                    }
+                    sPlayer = player
+                    sSongLock.notifyAll()
+                }
+                if (providerInfo == null) LockLyrics.onProviderUnavailable()
+                Xp.log("[MCLyricon] framework=" + status())
             } catch (t: Throwable) {
                 sError = t.toString()
             }
@@ -238,13 +254,14 @@ object LyriconSource {
      */
     @JvmStatic
     fun linesFor(title: String?, artist: String?, player: String?): List<LyricLine>? {
+        if (!connected()) return null
         var song = sSong
         if (song == null || !isTrack(song, title, artist)) {
             // Only a provider that has shown it publishes; see sPlayerSongs.
             if (player != null && player == sPlayer && sPlayerSongs > 0) {
                 val until = android.os.SystemClock.uptimeMillis() + CATCH_UP_MS
                 synchronized(sSongLock) {
-                    while (true) {
+                    while (connected()) {
                         song = sSong
                         if (song != null && isTrack(song!!, title, artist)) break
                         val left = until - android.os.SystemClock.uptimeMillis()
@@ -262,6 +279,7 @@ object LyriconSource {
                 return null
             }
         }
+        if (!connected()) return null
         val rich = song!!.lyrics
         if (rich.isNullOrEmpty()) return null
         val out = ArrayList<LyricLine>(rich.size)
@@ -317,7 +335,7 @@ object LyriconSource {
     /** Diagnostics: what the bridge is doing, for the probe. Never throws. */
     @JvmStatic
     fun describe(): String {
-        val sb = StringBuilder("state=").append(sState)
+        val sb = StringBuilder("state=").append(status()).append(" observed=").append(installed())
         sb.append(" songs=").append(sSongs).append(" playerSongs=").append(sPlayerSongs)
         sProvider?.let { sb.append(" provider=").append(it) }
         if (sSubscriber == null) {

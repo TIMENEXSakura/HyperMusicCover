@@ -33,90 +33,32 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
     private val element = MaterialElement(context)
 
     private var feedbackIdentity: String? = null
-    private var feedback: String? = null
-    private var feedbackColor = Color.WHITE
-    private var feedbackAmount = 0f
-    private var feedbackAnimator: android.animation.ValueAnimator? = null
-    private val feedbackPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        textAlign = android.graphics.Paint.Align.CENTER
-        typeface = android.graphics.Typeface.DEFAULT_BOLD
-    }
-    private val restoreFeedback = Runnable {
-        feedbackAnimator?.cancel()
-        feedbackAnimator = android.animation.ValueAnimator.ofFloat(feedbackAmount, 0f).apply {
-            duration = 180L
-            addUpdateListener { feedbackAmount = it.animatedValue as Float; invalidate() }
-            start()
-        }
-    }
+    private val statusFeedback = CapsuleTextFeedback { renderCardText() }
 
     fun bindIdentity(key: String) {
         if (feedbackIdentity == key) return
         feedbackIdentity = key
-        clearFeedback()
+        statusFeedback.clear()
+        (icon as? PressFeedbackButton)?.clearLabel()
     }
 
     override fun showLyricStatus(enabled: Boolean) {
-        showFeedback("词", if (enabled) cardTitle.currentTextColor else 0xff888888.toInt())
+        (icon as? PressFeedbackButton)?.showLyricStatus(enabled, cardTitle.currentTextColor)
     }
 
-    override fun showStatus(text: String) = showFeedback(text, cardTitle.currentTextColor)
-
-    private fun showFeedback(text: String, color: Int) {
-        removeCallbacks(restoreFeedback)
-        feedbackAnimator?.cancel()
-        feedback = text
-        feedbackColor = color
-        feedbackAmount = 1f
+    override fun showStatus(text: String) {
+        statusFeedback.show(text)
         announceForAccessibility(text)
-        invalidate()
-        postDelayed(restoreFeedback, 900L)
-    }
-
-    private fun clearFeedback() {
-        removeCallbacks(restoreFeedback)
-        feedbackAnimator?.cancel()
-        feedbackAnimator = null
-        feedback = null
-        feedbackAmount = 0f
-        invalidate()
-    }
-
-    override fun drawChild(canvas: android.graphics.Canvas, child: View, drawingTime: Long): Boolean {
-        if (feedbackAmount <= 0f || child === element) return super.drawChild(canvas, child, drawingTime)
-        val saved = canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(),
-            ((1f - feedbackAmount) * 255f).toInt())
-        val drawn = super.drawChild(canvas, child, drawingTime)
-        canvas.restoreToCount(saved)
-        return drawn
-    }
-
-    override fun dispatchDraw(canvas: android.graphics.Canvas) {
-        super.dispatchDraw(canvas)
-        val text = feedback ?: return
-        if (feedbackAmount <= 0f || shapeW <= 0 || shapeH <= 0) return
-        // The round secondary island has no play button or text column. Keep the complete
-        // message inside its existing shape, on two lines when necessary, without expanding it.
-        val rows = if (text.length > 4) text.chunked((text.length + 1) / 2) else listOf(text)
-        feedbackPaint.color = feedbackColor
-        feedbackPaint.alpha = (255f * feedbackAmount).toInt()
-        feedbackPaint.textSize = 14f * resources.displayMetrics.scaledDensity
-        val available = (shapeW * 0.72f).coerceAtLeast(1f)
-        val widest = rows.maxOf { feedbackPaint.measureText(it) }
-        if (widest > available) feedbackPaint.textSize *= available / widest
-        val lineHeight = feedbackPaint.descent() - feedbackPaint.ascent()
-        val top = height / 2f - rows.size * lineHeight / 2f
-        rows.forEachIndexed { index, row ->
-            canvas.drawText(row, width / 2f + shapeDx,
-                top - feedbackPaint.ascent() + index * lineHeight, feedbackPaint)
-        }
     }
 
     override fun onDetachedFromWindow() {
-        clearFeedback()
+        statusFeedback.clear()
+        (icon as? PressFeedbackButton)?.clearLabel()
         super.onDetachedFromWindow()
     }
 
+    private var normalTitle: CharSequence? = null
+    private var normalText: CharSequence? = null
     private val cardTitle = TextView(context)
     private val cardText = TextView(context)
     private val cardWords = LinearLayout(context).apply {
@@ -127,22 +69,40 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
 
     fun copyCardTextFrom(other: ShortcutDisc?) {
         if (other == null || other.cardWords.visibility != View.VISIBLE) setCardText(null, null)
-        else setCardText(other.cardTitle.text, other.cardText.text)
+        else setCardText(other.normalTitle, other.normalText)
     }
 
     /** The pill's ink (MiniPlayerView.setInk), for the rear card's two lines. */
     fun setInk(color: Int) {
         if (cardTitle.currentTextColor == color) return
+        (icon as? PressFeedbackButton)?.setFeedbackInk(color)
         cardTitle.setTextColor(color)
         cardText.setTextColor(color)
     }
 
     /** The rear stacked island has the same two lines as the front card. */
     fun setCardText(title: CharSequence?, text: CharSequence?) {
+        normalTitle = title
+        normalText = text
+        renderCardText()
+    }
+
+    private fun renderCardText() {
+        val message = statusFeedback.text
+        val title = message ?: normalTitle
+        val text = if (message != null) null else normalText
         cardWords.visibility = if (title == null && text == null) View.GONE else View.VISIBLE
+        cardWords.alpha = statusFeedback.alpha
         if (!TextUtils.equals(cardTitle.text, title)) cardTitle.text = title
         if (!TextUtils.equals(cardText.text, text)) cardText.text = text
-        iconAtStart = cardWords.visibility == View.VISIBLE
+        cardText.visibility = if (text.isNullOrBlank()) View.GONE else View.VISIBLE
+        cardTitle.isSingleLine = message == null
+        cardTitle.maxLines = if (message == null) 1 else 2
+        cardTitle.gravity = if (message == null) Gravity.START else Gravity.CENTER
+        iconAtStart = message == null && cardWords.visibility == View.VISIBLE
+        icon?.visibility = if (message != null || live != null) View.INVISIBLE
+            else if (icon?.drawable == null) View.GONE else View.VISIBLE
+        live?.visibility = if (message != null) View.INVISIBLE else View.VISIBLE
         placeElement()
     }
 
@@ -252,7 +212,8 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
         element.layout(l, t, l + shapeW, t + shapeH)
         if (cardWords.visibility == View.VISIBLE) {
             val inset = (min(shapeW, shapeH) * (1f - ICON_SHARE) / 2f).toInt()
-            val textLeft = l + min(shapeW, shapeH) - inset + (4 * resources.displayMetrics.density).toInt()
+            val textLeft = if (statusFeedback.text != null) l + inset
+                else l + min(shapeW, shapeH) - inset + (4 * resources.displayMetrics.density).toInt()
             val textWidth = (l + shapeW - inset - textLeft).coerceAtLeast(0)
             cardWords.measure(MeasureSpec.makeMeasureSpec(textWidth, MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(shapeH.coerceAtLeast(0), MeasureSpec.EXACTLY))
@@ -287,8 +248,9 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
             view.alpha = icon?.alpha ?: 1f
             view.clipToOutline = false
             view.transitionAlpha = if (iconHidden) 0f else 1f
+            view.visibility = if (statusFeedback.text != null) View.INVISIBLE else View.VISIBLE
         }
-        icon?.let { it.visibility = if (view != null) View.INVISIBLE else if (it.drawable == null) View.GONE else View.VISIBLE }
+        icon?.let { it.visibility = if (view != null || statusFeedback.text != null) View.INVISIBLE else if (it.drawable == null) View.GONE else View.VISIBLE }
         // Its glow past its box, as in the pill (MiniPlayerView.showArtworkView).
         clipChildren = view == null
         placeElement()
@@ -312,7 +274,11 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
 
     /** What a small island shows on its glass: the island's picture, or nothing. */
     fun setIcon(drawable: Drawable?) {
-        val view = icon ?: ImageView(context).apply {
+        val view = icon ?: PressFeedbackButton(context).apply {
+            background = null
+            setPadding(0, 0, 0, 0)
+            isClickable = false
+            isFocusable = false
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 setForceDarkAllowed(false)
             }
@@ -322,10 +288,19 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
             icon = this
             addView(this, LayoutParams(0, 0))
         }
-        if (view.drawable !== drawable) view.setImageDrawable(drawable)
-        view.visibility = if (live != null) View.INVISIBLE else if (drawable == null) View.GONE else View.VISIBLE
+        if (view.drawable !== drawable) {
+            view.imageTintList = null
+            view.clearColorFilter()
+            view.setImageDrawable(drawable)
+        }
+        view.visibility = if (live != null || statusFeedback.text != null) View.INVISIBLE else if (drawable == null) View.GONE else View.VISIBLE
         view.transitionAlpha = if (iconHidden) 0f else 1f
         placeElement()
+    }
+
+    fun reportNavigationIcon() {
+        icon?.let { NavigationIconRenderer.finalView(it, "small") }
+        live?.let { NavigationIconRenderer.report("final=small live=${it.javaClass.simpleName}") }
     }
 
     /**
