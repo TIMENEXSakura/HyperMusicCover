@@ -108,15 +108,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // The upstream tests outside this package still refer to classes before their package
-    // moves. The lyric workflow compiles and runs the migrated lyric regression suite.
-    if (providers.gradleProperty("mcLyricTestsOnly").orNull == "true") {
-        sourceSets.getByName("test") {
-            java.setSrcDirs(listOf("src/test/java/com/os4/musiccover/lyrics"))
-            kotlin.setSrcDirs(listOf("src/test/java/com/os4/musiccover/lyrics"))
-        }
-    }
-
     buildFeatures {
         compose = true
         // The module and the app both log a full account of the preview pipeline in debug

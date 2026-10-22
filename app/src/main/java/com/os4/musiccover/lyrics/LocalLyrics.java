@@ -392,7 +392,7 @@ public final class LocalLyrics {
     // ---------------------------------------------------------------- reading the lyric
 
     /** How much of a lyric file or tag is worth reading. Larger than any real one by far. */
-    private static final int MAX_LYRIC_BYTES = 512 * 1024;
+    private static final int MAX_LYRIC_BYTES = LocalLyricFiles.MAX_BYTES;
 
     /**
      * The .lrc sitting beside the audio, if there is one.
@@ -407,24 +407,13 @@ public final class LocalLyrics {
     }
 
     static Found sidecar(String audio, String[] formats) {
-        File track = new File(audio);
-        File directory = track.getParentFile();
-        if (directory == null) return null;
-        String stem = baseName(audio);
-        File[] candidates = directory.listFiles();
-        if (candidates == null) return null;
-        java.util.Arrays.sort(candidates, java.util.Comparator.comparing(File::getName));
-        for (String format : formats) {
-            for (File file : candidates) {
-                if (!file.getName().equalsIgnoreCase(stem + "." + format)
-                        || !file.isFile() || file.length() == 0L || file.length() > MAX_LYRIC_BYTES) continue;
-                String body = decode(readAll(file));
-                if (body != null && !LyricSource.placeholder(body) && !LyricParse.parse(body).isEmpty()) {
-                    return new Found(body, "a ." + format + " beside it", file.getPath());
-                }
-            }
-        }
-        return null;
+        return LocalLyricFiles.first(audio, formats, file -> {
+            String body = decode(readAll(file));
+            if (!usable(body)) return null;
+            String name = file.getName();
+            String format = name.substring(name.lastIndexOf('.') + 1).toLowerCase(java.util.Locale.ROOT);
+            return new Found(body, "a ." + format + " beside it", file.getPath());
+        });
     }
 
     /** The lyric inside the audio file, for the formats that carry one where we can find it. */

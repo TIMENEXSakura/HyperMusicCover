@@ -1,4 +1,6 @@
-package com.os4.musiccover
+package com.os4.musiccover.island
+
+import com.os4.musiccover.*
 
 import org.json.JSONObject
 import org.junit.Assert.assertFalse

@@ -204,7 +204,7 @@ internal object LockIslands {
     fun toggleScene(key: String): Boolean? {
         val target = sceneOf(key) ?: return null
         if (sceneKey == key) {
-            ImmersiveHost.close(target)
+            ImmersiveHost.close(scene ?: target)
             sceneKey = null
             scene = null
             sceneMissingSince = 0L
@@ -222,7 +222,7 @@ internal object LockIslands {
 
     /** What a clear of [released] leaves: the open page's island, if there is one. */
     private fun clearReleased() {
-        val keep = sceneKey
+        val keep = sceneKey?.takeIf { it in released }
         released.clear()
         if (keep != null) released.add(keep)
     }

@@ -2744,7 +2744,6 @@ public class Main extends XposedModule {
         return !sMiniBouncerUp;
     }
 
-    /** Enter through the same route as the OEM artwork, with MiniPlayerRuntime owning the bridge. */
     /** Capsule body only: change the lyric page, never open the detailed media panel. */
     public static Boolean miniPlayerToggleLyrics() {
         if (!miniPlayerCanShow() || !sCoverFeatureOn || !LockLyrics.sEnabled) return null;

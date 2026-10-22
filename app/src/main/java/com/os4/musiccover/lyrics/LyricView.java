@@ -791,7 +791,8 @@ final class LyricView extends View {
 
         float availableBand = bandBottom - bandTop;
         float edgeFade = Math.min(EDGE_FADE_DP * density, availableBand / 3f);
-        float fitTarget = singing.count > 1
+        // A single lead can also be tall when it carries several backgrounds or translations.
+        float fitTarget = singing.count > 0
                 ? LyricFocus.fit(singing.height(base, height), availableBand - 2f * edgeFade) : 1f;
         changed |= transition.update(singing, base, dotsFor, ABOVE_ALPHA, fitTarget, dt,
                 still || gone || show < 0.02f);

@@ -1,8 +1,6 @@
 name: Build lyrics fix APK
 
 on:
-  push:
-    branches: [fix/lyrics-and-capsule-controls]
   workflow_dispatch:
 
 permissions:
@@ -26,10 +24,10 @@ jobs:
         with:
           packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test lyrics
+      - name: Run unit tests
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :app:testDebugUnitTest -PmcLyricTestsOnly=true
+          ./gradlew --no-daemon :app:testDebugUnitTest
       - name: Build APK
         run: |
           ./gradlew --no-daemon :app:assembleRelease \

@@ -83,6 +83,9 @@ object SettingsBackup {
             json.put("lyricSizeSp", module.lyricSizeSp.toDouble())
             json.put("lyricBgSizeSp", module.lyricBgSizeSp.toDouble())
             json.put("lyricsMaxLines", module.lyricsMaxLines)
+            json.put("lyricSourcePolicy", JSONObject()
+                .put("custom", module.lyricSourceCustom).put("network", module.lyricNetwork)
+                .put("sources", module.lyricSourceOrder).put("formats", module.lyricFormatOrder))
         }
         return json.toString(2)
     }
@@ -92,6 +95,14 @@ object SettingsBackup {
         val settings = AppSettings.importFromJson(context, json)
         try {
             val obj = JSONObject(json)
+            obj.optJSONObject("lyricSourcePolicy")?.let { policy ->
+                ModuleBridge.setLyricSourcePolicy(context, ModuleBridge.State(
+                    lyricSourceCustom = policy.optBoolean("custom", false),
+                    lyricNetwork = policy.optBoolean("network", true),
+                    lyricSourceOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeSources(policy.optString("sources")),
+                    lyricFormatOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeFormats(policy.optString("formats")),
+                ))
+            }
             if (obj.has("lyricAppearance")) {
                 ModuleBridge.setLyricAppearance(context, obj.getJSONObject("lyricAppearance").toString())
             }

@@ -65,10 +65,6 @@ public final class LyricLine {
         this.translation = translation == null || translation.trim().isEmpty()
                 ? null : translation.trim();
         this.roma = roma == null || roma.trim().isEmpty() ? null : roma.trim();
-        this.start = Math.max(0, start);
-        // A database file is edited by hand; a line that ends before it starts is clamped here
-        // rather than trusted into a negative duration later.
-        this.end = Math.max(end, this.start);
         this.opposite = opposite;
         boolean words = sylStart != null && sylStart.length > 0
                 && sylEnd != null && sylEnd.length == sylStart.length
@@ -88,6 +84,9 @@ public final class LyricLine {
                 previousChar = charEnd[k];
             }
         }
+        // Valid word timing may begin before the enclosing line's declared boundary.
+        this.start = words ? Math.min(Math.max(0, start), sylStart[0]) : Math.max(0, start);
+        this.end = Math.max(end, this.start);
         this.sylStart = words ? sylStart.clone() : null;
         this.sylEnd = words ? sylEnd.clone() : null;
         this.charEnd = words ? charEnd.clone() : null;

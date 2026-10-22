@@ -87,6 +87,11 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         canvas.restoreToCount(save)
     }
 
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) isPressed = false
+    }
+
     override fun onDetachedFromWindow() {
         animator?.cancel()
         animator = null

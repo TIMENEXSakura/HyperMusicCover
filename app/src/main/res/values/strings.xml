@@ -18,7 +18,7 @@
     <string name="cover_style_keep">保留壁纸</string>
     <string name="cover_clock_section">封面与时钟</string>
     <string name="lyrics_section">锁屏歌词</string>
-    <string name="lyrics_network">允许使用网络歌词源</string>
+    <string name="lyrics_network">允许从网络源获取歌词</string>
     <string name="lyrics_network_summary">开启后按歌词来源优先级使用网络歌词源；关闭后仅使用歌曲元数据、歌曲目录文件和词幕。词幕提供者自身的联网不受此开关控制。</string>
     <string name="lyrics_priority">歌词来源优先级</string>
     <string name="lyrics_priority_summary">数字越小越优先；移动一项时其余项顺移，不存在并列优先级。最终顺序如下。</string>
@@ -26,7 +26,7 @@
     <string name="lyrics_priority_local">歌曲目录文件</string>
     <string name="lyrics_format_settings">格式设置</string>
     <string name="lyrics_format_priority">同目录歌词格式优先级</string>
-    <string name="lyrics_format_summary">仅尝试与音频同目录、同名的歌词文件。默认 TTML → LRC → YRC → KRC → LYS；拖动调整，无效文件自动跳过。KRC 仅支持已解密文本；无法定位音频路径时跳过目录来源。</string>
+    <string name="lyrics_format_summary">仅尝试与音频同目录、同名的歌词文件。默认 TTML → LRC → YRC → KRC → LYS；使用滑块调整先后顺序，无效文件自动跳过。KRC 仅支持已解密文本；无法定位音频路径时跳过目录来源。</string>
     <string name="lyrics_priority_drag">拖动调整优先级</string>
     <string name="lyrics_priority_up">提高优先级</string>
     <string name="lyrics_priority_down">降低优先级</string>

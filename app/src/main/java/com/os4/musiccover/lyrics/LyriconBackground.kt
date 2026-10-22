@@ -5,8 +5,7 @@ import io.github.proify.lyricon.lyric.model.RichLyricLine
 internal object LyriconBackground {
     fun attach(owner: LyricLine, line: RichLyricLine, nextStart: Int) {
         val background = convert(line, nextStart) ?: return
-        owner.bg = background
-        owner.end = maxOf(owner.end, background.end)
+        owner.addBackground(background)
     }
 
     fun convert(line: RichLyricLine, nextStart: Int): LyricLine? {

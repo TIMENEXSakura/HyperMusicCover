@@ -4577,38 +4577,47 @@ internal class MiniPlayerController(
         tapIsland(key, if (small) smallIsland else player)
     }
 
-    /** What a tap on an island does: the music opens the cover, a notification its row. */
+    /** Resolve special actions before the generic notification expansion path. Swipes are separate. */
     private fun tapIsland(key: String, tapped: MiniPlayerView? = null) {
         val view = tapped ?: if (key == smallKey) smallIsland else player
-        if (key == MUSIC_ISLAND) {
-            val enabled = Main.miniPlayerToggleLyrics() ?: return
-            view?.showLyricStatus(enabled)
-            return
-        }
         val note = LockIslands.noteFor(key)
-        if (note != null && !note.redacted) {
-            val scene = runCatching {
-                com.os4.musiccover.immersive.ImmersiveHost.sceneFor(note.pkg, note.focus, key)
+        val scene = note?.takeUnless { it.redacted }?.let {
+            runCatching {
+                com.os4.musiccover.immersive.ImmersiveHost.sceneFor(it.pkg, it.focus, key)
             }.getOrNull()
-            if (scene != null) {
-                val entered = runCatching { LockIslands.toggleScene(key) }.getOrNull()
-                val status = if (entered == null) "内容尚未就绪" else if (scene.isNavigation()) {
-                    if (entered) "已进入导航界面" else "已退出导航界面"
-                } else if (entered) "已打开" else "已收起"
-                view?.showStatus(status)
-                return
+        }
+        when (CapsuleTapPolicy.resolve(key == MUSIC_ISLAND, note?.redacted == true,
+            scene?.isNavigation() == true,
+            note?.let { it.timer != null || it.category == android.app.Notification.CATEGORY_ALARM } == true,
+            scene != null)) {
+            CapsuleTapPolicy.Action.MUSIC -> {
+                Main.miniPlayerToggleLyrics()?.let { view?.showLyricStatus(it) }
             }
-            if (note.timer != null || note.category == android.app.Notification.CATEGORY_ALARM) {
-                val row = rowFor(key)
-                val clicker = row?.let { runCatching { Xp.getObjectField(it, "mOnClickListener") as? View.OnClickListener }.getOrNull() }
-                if (row != null && clicker != null) {
-                    runCatching { clicker.onClick(row) }.onFailure { Xp.w("MCIsland: direct entry failed: $it") }
+            CapsuleTapPolicy.Action.NAVIGATION, CapsuleTapPolicy.Action.SCENE -> {
+                val entered = runCatching { LockIslands.toggleScene(key) }.getOrNull()
+                view?.showStatus(if (entered == null) "内容尚未就绪" else if (scene?.isNavigation() == true) {
+                    if (entered) "已进入导航界面" else "已退出导航界面"
+                } else if (entered) "已打开" else "已收起")
+            }
+            CapsuleTapPolicy.Action.CLOCK -> {
+                // Reuse the countdown's existing operation page when one is available.
+                val opened = scene?.let { runCatching { LockIslands.toggleScene(key) }.getOrNull() }
+                if (opened != null) {
+                    view?.showStatus(if (opened) "已打开" else "已收起")
                     return
                 }
-                if (note.intent != null && runCatching { note.intent.send() }.isSuccess) return
+                // The OEM clicker retains keyguard/authentication handling for the content intent.
+                val row = rowFor(key)
+                val clicker = row?.let { runCatching {
+                    Xp.getObjectField(it, "mOnClickListener") as? View.OnClickListener
+                }.getOrNull() }
+                if (row != null && clicker != null && runCatching { clicker.onClick(row) }.isSuccess) return
+                if (note?.intent != null && runCatching { note.intent.send() }.isSuccess) return
+                // A clock with no usable entry still owns this tap: do not open a notification list.
+                view?.showStatus("功能入口暂不可用")
             }
+            CapsuleTapPolicy.Action.NOTIFICATION -> expandNote(key)
         }
-        expandNote(key)
     }
 
     /**
@@ -7986,13 +7995,7 @@ internal class MiniPlayerController(
         prewarmSpares()
     } finally { android.os.Trace.endSection() } }
 
-    /**
-     * The colour the system gives the words on its own card, for the material it is in now: the
-     * media card's title, or a lock screen notification's when there is no card. The pill and
-     * the discs wear the card's material, so its words are the ones that can be read on them -
-     * white on the glass and on the dark frost, near black on the frost in light mode. Opaque:
-     * the pill's own alphas say how strong each line is.
-     */
+    /** Monochrome control/text color follows the capsule material, not an expanded notification. */
     private fun ink(): Int {
         // Notification titles may belong to a light expanded card while this capsule wears
         // glass. Their black tint must not leak into our monochrome controls. App artwork is
@@ -8022,16 +8025,6 @@ internal class MiniPlayerController(
             android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
         materialInkCached = if (frost && !night) 0xE5000000.toInt() else android.graphics.Color.WHITE
         return materialInkCached
-    }
-
-    private fun rowInk(): Int? {
-        fun find(v: View): TextView? {
-            if (v is TextView && v.isShown &&
-                runCatching { v.resources.getResourceEntryName(v.id) }.getOrNull() == "title") return v
-            if (v is ViewGroup) for (i in 0 until v.childCount) find(v.getChildAt(i))?.let { return it }
-            return null
-        }
-        return notificationStack()?.let(::find)?.currentTextColor
     }
 
     /** What applyInk last tinted the buttons with; null while they are the OEM's own. */
@@ -8130,9 +8123,8 @@ internal class MiniPlayerController(
     }
 
     /**
-     * A notification in the pill: its picture, title and newest line, no play button. A tap
-     * puts it back in the stack as the OEM's own row for now; the morph into that row is to
-     * come.
+     * A notification in the pill: its own actions stay on the buttons; body taps go through
+     * the shared priority policy before falling back to the OEM notification row.
      */
     private fun bindNote(view: MiniPlayerView, note: LockIslands.Note, config: JSONObject) {
         view.bindIdentity(note.key)
