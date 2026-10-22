@@ -61,13 +61,27 @@
 
 ## 验证与交付状态
 
-本轮没有触发云构建，也没有提交上游 PR。工作流改为 `workflow_dispatch` 手动触发。
+云构建已于 2026-10-22 通过：[Actions 39810626165](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39810626165)。代码提交为 `595eef47410c7a35b724568e96309df69593691a`。工作流使用 `workflow_dispatch` 手动触发，尚未提交任何上游 PR。
+
+云端全量单元测试 **288 项通过，0 失败、0 错误、0 跳过**；release APK、lint 和 Xposed 入口／作用域检查通过。Lint 报告仍包含 309 条 Warning、5 条 Hint，没有 Error；不将 lint 任务成功表述为零警告。
+
+产物版本 `0.9.45-Plus`，versionCode `945005`。APK 的 SHA-256 为：
+
+```text
+bff246ab3004c13860527dc46e01c2686d6d8079a39f7d410f5aa9a3e87756e2
+```
+
+下载后的压缩包摘要与 GitHub artifact digest 相符，APK 摘要与云端 SHA256SUMS 相符。apksig 验证通过（v2 签名，Android Debug 测试证书）。这份安装包不是上游正式签名发布包。
+
+本地交付目录：`Download/codex/HyperMusicCover-v0.9.45/artifacts/595eef4/`，包括 APK、SHA256SUMS、云端构建日志、JUnit/lint 报告及签名验证结果。
+
+云构建时补齐了 ShortcutDisc 与 MiniPlayerView 的共同反馈接口；小圆胶囊在原区域内完整显示短暂状态提示，不为提示展开通知或修改触摸区域。
 
 本机独立 JVM 回归通过 **99 项测试**，资源 XML 检查及 `git diff --check` 通过。使用独立 JVM 编译生产逻辑并运行测试，使用真实 lyrics-core 0.4.7 和 Lyricon 0.1.70 模型；仅 Xp 日志和 LockLyrics 的两个常量使用占位类，Android jar 仅提供协议模型所需的类型。该结果不等同于完整 Android 工程构建。
 
 新增／扩展的回归覆盖：多段 TTML 和声、独立桥接词表、纯和声行、越界／倒序、时间首尾与数组隔离、普通 LRC、同目录文件优先级与解析回退、联网禁用的实际连接拦截、来源顺序／迟到结果、外观保存、胶囊点按优先级。
 
-已修正上游迁包后遗留的测试包名，取消只编译歌词测试的限制。下一阶段云端执行：
+已修正上游迁包后遗留的测试包名，取消只编译歌词测试的限制。云端执行的检查命令：
 
 ```sh
 ./gradlew --no-daemon :app:testDebugUnitTest
@@ -75,7 +89,7 @@
 ./gradlew --no-daemon :app:assembleRelease -PmcVersionName=0.9.45-Plus -PmcVersionCode=945005
 ```
 
-工作流还检查 APK 中的 Xposed 入口／作用域并上传 APK、SHA-256、测试和 lint 报告。完整编译、全量测试及 lint 结果待云构建，当前未产出新 APK。
+工作流还检查 APK 中的 Xposed 入口／作用域并上传 APK、SHA-256、测试和 lint 报告。完整编译与云端检查已通过，新 APK 已下载，真机锁屏／SystemUI 验证仍待用户完成。
 
 ### 真机待测
 
@@ -87,4 +101,4 @@
 - 上滑、按钮点击、拖出取消、系统手势中断、主／小胶囊切换；确认没有意外通知展开或重复点击。
 - 高德等导航图标和多色应用图标、闹钟／倒计时入口、受隐私保护通知的系统验证流程。
 
-用户下达云构建指令后再推送并构建；用户安装验证通过后，再使用中文 PR 描述向上游提交。
+等待用户安装验证通过后，按 [PR 拆分清单](pr-split-plan.zh-CN.md) 将各功能分别整理为中文 PR，不能将当前整合分支整体提交给上游。

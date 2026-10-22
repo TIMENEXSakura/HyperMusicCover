@@ -19,7 +19,7 @@ TTML 同一主唱行携带多段和声时，当前转换只保留第一段；部
 ## 验证
 
 - 本地独立 JVM 回归通过 99 项，资源 XML 与差异检查通过；具体范围与限制见 [修改说明](lyrics-v0.9.45-migration.md)。
-- 完整 Android 单元测试、lint 和 release APK：等待云构建，提交 PR 前补充结果与 Actions 链接。
+- 云构建已通过：[Actions 39810626165](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39810626165)，代码 `595eef4`。全量单元测试 288 项通过、无失败／跳过；release APK、lint 与 Xposed 入口检查通过。Lint 仍有 309 条警告和 5 条提示，详见修改说明。
 - 真机锁屏／SystemUI：等待用户安装验证，提交 PR 前补充设备环境与实测结果。
 
 本文件仅为集成验证摘要。用户要求每个功能独立提交中文 PR，具体拆分见 [PR 拆分清单](pr-split-plan.zh-CN.md)。提交前补齐云构建和用户真机验证结果。
