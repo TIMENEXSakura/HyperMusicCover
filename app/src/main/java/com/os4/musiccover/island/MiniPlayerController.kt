@@ -4585,6 +4585,8 @@ internal class MiniPlayerController(
                                           val navigation: Boolean)
     private var pendingSceneFeedback: PendingSceneFeedback? = null
 
+    fun cancelSceneFeedback() { pendingSceneFeedback = null }
+
     /** Use the existing frame observer: no delayed success callback can overwrite a later tap. */
     private fun updateSceneFeedback() {
         val pending = pendingSceneFeedback ?: return

@@ -564,6 +564,7 @@ public final class ImmersiveHost {
 
     /** The phone was unlocked (ACTION_USER_PRESENT). Main thread. */
     public static void onUnlocked() {
+        MiniPlayerRuntime.cancelSceneFeedback();
         armRelease("user present");
     }
 
@@ -596,6 +597,7 @@ public final class ImmersiveHost {
      * is asked to draw, so the doze's first frame prepares it.
      */
     public static void onScreenOff() {
+        MiniPlayerRuntime.cancelSceneFeedback();
         cancelRelease("screen off");
         if (sSlot != null) sSlot.invalidate();
     }

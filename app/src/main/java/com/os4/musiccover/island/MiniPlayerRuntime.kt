@@ -1123,6 +1123,8 @@ object MiniPlayerRuntime {
      */
     @Volatile private var restoreScene = false
 
+    @JvmStatic fun cancelSceneFeedback() { live().forEach { it.cancelSceneFeedback() } }
+
     @JvmStatic fun rememberScene() { restoreScene = true }
 
     @JvmStatic fun forgetRestoreScene() { restoreScene = false }
