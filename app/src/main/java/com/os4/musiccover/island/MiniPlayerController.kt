@@ -11,6 +11,8 @@ import com.os4.musiccover.ClockRoomPolicy
 import com.os4.musiccover.CoverMorphMotion
 import com.os4.musiccover.Main
 import com.os4.musiccover.lyrics.TrackName
+import com.os4.musiccover.lyrics.LockLyrics
+import com.os4.musiccover.lyrics.LyricBandGeometry
 import com.os4.musiccover.Xp
 import com.os4.musiccover.immersive.ImmersiveHost
 import android.content.Context
@@ -6008,6 +6010,7 @@ internal class MiniPlayerController(
         if (key == MUSIC_ISLAND) MiniCardMorph.Landing.mediaCard(native) else rowLanding(native)
 
     private fun startNoteMorph(key: String, row: View, toRow: Boolean): Boolean {
+        if (key == MUSIC_ISLAND) captureCapsuleLyricGeometry()
         val useFlight = flight != null
         val view = (if (useFlight) flight else player) ?: return false
         val landing = landingFor(key, row)
@@ -7248,6 +7251,7 @@ internal class MiniPlayerController(
 
     fun destroy() {
         destroyed = true
+        capsuleLyricGeometry = false
         pendingSceneFeedback = null
         prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
         runCatching { host.viewTreeObserver.removeOnPreDrawListener(preDraw) }
@@ -7552,6 +7556,78 @@ internal class MiniPlayerController(
 
     fun pill(): MiniPlayerView? = player
 
+    private val lyricObstacleMatrix = Matrix()
+    private val lyricObstacleRect = android.graphics.RectF()
+    private var capsuleLyricGeometry = false
+
+    /** A new music gesture starts with its current origin, never a previous page's residue. */
+    private fun captureCapsuleLyricGeometry() {
+        capsuleLyricGeometry = LockLyrics.capsulePageRequested() || Main.capsuleKeepsMini()
+    }
+
+    /**
+     * The surface that really presses against the lyrics, not the invisible native card's
+     * reserved layout slot. The morph's drawn box remains authoritative after a swipe commits
+     * and clears the capsule request, through its final spring frames and in either direction.
+     */
+    fun lyricObstacleTopOnScreen(): Float {
+        if (destroyed || !onScreen(host)) {
+            capsuleLyricGeometry = false
+            return Float.NaN
+        }
+        val musicMoving = ((noteMorphKey == null || noteMorphKey == MUSIC_ISLAND) &&
+            morph?.containerBox() != null) ||
+            exchange?.movers?.get(MUSIC_ISLAND)?.morph?.containerBox() != null ||
+            spread?.items?.any { it.key == MUSIC_ISLAND && it.morph?.containerBox() != null } == true
+        capsuleLyricGeometry = LyricBandGeometry.usesCapsuleSpace(LockLyrics.capsulePageRequested(),
+            Main.capsuleKeepsMini(), musicMoving, capsuleLyricGeometry)
+        if (!capsuleLyricGeometry) return Float.NaN
+
+        val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
+        val bottomInset = host.rootWindowInsets?.getInsets(
+            android.view.WindowInsets.Type.navigationBars() or
+                android.view.WindowInsets.Type.displayCutout())?.bottom?.toFloat() ?: 0f
+        val bottom = LyricBandGeometry.usableBottom(Main.screenHeight().toFloat(), bottomInset)
+        var nearest = Float.NaN
+        fun box(b: CoverMorphMotion.Box?) {
+            if (b == null) return
+            nearest = LyricBandGeometry.include(nearest, true, b.x, b.y, b.w, b.h,
+                screenWidth, bottom)
+        }
+        fun view(v: View?) {
+            if (v == null || !onScreen(v) || v.width <= 0 || v.height <= 0) return
+            lyricObstacleMatrix.reset()
+            v.transformMatrixToGlobal(lyricObstacleMatrix)
+            if (v is ShortcutDisc) {
+                // The disc's touch/animation frame has spare room around the glass. Only its
+                // actual clipped shape takes space away from the lyrics, including a squeeze.
+                if (!v.drawnShapeBounds(lyricObstacleRect)) return
+            } else lyricObstacleRect.set(0f, 0f, v.width.toFloat(), v.height.toFloat())
+            // transformMatrixToGlobal already includes ViewRootImpl's window-on-screen offset.
+            lyricObstacleMatrix.mapRect(lyricObstacleRect)
+            nearest = LyricBandGeometry.include(nearest, true, lyricObstacleRect.left,
+                lyricObstacleRect.top, lyricObstacleRect.width(), lyricObstacleRect.height(),
+                screenWidth, bottom)
+        }
+        view(player)
+        view(smallIsland)
+        view(group?.smallView)
+        view(flight)
+        // Use the geometry being rendered even while the OEM view is suppressed for the morph.
+        box(morph?.containerBox())
+        box(group?.follower?.containerBox())
+        exchange?.movers?.values?.forEach { box(it.morph?.containerBox()) }
+        spread?.items?.forEach { item ->
+            val moving = item.morph?.containerBox()
+            if (moving != null) box(moving) else view(item.native)
+        }
+        // Another capsule may already have its notification card open. Its visible surface
+        // still limits the band, but never read the music header's hidden reserved slot.
+        if (morph == null && exchange?.movers?.isNotEmpty() != true && spread == null)
+            expandedKey()?.let { view(nativeFor(it)) }
+        return nearest
+    }
+
     /** The music's island - the pill or the small island, whichever holds it - drawn centre. */
     fun musicIslandCentreOnScreen(): FloatArray? {
         val v: View = when (MUSIC_ISLAND) {
@@ -7713,6 +7789,7 @@ internal class MiniPlayerController(
     }
 
     fun beginDragMorph(fromNative: Boolean): Boolean { android.os.Trace.beginSection("MC beginDragMorph"); try {
+        captureCapsuleLyricGeometry()
         if (player == null) return MiniPlayerRuntime.refused("drag", "no pill")
         val native = transitionHeader() ?: return MiniPlayerRuntime.refused("drag", "no card")
         // Starts at the end it was pulled from; release() aims it once the lift decides.
@@ -7903,6 +7980,10 @@ internal class MiniPlayerController(
     fun refresh() {
         if (Looper.myLooper() != Looper.getMainLooper()) { scheduleRefresh(); return }
         if (destroyed) return
+        // A hidden lyric view no longer samples geometry. Release its origin here as well so
+        // a later ordinary cover animation cannot inherit that old capsule page's space.
+        if (LockLyrics.sTapHidden || !LockLyrics.sEnabled || !Main.keyguardLocked())
+            capsuleLyricGeometry = false
         runCatching { refreshUnsafe() }.onFailure { Xp.w("MCMini: refresh failed: $it") }
         // The lift switched on or off in the settings comes here, not to position().
         runCatching { MiniPlayerRuntime.checkStackFloor() }

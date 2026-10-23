@@ -67,6 +67,10 @@ public final class LockLyrics {
     public static volatile boolean sTapHidden;
     /** A capsule's page request. The background still belongs to the configured cover scene. */
     private static boolean sCapsulePage;
+    /** A new visibility request re-evaluates temporary navigation contrast once. */
+    private static long sContrastRequestId;
+
+    static long contrastRequestId() { return sContrastRequestId; }
 
     /** Includes a request still loading, so a second tap can cancel it immediately. */
     public static boolean capsulePageRequested() {
@@ -785,19 +789,24 @@ public final class LockLyrics {
     private static final int BAND_RECORDED = 1;
     /** ... off the card fraction LockPreview.kt carries for a phone nothing was measured on. */
     private static final int BAND_DEFAULT = 2;
+    /** ... above the capsule or the moving card actually visible this frame. */
+    private static final int BAND_CAPSULE = 3;
     /**
      * The card's own share of the screen - the same fraction the app's preview falls back to
      * (LockPreview.kt's SAMPLE_CARD_T), so that a phone which has never had a card measured puts
      * the module's band and the app's preview in the same place.
      */
     private static final float CARD_TOP_FRACTION = 1700f / 2608f;
-    /** Which of the three answered last; -1 until one has. */
+    /** Which geometry route answered last; -1 until one has. */
     private static volatile int sBandSrc = -1;
 
     /**
-     * Where the band's lower edge sits on screen, in pixels: the media card's own top edge.
+     * Where the band's lower edge sits on screen, in pixels. Capsule pages stop at the actual
+     * capsule row, following a pulled-up card's moving surface until it lands. A folded media
+     * card's reserved slot must not shorten that larger band.
      *
-     * All three routes answer that same edge, and the sameness is the point. The band is the room
+     * For a native media card (or unavailable capsule geometry), the three legacy routes below
+     * answer that same card edge, and the sameness is the point. The band is the room
      * between the clock and the card and the block is centred in it, so an answer that moves by a
      * card's height moves the lyrics by half of one. The other two routes used to answer the
      * card's BOTTOM, deliberately: with no card drawn the band took the whole block the card would
@@ -828,6 +837,11 @@ public final class LockLyrics {
      * edge: a phone that has never measured a card does not move when the first one arrives.
      */
     static float bandBottomOnScreen() {
+        float capsule = com.os4.musiccover.island.MiniPlayerRuntime.lyricObstacleTopOnScreen();
+        if (Float.isFinite(capsule)) {
+            setBandSource(BAND_CAPSULE);
+            return capsule;
+        }
         View c = card();
         int y = Integer.MIN_VALUE;
         // A folded/rebuilt card may be attached before its first layout. Its zero-size
@@ -909,6 +923,8 @@ public final class LockLyrics {
                 return "recorded";
             case BAND_DEFAULT:
                 return "default";
+            case BAND_CAPSULE:
+                return "capsule/morph";
             default:
                 return "?";
         }
@@ -921,7 +937,7 @@ public final class LockLyrics {
     private static void setBandSource(int src) {
         if (src == sBandSrc) return;
         sBandSrc = src;
-        Xp.log(TAG + "band anchored to the " + bandSource() + " card position");
+        Xp.log(TAG + "band anchored to the " + bandSource() + " boundary");
     }
 
     /** Where the singing is, extrapolated from the last position the session reported. */
@@ -1483,6 +1499,7 @@ public final class LockLyrics {
      * which of them did it and one of them is a setting.
      */
     private static void show(boolean on, String key, MediaController c, String why) {
+        sContrastRequestId++;
         if (on) {
             sKey = "";
             onTrack(key, c);

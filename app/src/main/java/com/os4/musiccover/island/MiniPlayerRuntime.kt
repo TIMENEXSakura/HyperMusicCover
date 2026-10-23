@@ -1798,6 +1798,16 @@ object MiniPlayerRuntime {
     @JvmStatic fun musicIslandCentreOnScreen(): FloatArray? =
         live().firstNotNullOfOrNull { it.musicIslandCentreOnScreen() }
 
+    /** The highest visible capsule/card surface; NaN preserves the lyric card fallback. */
+    @JvmStatic fun lyricObstacleTopOnScreen(): Float = synchronized(controllers) {
+        var top = Float.NaN
+        controllers.values.forEach { held ->
+            val candidate = held.controller.lyricObstacleTopOnScreen()
+            if (candidate.isFinite()) top = if (top.isFinite()) minOf(top, candidate) else candidate
+        }
+        top
+    }
+
     /** Where the music's island will rest once back from its card, for the lyrics to go into. */
     @JvmStatic fun musicIslandHomeOnScreen(): FloatArray? =
         live().firstNotNullOfOrNull { it.musicIslandHomeOnScreen() }

@@ -193,7 +193,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         }
         title.visibility = if (shownTitle.isNullOrBlank()) View.GONE else View.VISIBLE
         artist.visibility = if (shownArtist.isNullOrBlank()) View.GONE else View.VISIBLE
-        textColumn.alpha = contentAlpha * statusFeedback.alpha
+        textColumn.alpha = textAlpha * statusFeedback.alpha
     }
 
 
@@ -1022,6 +1022,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
      */
     /** The content's alpha a switch last set, for the artwork coming back from a cover flight. */
     private var contentAlpha = 1f
+    private var textAlpha = 1f
 
     /** For `op mini`: the content's alpha as drawn (the text column's). */
     fun contentAlphaNow(): Float = textColumn.alpha
@@ -1046,6 +1047,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     fun setContentAlpha(alpha: Float) {
         val a = alpha.coerceIn(0f, 1f)
         contentAlpha = a
+        textAlpha = a
         slot.alpha = if (artworkHidden) 0f else a
         textColumn.alpha = a * statusFeedback.alpha
         toggle.alpha = a
@@ -1076,6 +1078,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     /** The text and the button alone: an island shrinking to its circle keeps its picture. */
     fun setTextAlpha(alpha: Float) {
         val a = alpha.coerceIn(0f, 1f)
+        textAlpha = a
         textColumn.alpha = a * statusFeedback.alpha
         toggle.alpha = a
         toggle2.alpha = a * secondShown

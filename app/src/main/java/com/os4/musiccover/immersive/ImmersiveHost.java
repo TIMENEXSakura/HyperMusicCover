@@ -2,6 +2,7 @@ package com.os4.musiccover.immersive;
 import com.os4.musiccover.ClockCollapse;
 import com.os4.musiccover.EdgeBlurView;
 import com.os4.musiccover.island.LockIslands;
+import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.island.MiniPlayerRuntime;
 import com.os4.musiccover.Xp;
@@ -250,6 +251,22 @@ public final class ImmersiveHost {
     /** The lock screen is given up to a page: the clock is small and the cut-out gone for it. */
     public static boolean holdsClock() {
         return sHolding;
+    }
+
+    /** The navigation framework is armed, even while its map yields to a music cover. */
+    public static boolean navigationRunning() {
+        for (ImmersiveScene scene : SCENES) {
+            if (scene.isNavigation() && scene.ready()) return true;
+        }
+        // The transit page is deliberately disabled upstream. Its framework trip still
+        // runs and must not lose contrast merely because that page cannot be presented.
+        return AmapTransitScene.sOn && AmapTransitScene.INSTANCE.tripUp();
+    }
+
+    /** A remote navigation page is actually in front; readiness alone is not visibility. */
+    public static String presentedNavigationKey() {
+        ImmersiveScene scene = sOpen;
+        return scene != null && scene.isNavigation() && isPresented(scene) ? scene.id() : null;
     }
 
     /** The scene a tap on this focus island opens; null for an island that has none. */
@@ -545,6 +562,7 @@ public final class ImmersiveHost {
             if (!anyReady()) dropSlot();
         }
         apply();
+        if (scene.isNavigation()) LockLyrics.refresh();
     }
 
     /** From a scene: its page arrived, or went. */

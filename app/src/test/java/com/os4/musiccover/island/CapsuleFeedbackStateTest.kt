@@ -113,10 +113,86 @@ class CapsuleFeedbackStateTest {
     }
 
     @Test fun navigationMessageIsReplacedBeforeNormalTextReturns() {
-        assertTrue(CapsuleTextFeedbackState.at(900).message)
-        assertTrue(CapsuleTextFeedbackState.at(1019).message)
-        assertFalse(CapsuleTextFeedbackState.at(1020).message)
-        assertEquals(0f, CapsuleTextFeedbackState.at(1020).alpha)
-        assertEquals(1f, CapsuleTextFeedbackState.at(1140).alpha)
+        val state = CapsuleTextFeedbackState()
+        state.begin("已进入导航界面")
+        assertEquals(CapsuleTextFeedbackState.Frame(), state.at(0))
+        assertNull(state.at(119).message)
+        assertEquals(CapsuleTextFeedbackState.Frame("已进入导航界面", 0f), state.at(120))
+        assertEquals("已进入导航界面", state.at(1139).message)
+        assertEquals(CapsuleTextFeedbackState.Frame(null, 0f), state.at(1140))
+        assertEquals(CapsuleTextFeedbackState.Frame(), state.at(CapsuleTextFeedbackState.DURATION_MS))
+    }
+
+    @Test fun smallIslandNeverDrawsDirectionArtworkAndStatusTextTogether() {
+        val state = CapsuleTextFeedbackState()
+        state.begin("已退出导航界面")
+        for (ms in 0L..CapsuleTextFeedbackState.DURATION_MS) {
+            val frame = state.at(ms)
+            val layers = CapsuleStatusContent.layers(frame, 1f)
+            if (layers.message) assertEquals(0f, layers.artworkAlpha)
+            else assertEquals(layers.wordsAlpha, layers.artworkAlpha)
+        }
+        // Restoring the icon uses the same fade as the stacked card's normal text.
+        assertEquals(0f, CapsuleStatusContent.layers(CapsuleTextFeedbackState.Frame(null, 0f), 1f).artworkAlpha)
+    }
+
+    @Test fun rowMorphAndFeedbackAlphaComposeInsteadOfOverridingEachOther() {
+        for (message in listOf(null, "已进入导航界面")) {
+            val frame = CapsuleTextFeedbackState.Frame(message, 0.4f)
+            val layers = CapsuleStatusContent.layers(frame, 0.5f)
+            assertEquals(0.2f, layers.wordsAlpha)
+            assertEquals(if (message == null) 0.2f else 0f, layers.artworkAlpha)
+            assertEquals(0f, CapsuleStatusContent.layers(frame, 0f).wordsAlpha)
+        }
+    }
+
+    @Test fun remotePageReadyReplacesPendingFeedbackWithoutResettingDrawnOpacity() {
+        val state = CapsuleTextFeedbackState()
+        state.begin("正在打开导航界面")
+        val pending = state.at(180)
+        assertEquals(0.5f, pending.alpha)
+        state.begin("已进入导航界面")
+        assertEquals(pending, state.at(0))
+        assertEquals(pending.copy(alpha = 0.25f), state.at(60))
+        assertEquals(CapsuleTextFeedbackState.Frame("已进入导航界面", 0f), state.at(120))
+        assertEquals(CapsuleTextFeedbackState.Frame("已进入导航界面", 1f), state.at(240))
+    }
+
+    @Test fun repeatedBindingDoesNotRestartOrRevealNormalArtworkDuringFeedback() {
+        val state = CapsuleTextFeedbackState()
+        state.begin("已进入导航界面")
+        val held = state.at(500)
+        repeat(20) {
+            assertFalse(state.begin("已进入导航界面"))
+            assertEquals(held, state.frame)
+            assertEquals(0f, CapsuleStatusContent.layers(state.frame, 1f).artworkAlpha)
+        }
+        assertNull(state.at(CapsuleTextFeedbackState.DURATION_MS).message)
+        assertTrue(state.begin("已进入导航界面"))
+    }
+
+    @Test fun rapidNavigationReversalsAndClearKeepOnlyTheLatestRequestedResult() {
+        val state = CapsuleTextFeedbackState()
+        state.begin("已进入导航界面")
+        state.at(400)
+        repeat(20) { index ->
+            val before = state.frame
+            state.begin(if (index % 2 == 0) "已退出导航界面" else "已进入导航界面")
+            assertEquals(before, state.at(0))
+            state.at(60)
+        }
+        state.begin("已退出导航界面")
+        assertEquals("已退出导航界面", state.at(300).message)
+        state.clear()
+        assertEquals(CapsuleTextFeedbackState.Frame(), state.frame)
+        assertEquals(CapsuleTextFeedbackState.Frame(), state.at(300))
+    }
+
+    @Test fun roundIslandUsesLegibleNavigationLabelsWithoutRelabellingOtherScenes() {
+        assertEquals("导航\n已进入", CapsuleStatusContent.compact("已进入导航界面"))
+        assertEquals("导航\n已退出", CapsuleStatusContent.compact("已退出导航界面"))
+        assertEquals("导航\n打开中", CapsuleStatusContent.compact("正在打开导航界面"))
+        assertEquals("已收起", CapsuleStatusContent.compact("已收起"))
+        assertEquals("已打开", CapsuleStatusContent.compact("已打开"))
     }
 }

@@ -255,6 +255,10 @@ final class LyricView extends View {
     private int paletteRequest;
     private float tintR = 1f, tintG = 1f, tintB = 1f;
     private LyricAppearance appearance;
+    private final LyricContrastState navigationContrast = new LyricContrastState();
+    /** Zero leaves the saved appearance in control; otherwise pure black or pure white. */
+    private int navigationInk;
+    private String navigationSource;
     private int mainDim = -1, mainLit = -1, bgDim = -1, bgLit = -1;
     private volatile int blurGeneration;
     private final Matrix gradMatrix = new Matrix();
@@ -520,6 +524,9 @@ final class LyricView extends View {
 
     @Override
     protected void onDetachedFromWindow() {
+        navigationContrast.clear();
+        navigationInk = 0;
+        navigationSource = null;
         glowGeneration++;
         glowWarmFocus = Integer.MIN_VALUE;
         glowPending.clear();
@@ -555,6 +562,9 @@ final class LyricView extends View {
         lastStep = now;
 
         boolean changed = followAodDim();
+        // A paused line may have no movement to invalidate it. Observe color changes on the
+        // existing tick/pre-draw as well, so ending navigation restores the saved colors.
+        try { changed |= updateTint(); } catch (Throwable error) { reportDrawFailure(error); }
         changed |= followHostAlpha();
         changed |= followBouncer(dt);
         // Before the band below, which reads this view's scale.
@@ -2229,20 +2239,40 @@ final class LyricView extends View {
         invalidate();
     }
 
-    private void updateTint() {
+    private boolean updateTint() {
         int src = Main.coverTint();
         LyricAppearance next = LockLyrics.sAppearance;
-        if (src == tintSrc && appearance == next) return;
+        boolean withNavigation = LockLyrics.wantsAttached()
+                && com.os4.musiccover.immersive.ImmersiveHost.navigationRunning();
+        com.os4.musiccover.LyricContrastBackground.Reading background = withNavigation
+                ? Main.lyricContrastReading() : null;
+        int contrast = navigationContrast.update(withNavigation,
+                background == null ? null : background.key, LockLyrics.contrastRequestId(),
+                background == null ? 0 : background.color);
+        String source = background == null ? "appearance" : background.source;
+        // A resolved white sample is still diagnostic progress from a pending white fallback.
+        if (navigationInk != contrast || contrast != 0 && !source.equals(navigationSource)) {
+            Xp.log("MCLyrics: navigation contrast=" + (contrast == 0 ? "saved"
+                    : contrast == LyricContrastState.BLACK ? "black" : "white")
+                    + " source=" + source);
+        }
+        navigationSource = source;
+        if (src == tintSrc && appearance == next && navigationInk == contrast) return false;
+        navigationInk = contrast;
         tintSrc = src;
         appearance = next;
-        boolean needsCover = next.mainMode == LyricAppearance.COVER || next.bgMode == LyricAppearance.COVER;
+        boolean needsCover = contrast == 0 &&
+                (next.mainMode == LyricAppearance.COVER || next.bgMode == LyricAppearance.COVER);
         if (needsCover && (coverPalette == null || coverPalette.seed != src)) requestPalette(src);
         else if (paletteWork != null) {
             paletteRequest++;
             blurHandler().removeCallbacks(paletteWork);
             paletteWork = null;
         }
-        if (src == 0) {
+        if (contrast != 0) {
+            // Translation/romanisation has a separate paint and must follow the same ink.
+            tintR = tintG = tintB = contrast == LyricContrastState.BLACK ? 0f : 1f;
+        } else if (src == 0) {
             tintR = tintG = tintB = 1f;
         } else {
             float[] hsv = new float[3];
@@ -2259,10 +2289,10 @@ final class LyricView extends View {
         int oldMainDim = mainDim, oldBgDim = bgDim;
         // While a new cover is being processed, retain the last palette (or official colors).
         // HCT solving and cache locking never run in this drawing path.
-        mainDim = resolveColor(next.mainMode, next.mainColor, ti, false, false);
-        mainLit = resolveColor(next.mainMode, next.mainColor, -1, false, true);
-        bgDim = resolveColor(next.bgMode, next.bgColor, ti, true, false);
-        bgLit = resolveColor(next.bgMode, next.bgColor, -1, true, true);
+        mainDim = contrast != 0 ? contrast : resolveColor(next.mainMode, next.mainColor, ti, false, false);
+        mainLit = contrast != 0 ? contrast : resolveColor(next.mainMode, next.mainColor, -1, false, true);
+        bgDim = contrast != 0 ? contrast : resolveColor(next.bgMode, next.bgColor, ti, true, false);
+        bgLit = contrast != 0 ? contrast : resolveColor(next.bgMode, next.bgColor, -1, true, true);
         // Each text role has its own color and alpha baked into the blur. Tinting the whole
         // bitmap would overwrite the backing vocal's settings and multiply its alpha twice.
         bmpPaint.setColorFilter(null);
@@ -2276,6 +2306,7 @@ final class LyricView extends View {
             blurBmp = new Bitmap[lines.size()][BLUR_MAX_ROWS];
             blurPending.clear();
         }
+        return true;
     }
 
     private float builtMainOpacity = -1f, builtBgOpacity = -1f;
@@ -2338,6 +2369,7 @@ final class LyricView extends View {
     }
 
     private long translationInk(float alpha, float whiteness) {
+        if (navigationInk != 0) return blendInk(navigationInk, navigationInk, 0f, alpha, 1f);
         float w = clamp01(whiteness);
         float r = tintR + (1f - tintR) * w, g = tintG + (1f - tintG) * w, b = tintB + (1f - tintB) * w;
         return android.graphics.Color.pack(r, g, b, clamp01(alpha), EXTENDED);

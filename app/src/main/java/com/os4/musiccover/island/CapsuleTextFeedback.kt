@@ -5,27 +5,24 @@ import android.view.animation.LinearInterpolator
 
 /** Changes the existing text views' content. Old and new text are never drawn together. */
 internal class CapsuleTextFeedback(private val render: () -> Unit) {
-    var text: String? = null
-        private set
-    var alpha = 1f
-        private set
+    private val state = CapsuleTextFeedbackState()
+    val text: String? get() = state.frame.message
+    val alpha: Float get() = state.frame.alpha
+    val frame: CapsuleTextFeedbackState.Frame get() = state.frame
     private var animator: ValueAnimator? = null
     private var generation = 0
 
     fun show(message: String) {
+        if (!state.begin(message)) return
         cancelAnimation()
         val token = generation
-        text = message
-        alpha = 0f
         render()
-        animator = ValueAnimator.ofFloat(0f, 1140f).apply {
-            duration = 1140L
+        animator = ValueAnimator.ofFloat(0f, CapsuleTextFeedbackState.DURATION_MS.toFloat()).apply {
+            duration = CapsuleTextFeedbackState.DURATION_MS
             interpolator = LinearInterpolator()
             addUpdateListener {
                 if (token == generation) {
-                    val frame = CapsuleTextFeedbackState.at((it.animatedValue as Float).toLong())
-                    text = message.takeIf { frame.message }
-                    alpha = frame.alpha
+                    state.at((it.animatedValue as Float).toLong())
                     render()
                 }
             }
@@ -42,8 +39,7 @@ internal class CapsuleTextFeedback(private val render: () -> Unit) {
 
     fun clear() {
         cancelAnimation()
-        text = null
-        alpha = 1f
+        state.clear()
         render()
     }
 }

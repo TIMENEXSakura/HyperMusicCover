@@ -126,6 +126,7 @@ public final class CoverPush {
             // Nothing behind the clock any more, so nothing to take a colour from. The repaint
             // that hands the OEM's own colours back happens with the rest of cover mode.
             Main.sCoverTint = 0;
+            LyricContrastBackground.clearCover();
             // The shade has nothing to reveal any more - unless it is set to keep the last cover.
             // This branch is the single funnel for leaving cover mode - the tap, the dismissed
             // card, the release path and the cover op all end up here - so it is the only place
@@ -138,6 +139,9 @@ public final class CoverPush {
         if (Main.sCoverCardStyle.mode == CoverCardStyle.CARD) CoverCardLayer.publish(art);
         MotionCover.onCover(Main.sCoverCardStyle.mode == CoverCardStyle.CARD);
         int w = Main.sScreenW, h = Main.sScreenH;
+        final int contrastMode = Main.sCoverCardStyle.mode;
+        final String contrastKey = preKey(art, w, h, contrastMode == CoverCardStyle.CARD);
+        LyricContrastBackground.beginCover(contrastKey, contrastMode);
         if (!Main.sVideoWallpaper && Main.sWpComposes) {
             // The source goes over instead of the composed picture, and the wallpaper process
             // composes it for itself. Measured before this, on the path below: composing took
@@ -200,6 +204,7 @@ public final class CoverPush {
                     }
                 }
                 AodColour.measureCover(sTintPic, w / (float) sTintPic.getWidth());
+                LyricContrastBackground.measureCover(sTintPic, null, contrastKey, contrastMode);
                 if (Main.sCoverMode) AodColour.recolorClock();
                 // The shade builds its background from the square source and keeps nothing.
                 android.os.Trace.beginSection("MC push.shade");
@@ -254,6 +259,9 @@ public final class CoverPush {
                 Xp.w(Main.TAG + "frosted video cover failed: " + t);
             }
             showVideoCover(ctx, true, full, frosted, artPrint(art));
+            LyricContrastBackground.measureCover(full, frosted, contrastKey, contrastMode);
+        } else {
+            LyricContrastBackground.measureCover(full, null, contrastKey, contrastMode);
         }
         long tc = android.os.SystemClock.uptimeMillis();
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();

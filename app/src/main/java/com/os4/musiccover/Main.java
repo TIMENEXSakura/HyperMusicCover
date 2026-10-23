@@ -4591,6 +4591,11 @@ public class Main extends XposedModule {
         return forced != 0 ? forced : sCoverTint;
     }
 
+    /** Atomic key/color/source pair, including when a cover sample arrives from the worker. */
+    public static LyricContrastBackground.Reading lyricContrastReading() {
+        return LyricContrastBackground.current();
+    }
+
     /**
      * The OEM's colour with its hue and saturation replaced by the cover's, or that same colour
      * back when there is no cover to take one from.
