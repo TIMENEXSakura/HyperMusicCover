@@ -197,6 +197,8 @@
     <string name="lyrics_provider_got_it_wait">知道了 (%1$d)</string>
     <string name="lyrics_trans">显示翻译</string>
     <string name="lyrics_enabled">启用锁屏歌词</string>
+    <string name="lyrics_clock_independent">歌词动画不受时钟遮挡</string>
+    <string name="lyrics_clock_independent_summary">胶囊歌词整组动画不随时钟移动而被裁切</string>
     <string name="lyrics_roma">显示罗马音</string>
     <string name="lyrics_align">歌词对齐方式</string>
     <string name="lyrics_align_left">居左</string>

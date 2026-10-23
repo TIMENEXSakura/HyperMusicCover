@@ -79,6 +79,7 @@ public final class ModuleState {
                     + "\nlyrickeep=" + (LockLyrics.sKeepOn ? 1 : 0)
                     + "\nlyrichidden=" + (LockLyrics.sTapHidden ? 1 : 0)
                     + "\nlyrichdr=" + (LockLyrics.sHdr ? 1 : 0)
+                    + "\nlyricclockindependent=" + (LockLyrics.sClockIndependentMotion ? 1 : 0)
                     // Written as 1 or 0 like the rest, but read back as the default when absent:
                     // the key did not exist before this setting did, and the lyrics are supposed
                     // to look the way they always have on a file that predates it.
@@ -220,6 +221,7 @@ public final class ModuleState {
                         else if ("lyrickeep".equals(k)) LockLyrics.sKeepOn = "1".equals(v);
                         else if ("lyrichidden".equals(k)) LockLyrics.sTapHidden = "1".equals(v);
                         else if ("lyrichdr".equals(k)) LockLyrics.sHdr = "1".equals(v);
+                        else if ("lyricclockindependent".equals(k)) LockLyrics.sClockIndependentMotion = "1".equals(v);
                         else if ("lyrictrans".equals(k)) LockLyrics.sTrans = "1".equals(v);
                         else if ("aodsmall".equals(k)) Main.sAodSmall = "1".equals(v);
                         else if ("lyricroma".equals(k)) LockLyrics.sRoma = "1".equals(v);

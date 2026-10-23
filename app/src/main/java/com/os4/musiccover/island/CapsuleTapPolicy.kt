@@ -17,6 +17,10 @@ internal object CapsuleTapPolicy {
 
 /** Both the full pill and the small disc acknowledge the same resolved action. */
 internal interface CapsuleFeedback {
+    fun feedbackBindingVersion(): Long
+    fun clearLyricFeedback()
     fun showLyricStatus(enabled: Boolean)
+    fun showLyricPending()
+    fun showLyricUnavailable()
     fun showStatus(text: String)
 }

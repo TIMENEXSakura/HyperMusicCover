@@ -191,6 +191,8 @@
     <string name="lyrics_provider_got_it_wait">Got it (%1$d)</string>
     <string name="lyrics_trans">Show translations</string>
     <string name="lyrics_enabled">Enable lock screen lyrics</string>
+    <string name="lyrics_clock_independent">Animate lyrics independently of the clock</string>
+    <string name="lyrics_clock_independent_summary">Keep clock movement from clipping the capsule lyric animation</string>
     <string name="lyrics_roma">Show romanisations</string>
     <string name="lyrics_align">Lyric alignment</string>
     <string name="lyrics_align_left">Left</string>

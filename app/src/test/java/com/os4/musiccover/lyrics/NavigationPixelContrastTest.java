@@ -67,4 +67,22 @@ public class NavigationPixelContrastTest {
         assertEquals(0, state.accept(null));
         assertEquals(NavigationPixelContrast.WHITE, state.accept(page(10, 90)));
     }
+
+    @Test public void onlyADominantOppositeSampleRequestsPromptConfirmation() {
+        NavigationPixelContrast.Stability state = new NavigationPixelContrast.Stability();
+        state.accept(page(90, 10));
+        assertFalse(state.needsConfirmation());
+        state.accept(page(49, 51));
+        assertFalse(state.needsConfirmation());
+        state.accept(page(10, 90));
+        assertTrue(state.needsConfirmation());
+        assertEquals(NavigationPixelContrast.BLACK, state.color());
+        state.accept(page(10, 90));
+        assertFalse(state.needsConfirmation());
+        assertEquals(NavigationPixelContrast.WHITE, state.color());
+        state.accept(page(90, 10));
+        assertTrue(state.needsConfirmation());
+        state.accept(null);
+        assertFalse(state.needsConfirmation());
+    }
 }

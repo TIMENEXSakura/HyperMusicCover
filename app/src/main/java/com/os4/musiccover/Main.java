@@ -2572,7 +2572,8 @@ public class Main extends XposedModule {
     /** ClockCollapse let go of the clock. Outside cover mode, the card goes back with it. */
     static void onClockReleased() {
         LockHold.clockReleased();
-        if (!LockLyrics.capsulePageRequested()) sCapsuleKeepsMini = false;
+        if (!LockLyrics.capsulePageRequested() && !sNavigationLyricBackground.pending())
+            sCapsuleKeepsMini = false;
         if (sCoverMode) return;
         MediaCard.sCardP = 0f;
         MediaCard.applyMediaCard();
@@ -2764,10 +2765,59 @@ public class Main extends XposedModule {
     /** A lyric-only overlay must not yield an already presented navigation page to cover art. */
     private static volatile boolean sCapsuleOverNavigation;
     private static volatile int sCapsuleNavigationEpoch;
+    private static final NavigationLyricBackground sNavigationLyricBackground = new NavigationLyricBackground();
 
     public static boolean capsuleLyricsOverNavigation() { return sCapsuleOverNavigation; }
 
     public static void clearCapsuleNavigationOverlay() { sCapsuleOverNavigation = false; }
+
+    /** A destroyed/disabled lyric request must not restore a background after a later map close. */
+    public static void cancelCapsuleNavigationBackground() {
+        sNavigationLyricBackground.cancel();
+        sCapsuleOverNavigation = false;
+        ++sCapsuleNavigationEpoch;
+    }
+
+    /** A map opened over an existing capsule lyric page borrows the same background intent. */
+    public static void onNavigationPageOpened(String scene) {
+        if (!LockLyrics.capsulePageRequested()) return;
+        sNavigationLyricBackground.requestedOver(scene);
+        sCapsuleOverNavigation = true;
+        ++sCapsuleNavigationEpoch;
+        ++sPushGen;
+        sTapSuppressed = true;
+        // Hiding lyrics while the map is up must not tear down its retained music background.
+        sCapsuleOwnsCover = false;
+    }
+
+    /** Navigation UI ended; restore the requested music background without changing lyric visibility. */
+    public static void onNavigationPageClosed(String scene) {
+        if (!sNavigationLyricBackground.belongsTo(scene)) return;
+        boolean restore = sNavigationLyricBackground.finish(scene, sCoverFeatureOn, sWatched != null);
+        sCapsuleOverNavigation = false;
+        ++sCapsuleNavigationEpoch;
+        if (restore) {
+            // Read the current settings and selected song. No saved bitmap, blur mode or
+            // colour is forced here: a hidden lyric page resumes its normal non-lyric cover.
+            sTrackKey = trackKey(sWatched);
+            sTapSuppressed = false;
+            if (!sCoverMode) {
+                sCapsuleOwnsCover = LockLyrics.capsulePageRequested();
+                setCoverEnabled(true, screenOnCached(), false);
+            } else {
+                // The cover can have remained behind the map while track changes were held.
+                CoverPush.pushArtAsync(true, false);
+                CoverPush.sendKeptFirst();
+                LockLyrics.refresh();
+            }
+        } else {
+            LockLyrics.refresh();
+        }
+        MiniPlayerRuntime.refresh();
+        Xp.log(TAG + "navigation background handoff restore=" + restore + " cover=" + sCoverMode
+                + " keepWallpaper=" + keepsWallpaper() + " lyricsRequested=" + LockLyrics.capsulePageRequested()
+                + " lyricsHidden=" + LockLyrics.sTapHidden);
+    }
 
     /** Capsule body only: the existing lyric/cover scene, with its media card still folded. */
     public static Boolean miniPlayerToggleLyrics(MediaController selected) {
@@ -2785,9 +2835,11 @@ public class Main extends XposedModule {
         String key = trackKey(current);
         if (visible) {
             sCapsuleKeepsMini = true;
+            String navigationScene = ImmersiveHost.requestedNavigationKey();
             sCapsuleOverNavigation = sCapsuleOverNavigation
-                    || ImmersiveHost.requestedNavigationKey() != null;
+                    || navigationScene != null;
             if (sCapsuleOverNavigation) {
+                sNavigationLyricBackground.requestedOver(navigationScene);
                 ++sCapsuleNavigationEpoch;
                 ++sPushGen;
                 sTapSuppressed = true;
@@ -2818,7 +2870,7 @@ public class Main extends XposedModule {
                 setCoverEnabled(false, true, false);
             }
             sCapsuleOwnsCover = false;
-            if (!coverSceneActive()) sCapsuleKeepsMini = false;
+            if (!coverSceneActive() && !sNavigationLyricBackground.pending()) sCapsuleKeepsMini = false;
         }
         MiniPlayerRuntime.refresh();
         Xp.log(TAG + "capsule lyrics request=" + visible + " session=" + current.getPackageName()

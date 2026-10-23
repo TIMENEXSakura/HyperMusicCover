@@ -50,6 +50,14 @@ public final class LockLyrics {
      * session.
      */
     public static volatile boolean sEnabled = true;
+    /** Keep lyric motion independent of the system clock's entrance transform. */
+    public static volatile boolean sClockIndependentMotion = true;
+
+    public static void setClockIndependentMotion(boolean on) {
+        sClockIndependentMotion = on;
+        refresh();
+        ModuleState.saveState();
+    }
 
     /**
      * Whether the lock screen's two-finger tap has taken the lyrics away.
@@ -121,7 +129,8 @@ public final class LockLyrics {
     /** End the explicit page request when its media session is destroyed. */
     public static void clearCapsulePage() {
         sCapsulePage = false;
-        Main.clearCapsuleNavigationOverlay();
+        Main.cancelCapsuleNavigationBackground();
+        notifyAvailabilitySoon();
         Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         refresh();
     }
@@ -165,6 +174,8 @@ public final class LockLyrics {
 
 
     private static String sKey = "";
+    /** Only settle() can declare that every source for this key has finished without lines. */
+    private static String sSettledKey;
     private static List<LyricLine> sLines = Collections.emptyList();
     private static int sVersion;
     /** Bumped per lookup, so an answer overtaken by the next song is dropped. */
@@ -533,6 +544,30 @@ public final class LockLyrics {
     public static boolean hasLyrics() {
         return sDemo || !sLines.isEmpty() || CACHE.containsKey(sKey)
                 || (sLoading && sHadLyrics);
+    }
+
+    public static String feedbackTrackKey() { return sKey; }
+    public static long feedbackRequestId() { return sContrastRequestId; }
+
+    /** Does not start a lookup or count sHadLyrics (which belongs to the previous song). */
+    public static LyricAvailability feedbackAvailability(String expectedKey, Object sessionToken) {
+        if (sController == null || sessionToken == null
+                || !sessionToken.equals(sController.getSessionToken())) return LyricAvailability.PENDING;
+        Cached cached = CACHE.get(sKey);
+        return LyricAvailability.resolve(expectedKey, sKey, !sLines.isEmpty(),
+                cached != null && !cached.lines.isEmpty(), sLoading, sParked != null, sSettledKey);
+    }
+
+    private static boolean sAvailabilityPosted;
+    private static final Runnable AVAILABILITY_CHANGED = () -> {
+        sAvailabilityPosted = false;
+        com.os4.musiccover.island.MiniPlayerRuntime.lyricAvailabilityChanged();
+    };
+
+    private static void notifyAvailabilitySoon() {
+        // setLines may immediately discover a new provider payload and restart lookup. Let
+        // that stack finish before announcing an empty result to the capsule.
+        if (!sAvailabilityPosted) sAvailabilityPosted = Main.main().post(AVAILABILITY_CHANGED);
     }
 
     /** Whether the last settled answer - not one still loading - had lines. See hasLyrics(). */
@@ -1019,6 +1054,7 @@ public final class LockLyrics {
     public static void onTrack(String key, MediaController c) {
         key = lyricKey(key, c);
         sController = c;
+        notifyAvailabilitySoon();
         readState(true);
         if (sDemo) {
             if (verbose) Xp.log(TAG + "demo is held, not looking " + key + " up");
@@ -1045,6 +1081,7 @@ public final class LockLyrics {
         }
         String lastKey = sKey;
         sKey = key;
+        sSettledKey = null;
         long lastChange = sTrackAt;
         sTrackChangedAt = SystemClock.uptimeMillis();
         sTrackAt = sTrackChangedAt;
@@ -1203,7 +1240,9 @@ public final class LockLyrics {
      */
     private static void lookup(final String want, MediaController c, final boolean keepCurrent) {
         final int gen = ++sGen;
+        sSettledKey = null;
         sLoading = true;
+        notifyAvailabilitySoon();
         LyricSource.load(c, new LyricSource.Callback() {
             @Override
             public void onLines(List<LyricLine> lines, String why, int source) {
@@ -1260,6 +1299,7 @@ public final class LockLyrics {
     /** Puts a lookup's answer up: the one place lines found for `want` reach the screen. */
     private static void settle(String want, List<LyricLine> lines, String why, int source) {
         sLoading = false;
+        sSettledKey = want;
         sSource = source;
         // What the LAST lookup found, not what any lookup ever found.
         //
@@ -1525,7 +1565,7 @@ public final class LockLyrics {
         if (!on) {
             sCapsulePage = false;
             resetCapsuleLayoutOrigin();
-            Main.clearCapsuleNavigationOverlay();
+            Main.cancelCapsuleNavigationBackground();
             Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         }
         // The switch is the master, so it takes the tap's answer with it. Switching the lyrics
@@ -1760,6 +1800,7 @@ public final class LockLyrics {
         if (!sLoading) sHadLyrics = !sLines.isEmpty();
         sVersion++;
         sWhy = why;
+        notifyAvailabilitySoon();
         Xp.log(TAG + sLines.size() + " lines: " + why);
         refresh();
     }

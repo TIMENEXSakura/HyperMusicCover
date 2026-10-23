@@ -18,10 +18,11 @@ import java.util.function.ObjIntConsumer;
 /** In-memory, low-resolution sampling of the map's own remote layer subtree, never the display. */
 final class NavigationSurfaceContrast {
     private NavigationSurfaceContrast() {}
-    private static final long INTERVAL_MS = 1500L, TIMEOUT_MS = 2500L, API_RETRY_MS = 30000L;
+    private static final long INTERVAL_MS = 1000L, TIMEOUT_MS = 2500L, API_RETRY_MS = 30000L;
+    private static final long ENTRY_RETRY_MS = 100L, ENTRY_WINDOW_MS = 2000L, CONFIRM_MS = 250L;
     private static final NavigationPixelContrast.Stability STABILITY = new NavigationPixelContrast.Stability();
     private static String sScene, sSurfaceKey = "pending", sLastDiagnostic;
-    private static long sGeneration, sContrastEpoch, sNextRead;
+    private static long sGeneration, sContrastEpoch, sNextRead, sEnteredAt;
     private static boolean sPollPosted, sLookupPending;
     private static long sLookupRetryAt;
     private static Request sPending;
@@ -33,6 +34,7 @@ final class NavigationSurfaceContrast {
         if (!scene.equals(sScene)) {
             stop();
             sScene = scene;
+            sEnteredAt = SystemClock.uptimeMillis();
             sReading = unknown(key());
         }
         pollSoon();
@@ -83,10 +85,14 @@ final class NavigationSurfaceContrast {
     }
 
     private static void readDue() {
-        sNextRead = SystemClock.uptimeMillis() + INTERVAL_MS;
+        long now = SystemClock.uptimeMillis();
+        sNextRead = now + INTERVAL_MS;
         if (!ensureApi()) return;
         LiveAlertScene.ContrastSurface target = ImmersiveHost.presentedNavigationSurface();
         if (target == null) {
+            // The first poll often lands during the map's entry fade. Checking readiness is
+            // cheap and captures no pixels; do not make a ready map wait a full steady poll.
+            if (now - sEnteredAt < ENTRY_WINDOW_MS) sNextRead = now + ENTRY_RETRY_MS;
             STABILITY.accept(null);
             diagnostic("surface-not-ready");
             return;
@@ -363,6 +369,14 @@ final class NavigationSurfaceContrast {
             diagnostic("pixels " + counts.bright + " bright/" + counts.dark + " dark/"
                     + counts.total + " total -> " + (color == 0 ? "unknown" : color == 0xff000000 ? "black" : "white")
                     + " " + request.detail());
+            if (STABILITY.needsConfirmation()) {
+                // Keep the two-sample 60% rule, but promptly verify an actual map day/night
+                // change instead of waiting another whole idle sampling interval.
+                sNextRead = SystemClock.uptimeMillis() + CONFIRM_MS;
+                Main.main().removeCallbacks(POLL);
+                sPollPosted = false;
+                pollSoon();
+            }
             if (previous.color != sReading.color || !previous.key.equals(sReading.key)
                     || !previous.source.equals(sReading.source)) LockLyrics.refresh();
         } catch (Throwable failure) {

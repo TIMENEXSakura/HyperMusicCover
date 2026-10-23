@@ -38,6 +38,7 @@ public final class NavigationPixelContrast {
     public static final class Stability {
         private int color, pending, confirmations;
         public int color() { return color; }
+        public boolean needsConfirmation() { return pending != 0 && confirmations > 0; }
         public int accept(Counts counts) {
             int candidate = counts == null ? 0 : counts.preferred();
             if (candidate == 0) { pending = confirmations = 0; return color; }

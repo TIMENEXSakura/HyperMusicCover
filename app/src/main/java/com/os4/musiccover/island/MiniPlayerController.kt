@@ -13,6 +13,8 @@ import com.os4.musiccover.Main
 import com.os4.musiccover.lyrics.TrackName
 import com.os4.musiccover.lyrics.LockLyrics
 import com.os4.musiccover.lyrics.LyricBandGeometry
+import com.os4.musiccover.lyrics.LyricAvailability
+import com.os4.musiccover.lyrics.LyricFeedbackRequest
 import com.os4.musiccover.Xp
 import com.os4.musiccover.immersive.ImmersiveHost
 import android.content.Context
@@ -2189,8 +2191,13 @@ internal class MiniPlayerController(
     /** Whether the small island shows while a group runs; null with no group running. */
     private fun groupShowsSmall(): Boolean? {
         val g = group ?: return null
-        val drawnByView = g.musicSmall || g.otherSmall && g.follower != null
-        return if (drawnByView) g.smallLanding else g.otherSmall
+        // A music-only morph does not own the neighbouring navigation/notification island.
+        // g.other is intentionally null since other islands stopped expanding with the music.
+        return MiniPlayerPresentationPolicy.smallIslandDuringMorph(
+            musicOwnsSmall = g.musicSmall,
+            followerOwnsSmall = g.otherSmall && g.follower != null,
+            landing = g.smallLanding,
+        )
     }
 
     /** The small island [selected] would have beside it, as updateSmallIsland picks it. */
@@ -4594,11 +4601,63 @@ internal class MiniPlayerController(
     private data class PendingSceneFeedback(val key: String, val view: CapsuleFeedback,
                                           val navigation: Boolean)
     private var pendingSceneFeedback: PendingSceneFeedback? = null
+    private data class PendingLyricFeedback(val request: LyricFeedbackRequest, val view: CapsuleFeedback,
+                                           var waitingShown: Boolean = false)
+    private var pendingLyricFeedback: PendingLyricFeedback? = null
 
-    fun cancelSceneFeedback() { pendingSceneFeedback = null }
+    fun cancelSceneFeedback() {
+        pendingSceneFeedback = null
+        cancelLyricFeedback()
+    }
+
+    private fun cancelLyricFeedback() {
+        val pending = pendingLyricFeedback ?: return
+        pendingLyricFeedback = null
+        if (pending.request.sameBinding(pending.view, pending.view.feedbackBindingVersion()))
+            pending.view.clearLyricFeedback()
+    }
+
+    private fun feedbackSongKey(music: MediaController?): String = music?.let {
+        // This also runs from pre-draw while pending: use the metadata callback's snapshot,
+        // never add a binder metadata read to every feedback animation frame.
+        if (liveFor == it.sessionToken) TrackName.songKey(it.packageName, liveMetadata)
+        else lastTrack
+    }.orEmpty()
+
+    fun onLyricAvailabilityChanged() { updateLyricFeedback() }
+
+    private fun updateLyricFeedback() {
+        val pending = pendingLyricFeedback ?: return
+        val music = controller ?: Main.miniPlayerSession()
+        val bound = if (pending.view === player) selectedIsland == MUSIC_ISLAND
+            else pending.view === smallIsland && smallKey == MUSIC_ISLAND ||
+                exchange?.movers?.get(MUSIC_ISLAND)?.view === pending.view
+        val key = LockLyrics.feedbackTrackKey()
+        val current = bound && Main.screenOnCached() && host.isAttachedToWindow &&
+            pending.request.owns(LockLyrics.feedbackRequestId(), music?.sessionToken,
+                feedbackSongKey(music), key, pending.view, pending.view.feedbackBindingVersion(),
+                LockLyrics.capsulePageRequested() && !LockLyrics.sTapHidden && LockLyrics.sEnabled)
+        if (!current) { cancelLyricFeedback(); return }
+        val feedback = LockLyrics.feedbackAvailability(key, music?.sessionToken).feedbackFor(true)
+        when (feedback) {
+            LyricAvailability.Feedback.PENDING -> if (!pending.waitingShown) {
+                pending.waitingShown = true
+                pending.view.showLyricPending()
+            }
+            LyricAvailability.Feedback.ENABLED, LyricAvailability.Feedback.DISABLED -> {
+                pendingLyricFeedback = null
+                pending.view.showLyricStatus(feedback == LyricAvailability.Feedback.ENABLED)
+            }
+            LyricAvailability.Feedback.UNAVAILABLE -> {
+                pendingLyricFeedback = null
+                pending.view.showLyricUnavailable()
+            }
+        }
+    }
 
     /** Use the existing frame observer: no delayed success callback can overwrite a later tap. */
     private fun updateSceneFeedback() {
+        updateLyricFeedback()
         val pending = pendingSceneFeedback ?: return
         val bound = if (pending.view === player) selectedIsland == pending.key
             else pending.view === smallIsland && smallKey == pending.key
@@ -4615,6 +4674,7 @@ internal class MiniPlayerController(
     /** Resolve special actions before the generic notification expansion path. Swipes are separate. */
     private fun tapIsland(key: String, tapped: CapsuleFeedback? = null) {
         pendingSceneFeedback = null
+        cancelLyricFeedback()
         val view: CapsuleFeedback? = tapped ?: if (key == smallKey) smallIsland else player
         val note = LockIslands.noteFor(key)
         val scene = note?.takeUnless { it.redacted }?.let {
@@ -4629,7 +4689,21 @@ internal class MiniPlayerController(
         MiniPlayerRuntime.noteTouch("body action=$action small=${view === smallIsland}")
         when (action) {
             CapsuleTapPolicy.Action.MUSIC -> {
-                Main.miniPlayerToggleLyrics(controller)?.let { view?.showLyricStatus(it) }
+                val music = controller ?: Main.miniPlayerSession()
+                Main.miniPlayerToggleLyrics(music)?.let { enabled ->
+                    if (!enabled) {
+                        val feedback = LockLyrics.feedbackAvailability(LockLyrics.feedbackTrackKey(),
+                            music?.sessionToken).feedbackFor(false)
+                        if (feedback == LyricAvailability.Feedback.UNAVAILABLE) view?.showLyricUnavailable()
+                        else view?.showLyricStatus(false)
+                    }
+                    else if (view != null && music != null) {
+                        pendingLyricFeedback = PendingLyricFeedback(LyricFeedbackRequest(
+                            LockLyrics.feedbackRequestId(), music.sessionToken, feedbackSongKey(music),
+                            LockLyrics.feedbackTrackKey(), view, view.feedbackBindingVersion()), view)
+                        updateLyricFeedback()
+                    }
+                }
             }
             CapsuleTapPolicy.Action.NAVIGATION, CapsuleTapPolicy.Action.SCENE -> {
                 val entered = runCatching { LockIslands.toggleScene(key) }.onFailure {
@@ -7471,6 +7545,9 @@ internal class MiniPlayerController(
             Xp.log("MCMini: container morph ${if (completed) "landed" else "cancelled"} " +
                 "at ${if (toNative) "native" else "mini"}")
             endGroup(toNative)
+            // musicMoving kept the music in the row throughout the drag. Rebind the stable
+            // seats before deciding visibility, or nativeRequested hides its neighbour too.
+            refresh()
             position()
             updateVisibility()
         }

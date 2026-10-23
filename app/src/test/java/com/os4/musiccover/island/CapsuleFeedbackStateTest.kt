@@ -112,6 +112,77 @@ class CapsuleFeedbackStateTest {
         assertEquals(LyricFeedbackState.Frame(), state.at(0))
     }
 
+    @Test fun unavailableWritesTheWordBeforeTheQuestionAndHoldsBothForThreeHundredMilliseconds() {
+        val state = LyricFeedbackState()
+        state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
+        val wordAt = LyricFeedbackState.WORD_DRAW_MS
+        assertEquals(0.5f, state.at(wordAt / 2).reveal)
+        assertEquals(0f, state.frame.question)
+        assertEquals(1f, state.at(wordAt).reveal)
+        assertEquals(0f, state.frame.question)
+        assertEquals(0.5f, state.at(wordAt + LyricFeedbackState.QUESTION_DRAW_MS / 2).question)
+        val completed = wordAt + LyricFeedbackState.QUESTION_DRAW_MS
+        for (ms in completed..completed + LyricFeedbackState.WORD_HOLD_MS) {
+            val frame = state.at(ms)
+            assertEquals(1f, frame.word)
+            assertEquals(1f, frame.question)
+            assertEquals(0f, frame.cross)
+            assertEquals(0f, frame.playback)
+        }
+        assertEquals(LyricFeedbackState.Frame(), state.at(state.durationMs))
+    }
+
+    @Test fun pendingNeverDrawsAbsenceAndItsAsyncResultContinuesFromTheActualFrame() {
+        val state = LyricFeedbackState()
+        state.begin(LyricFeedbackState.Mode.PENDING)
+        for (ms in 0L..state.durationMs) {
+            assertEquals(0f, state.at(ms).question)
+            assertEquals(0f, state.frame.cross)
+        }
+        state.begin(LyricFeedbackState.Mode.PENDING)
+        val partial = state.at(140)
+        state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
+        assertEquals(partial, state.at(0))
+        assertEquals(0f, state.at(LyricFeedbackState.WORD_DRAW_MS).question)
+        assertEquals(1f, state.at(LyricFeedbackState.WORD_DRAW_MS + LyricFeedbackState.QUESTION_DRAW_MS).question)
+    }
+
+    @Test fun missingQuestionCanBeInterruptedByCloseOrAvailableWithoutResurrectingOldGeometry() {
+        val state = LyricFeedbackState()
+        state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
+        val partial = state.at(LyricFeedbackState.WORD_DRAW_MS + 140L)
+        state.begin(false)
+        assertEquals(partial, state.at(0))
+        assertTrue(state.at(60L).question < partial.question)
+        assertEquals(0f, state.at(LyricFeedbackState.CLOSE_WORD_MS).question)
+        assertEquals(1f, state.at(500L).cross)
+        state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
+        state.at(LyricFeedbackState.WORD_DRAW_MS + 140L)
+        state.begin(true)
+        assertEquals(0f, state.at(LyricFeedbackState.WORD_DRAW_MS).question)
+        assertEquals(0f, state.frame.cross)
+        state.clear() // identity replacement or view detachment cancels the whole old hint
+        assertEquals(LyricFeedbackState.Frame(), state.frame)
+        state.begin(LyricFeedbackState.Mode.PENDING)
+        assertEquals(LyricFeedbackState.Frame(), state.at(0))
+    }
+
+    @Test fun questionDrawsItsHookBeforeItsDotAndPreservesPlaybackDuringFadeInterruption() {
+        assertEquals(0f, LyricFeedbackGeometry.questionHook(0f))
+        assertEquals(0.5f, LyricFeedbackGeometry.questionHook(0.41f))
+        assertEquals(1f, LyricFeedbackGeometry.questionHook(0.82f))
+        assertEquals(0f, LyricFeedbackGeometry.questionDot(0.82f))
+        assertEquals(1f, LyricFeedbackGeometry.questionDot(1f), 0.00001f)
+        val state = LyricFeedbackState()
+        state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
+        val fading = state.at(state.durationMs - LyricFeedbackState.RESTORE_MS / 2)
+        assertEquals(0.5f, fading.word)
+        assertEquals(0.5f, fading.playback)
+        assertEquals(1f, fading.question)
+        state.begin(LyricFeedbackState.Mode.PENDING)
+        assertEquals(fading, state.at(0))
+    }
+
     @Test fun navigationMessageIsReplacedBeforeNormalTextReturns() {
         val state = CapsuleTextFeedbackState()
         state.begin("已进入导航界面")

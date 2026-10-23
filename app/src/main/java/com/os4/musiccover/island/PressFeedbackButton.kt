@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PathMeasure
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.hardware.display.DisplayManager
@@ -50,6 +51,9 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
     private val wordGlyph = Path()
     private val wordBounds = RectF()
     private val revealClip = Path()
+    private val questionGlyph = Path()
+    private val questionSegment = Path()
+    private val questionMeasure = PathMeasure()
     private var glyphWidth = -1
     private var glyphHeight = -1
     private var glyphTextSize = -1f
@@ -57,11 +61,24 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
     fun setFeedbackInk(color: Int) { feedbackInk = color; invalidate() }
 
     fun showLyricStatus(enabled: Boolean, color: Int) {
+        showLyricFeedback(if (enabled) LyricFeedbackState.Mode.ENABLED else LyricFeedbackState.Mode.DISABLED,
+            color, if (enabled) "歌词已开启" else "歌词已关闭")
+    }
+
+    fun showLyricUnavailable(color: Int) {
+        showLyricFeedback(LyricFeedbackState.Mode.UNAVAILABLE, color, "未找到可用歌词")
+    }
+
+    fun showLyricPending(color: Int) {
+        showLyricFeedback(LyricFeedbackState.Mode.PENDING, color, "正在查找歌词")
+    }
+
+    private fun showLyricFeedback(mode: LyricFeedbackState.Mode, color: Int, announcement: String) {
         // Cancel listeners before cancelling the animator: its end callback must never restore
         // an old hint over a newer one. Preserve geometry and the refresh-rate vote on reversal.
         cancelFeedback(releaseFrameRate = false)
         feedbackInk = color
-        feedback.begin(enabled)
+        feedback.begin(mode)
         if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE ||
             !ValueAnimator.areAnimatorsEnabled() || !watchHintDisplay()) {
             clearLabel()
@@ -91,7 +108,7 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
             feedbackAnimator = hintAnimator
             hintAnimator.start()
         }
-        announceForAccessibility(if (enabled) "歌词已开启" else "歌词已关闭")
+        announceForAccessibility(announcement)
     }
 
     /** AOD may leave the lockscreen window visible and focused. Observe display power directly,
@@ -200,12 +217,13 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         if (frame.word > 0f && ensureGlyph()) {
             feedbackPaint.color = feedbackInk
             feedbackPaint.style = Paint.Style.FILL
-            feedbackPaint.alpha = (frame.word * (255f - 95f * frame.cross)).toInt()
+            feedbackPaint.alpha = (frame.word * (255f - maxOf(95f * frame.cross, 145f * frame.question))).toInt()
             val glyphSave = canvas.save()
             clipRevealedWord(canvas, frame.reveal)
             canvas.drawPath(wordGlyph, feedbackPaint)
             canvas.restoreToCount(glyphSave)
             if (frame.cross > 0f) drawCross(canvas, frame)
+            if (frame.question > 0f) drawQuestion(canvas, frame)
         }
         canvas.restoreToCount(save)
     }
@@ -221,10 +239,43 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         wordGlyph.computeBounds(wordBounds, true)
         wordGlyph.offset(width / 2f - wordBounds.centerX(), height / 2f - wordBounds.centerY())
         wordGlyph.computeBounds(wordBounds, true)
+        buildQuestionGlyph()
         glyphWidth = width
         glyphHeight = height
         glyphTextSize = size
         return !wordBounds.isEmpty
+    }
+
+    /** One open curve and a separate dot, cached in the same square as the word it annotates. */
+    private fun buildQuestionGlyph() {
+        val left = wordBounds.left
+        val top = wordBounds.top
+        val w = wordBounds.width()
+        val h = wordBounds.height()
+        questionGlyph.rewind()
+        questionGlyph.moveTo(left + w * 0.22f, top + h * 0.25f)
+        questionGlyph.cubicTo(left + w * 0.22f, top - h * 0.04f,
+            left + w * 0.86f, top - h * 0.04f, left + w * 0.82f, top + h * 0.30f)
+        questionGlyph.cubicTo(left + w * 0.80f, top + h * 0.45f,
+            left + w * 0.50f, top + h * 0.43f, left + w * 0.50f, top + h * 0.66f)
+        questionMeasure.setPath(questionGlyph, false)
+    }
+
+    private fun drawQuestion(canvas: Canvas, frame: LyricFeedbackState.Frame) {
+        feedbackPaint.style = Paint.Style.STROKE
+        feedbackPaint.strokeWidth = 2.2f * resources.displayMetrics.density
+        feedbackPaint.alpha = (frame.word * 255f).toInt()
+        val hook = LyricFeedbackGeometry.questionHook(frame.question)
+        questionSegment.rewind()
+        if (hook > 0f && questionMeasure.getSegment(0f, questionMeasure.length * hook, questionSegment, true)) {
+            canvas.drawPath(questionSegment, feedbackPaint)
+        }
+        val dot = LyricFeedbackGeometry.questionDot(frame.question)
+        if (dot > 0f) {
+            feedbackPaint.style = Paint.Style.FILL
+            canvas.drawCircle(wordBounds.centerX(), wordBounds.top + wordBounds.height() * 0.88f,
+                1.3f * resources.displayMetrics.density * kotlin.math.sqrt(dot), feedbackPaint)
+        }
     }
 
     private fun clipRevealedWord(canvas: Canvas, progress: Float) {
@@ -251,15 +302,17 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
 
     private fun drawCross(canvas: Canvas, frame: LyricFeedbackState.Frame) {
         feedbackPaint.style = Paint.Style.STROKE
-        feedbackPaint.strokeWidth = 2.2f * resources.displayMetrics.density
+        feedbackPaint.strokeWidth = 1.7f * resources.displayMetrics.density
         feedbackPaint.alpha = (frame.word * 255f).toInt()
         val first = LyricFeedbackGeometry.firstCrossStroke(frame.cross)
         val second = LyricFeedbackGeometry.secondCrossStroke(frame.cross)
-        val left = wordBounds.left
-        val top = wordBounds.top
-        val bottom = wordBounds.bottom
-        val w = wordBounds.width()
-        val h = wordBounds.height()
+        val ix = wordBounds.width() * LyricFeedbackGeometry.CROSS_INSET
+        val iy = wordBounds.height() * LyricFeedbackGeometry.CROSS_INSET
+        val left = wordBounds.left + ix
+        val top = wordBounds.top + iy
+        val bottom = wordBounds.bottom - iy
+        val w = wordBounds.width() - ix * 2f
+        val h = wordBounds.height() - iy * 2f
         if (first > 0f) canvas.drawLine(left, top, left + w * first, top + h * first, feedbackPaint)
         if (second > 0f) canvas.drawLine(left, bottom, left + w * second, bottom - h * second,
             feedbackPaint)

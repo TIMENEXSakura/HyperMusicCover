@@ -587,6 +587,16 @@ private fun LyricsGroup(
                     },
                 )
                 LyricAppearanceSettings(enabled, module, onChange)
+                SwitchPreference(
+                    title = stringResource(R.string.lyrics_clock_independent),
+                    summary = stringResource(R.string.lyrics_clock_independent_summary),
+                    checked = module.lyricClockIndependent,
+                    enabled = enabled,
+                    onCheckedChange = {
+                        onChange(module.copy(lyricClockIndependent = it))
+                        ModuleBridge.setLyricClockIndependent(context, it)
+                    },
+                )
                 val alignModes = listOf(
                     stringResource(R.string.lyrics_align_left),
                     stringResource(R.string.lyrics_align_center),

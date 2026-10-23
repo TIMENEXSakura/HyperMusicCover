@@ -377,12 +377,15 @@ final class LyricView extends View {
             popA = new Spring(1f), popB = new Spring();
     private float popToX, popToY, popBlur;
     private float bandTop, bandBottom;
-    /** Clock/card occlusion only; neither travelling edge changes the layout band's anchor. */
+    /** Fixed upper edge by default, optional clock occlusion, and the live card clip below. */
     private float clipBandTop, clipBandBottom;
     private String layoutClockSource = "live";
     private final float[] bandBounds = new float[2];
     private boolean bandOk;
     private float anchorFix;
+    /** Bounded entry diagnostics: a start and at most three distinct visible draw frames. */
+    private long placementRequest = Long.MIN_VALUE, placementFrameAt = Long.MIN_VALUE;
+    private int placementBuild = -1, placementFrames;
 
     private long lastStep;
 
@@ -675,7 +678,10 @@ final class LyricView extends View {
             });
             return changed;
         }
-        if (lines.isEmpty()) return changed;
+        // A layout can finish before the cover/clock admits its band. Initialising focus in
+        // that interval records anchorFix=0 against an invalid band, then animates a scroll
+        // correction when the real band arrives. No lyric has been drawn to preserve yet.
+        if (lines.isEmpty() || !LyricBandGeometry.readyToPlace(bandOk, show, showTo)) return changed;
         // Borrowed translations fading in: a frame each until they are all the way in.
         if (transRevealAt != 0L) {
             if (now - transRevealAt >= TRANS_REVEAL_MS) transRevealAt = 0L;
@@ -724,7 +730,7 @@ final class LyricView extends View {
             sf = singing.last;
             dots = -1;
         }
-        boolean initialFocus = focus < 0;
+        boolean initialFocus = LyricBandGeometry.initialPlacement(focus, startingPage);
         int oldFocus = focus;
         int oldDots = dotsFor;
         focus = sf;
@@ -740,7 +746,7 @@ final class LyricView extends View {
             why |= 512;
         }
         int key = dots >= 0 ? -(dots + 1) : sf;
-        if (key != focusKey || groupChanged) {
+        if (initialFocus || key != focusKey || groupChanged) {
             // Whether this was a seek is a question about the playhead, not about how many lines
             // it crossed. Counting lines got it wrong in both directions and inconsistently
             // inside one drag: eight lines is seconds of a fast song and minutes of a slow one,
@@ -748,7 +754,7 @@ final class LyricView extends View {
             // dense and cut straight to the target when they happened to be sparse.
             // First lines of a song go straight to their place - there is nothing on screen for
             // them to travel from. A seek travels: see the spring picked for it below.
-            boolean first = focus < 0;
+            boolean first = initialFocus;
             boolean seek = !first && LyricTransition.recentSeek(now, jumpedAt, SEEK_WINDOW_MS);
             focus = sf;
             dotsFor = dots;
@@ -760,6 +766,7 @@ final class LyricView extends View {
                 // A freshly laid out song has nowhere to slide from, and the correction it needs
                 // is not the one the song before it left behind: taken, not eased into.
                 anchorFix = anchorFixTarget();
+                beginPlacementTrace();
             } else if (seek) {
                 // A drag scrolls there rather than cutting, however far it went - watching the
                 // lyrics travel is what makes a seek legible, and the direction it travels says
@@ -1587,9 +1594,9 @@ final class LyricView extends View {
     }
 
     private void snap(float target) {
+        LyricBandGeometry.snapScroll(target, scroll, aim, nextAim, vel);
+        java.util.Arrays.fill(aimAt, 0L);
         for (int i = 0; i < scroll.length; i++) {
-            scroll[i] = aim[i] = nextAim[i] = target;
-            vel[i] = 0f;
             emph[i] = 0f;
             lit[i] = 0f;
             scale[i] = INACTIVE_SCALE;
@@ -1930,9 +1937,9 @@ final class LyricView extends View {
         if (lines.isEmpty() && show == 0f) return false;
         // Both edges as drawn, in this view's unzoomed frame: a swipe zooms the clock's and the
         // card's containers and not this layer. See ClockCollapse.contentBottomFor.
-        float drawnClock = ClockCollapse.contentBottomFor(this);
         boolean capsule = LockLyrics.capsuleLayoutOrigin();
-        float clock = LyricBandGeometry.layoutClock(capsule, drawnClock,
+        float clock = LyricBandGeometry.layoutClock(capsule,
+                capsule ? Float.NaN : ClockCollapse.contentBottomFor(this),
                 capsule ? ClockCollapse.coverContentBottomFor(this) : Float.NaN);
         layoutClockSource = !capsule ? "live" : Float.isFinite(clock) ? "cover-target" : "cover-pending";
         boolean ok = false;
@@ -1947,8 +1954,11 @@ final class LyricView extends View {
             if (LockLyrics.sStyle.writeBand(clock, layoutFloor, density, textPx, bandBounds)) {
                 top = bandBounds[0] - me;
                 bottom = bandBounds[1] - me;
-                clipTop = capsule ? LyricBandGeometry.visibleTop(bandBounds[0], clock,
-                        drawnClock) - me : top;
+                // Independent motion keeps the entire group intact. Disabling that option
+                // restores the moving clock's old occlusion without changing the layout.
+                clipTop = capsule ? LyricBandGeometry.visibleTop(LockLyrics.sClockIndependentMotion,
+                        bandBounds[0], clock, LockLyrics.sClockIndependentMotion ? Float.NaN
+                                : ClockCollapse.contentBottomFor(this)) - me : top;
                 clipBottom = capsule ? LyricBandGeometry.visibleBottom(bandBounds[0],
                         bandBounds[1], layoutFloor, floor) - me : bottom;
                 ok = bottom - top >= MIN_BAND_ROWS * textPx - 0.01f;
@@ -2051,6 +2061,45 @@ final class LyricView extends View {
         return bandTop + ANCHOR * (bandBottom - bandTop) + anchorFix;
     }
 
+    private void beginPlacementTrace() {
+        if (!capsulePresentation()) return;
+        long request = LockLyrics.contrastRequestId();
+        if (placementRequest == request && placementBuild == buildGen) return;
+        placementRequest = request;
+        placementBuild = buildGen;
+        placementFrames = 3;
+        placementFrameAt = Long.MIN_VALUE;
+        tracePlacement("start");
+    }
+
+    private void tracePlacementFrame() {
+        if (placementFrames <= 0 || !capsulePresentation()) return;
+        long frameAt = now();
+        if (frameAt == placementFrameAt) return;
+        placementFrameAt = frameAt;
+        tracePlacement("frame" + (4 - placementFrames));
+        placementFrames--;
+    }
+
+    private void tracePlacement(String stage) {
+        try {
+            getLocationOnScreen(loc);
+            Xp.log(TAG + "placement " + stage + " request=" + placementRequest + " build=" + placementBuild
+                    + " view=" + Integer.toHexString(System.identityHashCode(this))
+                    + " phase=" + ClockCollapse.phase() + " band=" + r2(bandTop) + ".." + r2(bandBottom)
+                    + " clip=" + r2(clipBandTop) + ".." + r2(clipBandBottom)
+                    + " anchor=" + r2(anchorY()) + " focus=" + focus
+                    + " scroll=" + (focus >= 0 && focus < scroll.length ? r2(scroll[focus]) : "none")
+                    + " show=" + r2(show) + " offset=" + r2(presentationOffset())
+                    + " groupScale=" + r2(presentationScale()) + " fit=" + r2(transition.fit)
+                    + " windowY=" + loc[1] + " viewY=" + r2(getTranslationY())
+                    + " viewScale=" + r2(getScaleY()) + " viewAlpha=" + r2(getAlpha())
+                    + " clock=" + layoutClockSource + " clockIndependent=" + LockLyrics.sClockIndependentMotion);
+        } catch (Throwable ignored) {
+            // Diagnostics must never disturb a SystemUI draw or its animation callbacks.
+        }
+    }
+
     private boolean rowOnScreen(int index) {
         if (transition.alpha(index) <= 0.003f) return false;
         float center = (bandTop + bandBottom) / 2f;
@@ -2106,6 +2155,7 @@ final class LyricView extends View {
         if (show <= 0.003f || lines.isEmpty() || focus < 0 || main.length != lines.size()) return;
         float bandH = clipBandBottom - clipBandTop;
         if (bandH <= 0f) return;
+        tracePlacementFrame();
         // The float, added to the anchor so the lines, their dots and their edge fades all move
         // as one block: a line's alpha is taken from its own position against the band's edges,
         // and offsetting the canvas instead would have left those alphas describing where the

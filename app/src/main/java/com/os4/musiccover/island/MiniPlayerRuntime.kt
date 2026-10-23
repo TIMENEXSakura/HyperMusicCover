@@ -1127,6 +1127,11 @@ object MiniPlayerRuntime {
 
     @JvmStatic fun cancelSceneFeedback() { live().forEach { it.cancelSceneFeedback() } }
 
+    /** A coalesced main-thread notification from the actual lyric lookup/settle path. */
+    @JvmStatic fun lyricAvailabilityChanged() {
+        live().forEach { runCatching { it.onLyricAvailabilityChanged() } }
+    }
+
     @JvmStatic fun rememberScene() { restoreScene = true }
 
     @JvmStatic fun forgetRestoreScene() { restoreScene = false }

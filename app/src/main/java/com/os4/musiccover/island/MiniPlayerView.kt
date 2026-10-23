@@ -157,6 +157,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     private var artworkOverride: android.graphics.drawable.Drawable? = null
     private var lastPlaying: Boolean? = null
     private var boundIdentity: String? = null
+    private var bindingVersion = 0L
     private var normalTitle: CharSequence? = null
     private var normalArtist: CharSequence? = null
     private val statusFeedback = CapsuleTextFeedback { renderText() }
@@ -164,12 +165,25 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
     fun bindIdentity(key: String) {
         if (boundIdentity == key) return
         boundIdentity = key
+        bindingVersion++
         clearStatus()
         toggle.clearLabel()
     }
 
+    override fun feedbackBindingVersion(): Long = bindingVersion
+
+    override fun clearLyricFeedback() = toggle.clearLabel()
+
     override fun showLyricStatus(enabled: Boolean) {
         toggle.showLyricStatus(enabled, ink)
+    }
+
+    override fun showLyricUnavailable() {
+        toggle.showLyricUnavailable(ink)
+    }
+
+    override fun showLyricPending() {
+        toggle.showLyricPending(ink)
     }
 
     override fun showStatus(text: String) {

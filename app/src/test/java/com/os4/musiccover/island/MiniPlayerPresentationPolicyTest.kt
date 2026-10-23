@@ -196,6 +196,28 @@ class MiniPlayerPresentationPolicyTest {
             presentation(keyguardOwned = false, sceneVisible = false))
     }
 
+    @Test fun navigationSmallIslandSurvivesMusicDragAndReversal() {
+        // The big music capsule becomes a card; navigation never gets a replacement morph.
+        for (landing in listOf(false, true, false)) {
+            assertTrue(MiniPlayerPresentationPolicy.smallIslandDuringMorph(
+                musicOwnsSmall = false, followerOwnsSmall = false, landing = landing))
+        }
+    }
+
+    @Test fun aSmallMusicIslandIsHiddenOnlyWhileItsReplacementIsAway() {
+        assertFalse(MiniPlayerPresentationPolicy.smallIslandDuringMorph(true, false, false))
+        assertTrue(MiniPlayerPresentationPolicy.smallIslandDuringMorph(true, false, true))
+        // Reversing before the landing completes gives drawing back to the morph.
+        assertFalse(MiniPlayerPresentationPolicy.smallIslandDuringMorph(true, false, false))
+    }
+
+    @Test fun anActualNotificationFollowerStillOwnsItsSmallIslandUntilLanding() {
+        assertFalse(MiniPlayerPresentationPolicy.smallIslandDuringMorph(false, true, false))
+        assertTrue(MiniPlayerPresentationPolicy.smallIslandDuringMorph(false, true, true))
+        // A cancelled/missing follower cannot keep the real notification hidden.
+        assertTrue(MiniPlayerPresentationPolicy.smallIslandDuringMorph(false, false, false))
+    }
+
     @Test fun disabledOrEndedSessionRestoresNative() {
         assertEquals(MiniPlayerPresentation(false, false), presentation(enabled = false))
         assertEquals(MiniPlayerPresentation(false, false), presentation(sessionUsable = false))

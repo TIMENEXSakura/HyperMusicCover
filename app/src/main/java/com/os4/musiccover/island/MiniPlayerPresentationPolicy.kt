@@ -31,6 +31,11 @@ internal object MiniPlayerPresentationPolicy {
                       nativeRequested: Boolean, coverActive: Boolean): Boolean =
         cardPresent && sessionUsable && !musicInRow && (nativeRequested || coverActive)
 
+    /** Hide a small island only when a morph actually draws its replacement. */
+    fun smallIslandDuringMorph(musicOwnsSmall: Boolean, followerOwnsSmall: Boolean,
+                               landing: Boolean): Boolean =
+        landing || !(musicOwnsSmall || followerOwnsSmall)
+
     fun evaluate(input: MiniPlayerPresentationInput): MiniPlayerPresentation {
         val available = input.enabled && input.sessionUsable
         // A body tap uses the same background scene while leaving the media card folded.

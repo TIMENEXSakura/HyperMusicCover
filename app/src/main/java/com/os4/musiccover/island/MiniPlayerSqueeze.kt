@@ -33,17 +33,33 @@ internal class ShortcutDisc(context: Context) : FrameLayout(context), CapsuleFee
     private val element = MaterialElement(context)
 
     private var feedbackIdentity: String? = null
+    private var bindingVersion = 0L
     private val statusFeedback = CapsuleTextFeedback { renderCardText() }
 
     fun bindIdentity(key: String) {
         if (feedbackIdentity == key) return
         feedbackIdentity = key
+        bindingVersion++
         statusFeedback.clear()
+        (icon as? PressFeedbackButton)?.clearLabel()
+    }
+
+    override fun feedbackBindingVersion(): Long = bindingVersion
+
+    override fun clearLyricFeedback() {
         (icon as? PressFeedbackButton)?.clearLabel()
     }
 
     override fun showLyricStatus(enabled: Boolean) {
         (icon as? PressFeedbackButton)?.showLyricStatus(enabled, cardTitle.currentTextColor)
+    }
+
+    override fun showLyricUnavailable() {
+        (icon as? PressFeedbackButton)?.showLyricUnavailable(cardTitle.currentTextColor)
+    }
+
+    override fun showLyricPending() {
+        (icon as? PressFeedbackButton)?.showLyricPending(cardTitle.currentTextColor)
     }
 
     override fun showStatus(text: String) {

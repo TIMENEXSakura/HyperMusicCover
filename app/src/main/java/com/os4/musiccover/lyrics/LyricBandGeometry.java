@@ -4,6 +4,31 @@ package com.os4.musiccover.lyrics;
 public final class LyricBandGeometry {
     private LyricBandGeometry() {}
 
+    /** One measured clock destination, kept across phase changes but never across old hosts. */
+    public static final class ClockTarget {
+        private java.lang.ref.WeakReference<Object> owner = new java.lang.ref.WeakReference<>(null);
+        private int width, height;
+        private float bottom = Float.NaN;
+
+        public void clear() { owner.clear(); bottom = Float.NaN; }
+
+        public void record(Object target, int screenWidth, int screenHeight, float value) {
+            if (target == null || screenWidth <= 0 || screenHeight <= 0 || !Float.isFinite(value)) {
+                clear();
+                return;
+            }
+            if (owner.get() != target) owner = new java.lang.ref.WeakReference<>(target);
+            width = screenWidth;
+            height = screenHeight;
+            bottom = value;
+        }
+
+        public float read(Object target, int screenWidth, int screenHeight) {
+            return target != null && owner.get() == target && width == screenWidth && height == screenHeight
+                    ? bottom : Float.NaN;
+        }
+    }
+
     /** Stable layout reference for one displayed page, independent of the visible clip. */
     static final class Reference {
         private long request = Long.MIN_VALUE;
@@ -38,9 +63,25 @@ public final class LyricBandGeometry {
         return capsule ? coverClock : drawnClock;
     }
 
-    /** The clock can uncover rows as it shrinks, without pushing or resizing those rows. */
-    static float visibleTop(float layoutTop, float layoutClock, float drawnClock) {
-        if (!Float.isFinite(layoutTop) || !Float.isFinite(layoutClock)
+    /** Invisible rows have no old screen position to preserve with a scroll rebase. */
+    static boolean initialPlacement(int focus, boolean startingPage) {
+        return focus < 0 || startingPage;
+    }
+
+    static boolean readyToPlace(boolean bandReady, float visible, float targetVisibility) {
+        return bandReady && (visible > 0f || targetVisibility > 0f);
+    }
+
+    static void snapScroll(float destination, float[] scroll, float[] aim, float[] nextAim, float[] velocity) {
+        java.util.Arrays.fill(scroll, destination);
+        java.util.Arrays.fill(aim, destination);
+        java.util.Arrays.fill(nextAim, destination);
+        java.util.Arrays.fill(velocity, 0f);
+    }
+
+    /** Optional moving-clock occlusion; the default keeps the entire group independent of it. */
+    static float visibleTop(boolean independent, float layoutTop, float layoutClock, float drawnClock) {
+        if (independent || !Float.isFinite(layoutTop) || !Float.isFinite(layoutClock)
                 || !Float.isFinite(drawnClock)) return layoutTop;
         return Math.max(layoutTop, drawnClock + Math.max(0f, layoutTop - layoutClock));
     }

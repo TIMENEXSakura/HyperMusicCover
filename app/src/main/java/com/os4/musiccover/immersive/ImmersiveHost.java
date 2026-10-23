@@ -500,6 +500,10 @@ public final class ImmersiveHost {
         sOpen = scene;
         // Opened after the cover: the page is the later one now.
         sYield = false;
+        if (scene.isNavigation()) {
+            try { Main.onNavigationPageOpened(scene.id()); }
+            catch (Throwable failure) { Xp.w(TAG + "music background suspended: " + failure); }
+        }
         // Opened again while its close is still fading: it turns round from where it is.
         if (sLeaving == scene) sLeaving = null;
         sFadeInNext = litNow();
@@ -542,6 +546,7 @@ public final class ImmersiveHost {
         // Already out of sight under the cover, or on its way there: nothing more to fade.
         if (wasYielding) {
             Xp.log(TAG + "close " + scene.id() + " (had yielded to the cover)");
+            restoreNavigationBackground(scene);
             apply();
             return;
         }
@@ -556,7 +561,16 @@ public final class ImmersiveHost {
             sMain.postDelayed(LEAVE_CHECK, COVER_DECIDE_MS);
         }
         Xp.log(TAG + "close " + scene.id() + (sLeaving == scene ? ", fading out" : ""));
+        // Claim the configured music background before releasing the immersive clock/slot.
+        // LEAVE_CHECK already waits for this cover's usual wallpaper acknowledgement.
+        restoreNavigationBackground(scene);
         apply();
+    }
+
+    private static void restoreNavigationBackground(ImmersiveScene scene) {
+        if (!scene.isNavigation()) return;
+        try { Main.onNavigationPageClosed(scene.id()); }
+        catch (Throwable failure) { Xp.w(TAG + "music background handoff failed: " + failure); }
     }
 
     /** From a scene: it has become ready, or stopped being. */
@@ -570,9 +584,14 @@ public final class ImmersiveHost {
             if (sSlot != null) sSlot.invalidate();
         } else {
             sLetGo.remove(scene);
-            if (sPrepared.remove(scene)) scene.release();
-            if (sOpen == scene) {
+            boolean closing = sOpen == scene;
+            if (closing) {
                 sOpen = null;
+                sYield = false;
+                restoreNavigationBackground(scene);
+            }
+            if (sPrepared.remove(scene)) scene.release();
+            if (closing) {
                 try {
                     LockIslands.INSTANCE.forgetScene(scene);
                 } catch (Throwable t) {

@@ -31,6 +31,7 @@ object SettingsBackup {
     private const val KEY_MEDIA_BAR_GLOW = "mediaBarGlow"
     private const val KEY_LYRICS_KEEP_ON = "lyricsKeepOn"
     private const val KEY_LYRICS_HDR = "lyricsHdr"
+    private const val KEY_LYRIC_CLOCK_INDEPENDENT = "lyricClockIndependent"
     private const val KEY_LYRICS_TRANS = "lyricsTranslation"
     private const val KEY_AOD_BIG_CLOCK = "aodBigClock"
     private const val KEY_LYRICS_ROMA = "lyricsRomanisation"
@@ -67,6 +68,7 @@ object SettingsBackup {
             json.put(KEY_MEDIA_BAR_GLOW, module.mediaBarGlow)
             json.put(KEY_LYRICS_KEEP_ON, module.lyricsKeepOn)
             json.put(KEY_LYRICS_HDR, module.lyricsHdr)
+            json.put(KEY_LYRIC_CLOCK_INDEPENDENT, module.lyricClockIndependent)
             json.put(KEY_LYRICS_TRANS, module.lyricsTrans)
             json.put(KEY_AOD_BIG_CLOCK, module.aodBigClock)
             json.put(KEY_LYRICS_ROMA, module.lyricsRoma)
@@ -146,6 +148,9 @@ object SettingsBackup {
             }
             if (obj.has(KEY_LYRICS_HDR)) {
                 ModuleBridge.setLyricsHdr(context, obj.getBoolean(KEY_LYRICS_HDR))
+            }
+            if (obj.has(KEY_LYRIC_CLOCK_INDEPENDENT)) {
+                ModuleBridge.setLyricClockIndependent(context, obj.getBoolean(KEY_LYRIC_CLOCK_INDEPENDENT))
             }
             if (obj.has(KEY_LYRICS_KEEP_ON)) {
                 ModuleBridge.setLyricsKeepOn(context, obj.getBoolean(KEY_LYRICS_KEEP_ON))

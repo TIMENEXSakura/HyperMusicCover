@@ -95,11 +95,10 @@ public class LyricBandGeometryTest {
         assertEquals(1500f, reference.floor(1L, 2400f, Float.NaN), 0f);
     }
 
-    @Test public void openingClockUncoversRowsWithoutMovingTheirReadingAnchorOrFit() {
+    @Test public void independentOpeningClockCannotClipRowsOrMoveTheirReadingAnchorOrFit() {
         float[] settled = band(1500f);
         float anchor = (settled[0] + settled[1]) / 2f;
         float fit = LyricFocus.fit(1000f, settled[1] - settled[0]);
-        float previousClip = Float.POSITIVE_INFINITY;
         for (float drawnClock : new float[]{1700f, 1400f, 1100f, 800f, 600f}) {
             float[] opening = new float[2];
             float targetClock = LyricBandGeometry.layoutClock(true, drawnClock, 600f);
@@ -107,15 +106,11 @@ public class LyricBandGeometryTest {
             assertArrayEquals(settled, opening, 0f);
             assertEquals(anchor, (opening[0] + opening[1]) / 2f, 0f);
             assertEquals(fit, LyricFocus.fit(1000f, opening[1] - opening[0]), 0f);
-            float clipTop = LyricBandGeometry.visibleTop(opening[0], targetClock, drawnClock);
-            assertTrue(clipTop >= opening[0]);
-            assertTrue(clipTop >= drawnClock);
-            assertTrue(clipTop < previousClip);
-            previousClip = clipTop;
+            float clipTop = LyricBandGeometry.visibleTop(true, opening[0], targetClock, drawnClock);
+            assertEquals(settled[0], clipTop, 0f);
             // The independently rising card still consumes only the bottom of this band.
             assertEquals(clip(settled, 1500f, 1800f), clip(opening, 1500f, 1800f), 0f);
         }
-        assertEquals(settled[0], previousClip, 0f);
     }
 
     @Test public void missingDestinationDoesNotBrieflyLayOutAgainstTheFullClock() {
@@ -138,10 +133,70 @@ public class LyricBandGeometryTest {
             float[] bounds = new float[2];
             assertTrue(style.writeBand(600f, 1500f, 3f, size, bounds));
             float gap = bounds[0] - 600f;
-            assertEquals(950f + gap, LyricBandGeometry.visibleTop(bounds[0], 600f, 950f), 0.001f);
-            assertEquals(bounds[0], LyricBandGeometry.visibleTop(bounds[0], 600f, 600f), 0f);
-            assertEquals(bounds[0], LyricBandGeometry.visibleTop(bounds[0], 600f, Float.NaN), 0f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(true, bounds[0], 600f, 950f), 0f);
+            // Turning the new independent-motion switch off restores the old clock occlusion.
+            assertEquals(950f + gap, LyricBandGeometry.visibleTop(false, bounds[0], 600f, 950f), 0.001f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(false, bounds[0], 600f, 600f), 0f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(false, bounds[0], 600f, Float.NaN), 0f);
         }
+    }
+
+    @Test public void focusWaitsForAVisibleValidBandInsteadOfTakingAZeroAnchor() {
+        assertFalse(LyricBandGeometry.readyToPlace(false, 0f, 1f));
+        assertFalse(LyricBandGeometry.readyToPlace(true, 0f, 0f));
+        assertTrue(LyricBandGeometry.readyToPlace(true, 0f, 1f));
+        assertTrue(LyricBandGeometry.readyToPlace(true, 0.4f, 0f)); // A closing page still animates.
+        assertTrue(LyricBandGeometry.initialPlacement(-1, false));
+        assertTrue(LyricBandGeometry.initialPlacement(7, true)); // Reused parked view.
+        assertFalse(LyricBandGeometry.initialPlacement(7, false)); // Normal line change.
+    }
+
+    @Test public void firstVisibleBandDoesNotSpringBackFromAnInvisibleOldAnchor() {
+        float[] band = band(1500f);
+        float centeredFix = 0.1f * (band[1] - band[0]) - 500f / 2f;
+        assertTrue(centeredFix < 0f); // A tall lead/translation/background group.
+        float anchor = band[0] + 0.4f * (band[1] - band[0]) + centeredFix;
+        float destination = 840f;
+        float[] scroll = {destination}, aim = {destination}, next = {destination}, velocity = {85f};
+        // Prior code had already made focus=7 while bandOk=false. Rebasing the later band's
+        // correction put the first visible line below its destination, then sprang it upward.
+        LyricTransition.shift(centeredFix, scroll, aim, next);
+        assertTrue(anchor + destination - scroll[0] > anchor + 100f);
+        if (LyricBandGeometry.initialPlacement(7, true))
+            LyricBandGeometry.snapScroll(destination, scroll, aim, next, velocity);
+        assertEquals(anchor, anchor + destination - scroll[0], 0f);
+        assertEquals(0f, scroll[0] - aim[0], 0f);
+        assertEquals(0f, velocity[0], 0f);
+        assertEquals(destination, next[0], 0f);
+        // A visible group's rebase is still continuous and does not become an initial snap.
+        assertFalse(LyricBandGeometry.initialPlacement(7, false));
+    }
+
+    @Test public void clockPhaseChangeKeepsTheLastTargetUntilTheOnPoseIsWritten() {
+        LyricBandGeometry.ClockTarget target = new LyricBandGeometry.ClockTarget();
+        Object clock = new Object();
+        target.record(clock, 1080, 2400, 600f);
+        assertEquals(600f, target.read(clock, 1080, 2400), 0f);
+        // Merely landing ENTER -> ON does not publish the preceding moving ink (e.g. 640).
+        assertEquals(600f, target.read(clock, 1080, 2400), 0f);
+        target.record(clock, 1080, 2400, 601f); // First genuinely placed ON pose.
+        assertEquals(601f, target.read(clock, 1080, 2400), 0f);
+        target.record(clock, 1080, 2400, 650f); // Later legitimate layout changes are not frozen.
+        assertEquals(650f, target.read(clock, 1080, 2400), 0f);
+    }
+
+    @Test public void clockTargetCannotSurviveRotationHostReplacementOrExplicitInvalidation() {
+        LyricBandGeometry.ClockTarget target = new LyricBandGeometry.ClockTarget();
+        Object clock = new Object();
+        target.record(clock, 1080, 2400, 600f);
+        assertTrue(Float.isNaN(target.read(clock, 2400, 1080)));
+        assertTrue(Float.isNaN(target.read(new Object(), 1080, 2400)));
+        target.clear(); // New entry, settings update, attachment change or release.
+        assertTrue(Float.isNaN(target.read(clock, 1080, 2400)));
+        target.record(clock, 1080, 2400, Float.NaN);
+        assertTrue(Float.isNaN(target.read(clock, 1080, 2400)));
+        target.record(clock, 1080, 2400, 630f);
+        assertEquals(630f, target.read(clock, 1080, 2400), 0f);
     }
 
     @Test public void shrinkingTheGroupCanBringAnOffscreenRowBackInsideTheFixedClip() {

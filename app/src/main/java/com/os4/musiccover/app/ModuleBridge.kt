@@ -131,6 +131,8 @@ object ModuleBridge {
         val lyricsKeepOn: Boolean = false,
         /** Draw the singing words brighter than white on an HDR screen. */
         val lyricsHdr: Boolean = false,
+        /** Keep capsule lyric animation independent of the moving clock's clipping edge. */
+        val lyricClockIndependent: Boolean = true,
         /** Draw each line's translation under it. On unless the user turns it off. */
         val lyricsTrans: Boolean = true,
         /**
@@ -494,6 +496,9 @@ object ModuleBridge {
 
     fun setLyricsHdr(context: Context, on: Boolean) =
         send(context, "lyrichdr") { putExtra("on", on) }
+
+    fun setLyricClockIndependent(context: Context, on: Boolean) =
+        send(context, "lyricclockindependent") { putExtra("on", on) }
 
     fun setLyricsKeepOn(context: Context, on: Boolean) =
         send(context, "lyrickeep") { putExtra("on", on) }
@@ -938,6 +943,7 @@ object ModuleBridge {
             lyrics = b.getBoolean("lyrics", true),
             lyricsKeepOn = b.getBoolean("lyrickeep", false),
             lyricsHdr = b.getBoolean("lyrichdr", false),
+            lyricClockIndependent = b.getBoolean("lyricclockindependent", true),
             // Defaults the other way: this one is on for anyone whose module predates the key.
             lyricsTrans = b.getBoolean("lyrictrans", true),
             // The module says whether it keeps its own clock; the row says whether the big one
