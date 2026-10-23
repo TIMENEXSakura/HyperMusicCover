@@ -60,7 +60,12 @@ Plus5 的 `navigation-theme-fallback` 使用系统主题推断地图深浅，不
 
 - 本地独立 JVM 集成运行 **208 项测试全部通过**，覆盖地图像素统计／稳定性、图层重建保持颜色、颜色渐变打断、句尾与和声结束、布局与裁切、页面保留，以及已有 TTML、LRC、来源回退和配置相关纯逻辑。
 - `git diff --check` 通过。实际触摸入口及异步封面提交通过源码调用链检查，不能等同于 Android 触摸测试。
-- Android 构建、完整单元测试与 Lint 由 GitHub Actions 执行，结果在本文件后续补充。
+- [GitHub Actions 构建](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39883893153) 对代码提交 `d072470` 的 Release APK、完整单元测试、Lint 与 Xposed 入口检查全部通过。
+- 云端 **57 组、383 项测试通过**，0 失败／错误／跳过；Lint 316 条警告、5 条提示、0 错误。较 Plus5 新增的 5 条全部为地图图层反射访问的 `PrivateApi` 警告，反映 ROM 兼容性限制，不能靠构建确认实际图层捕获可用。
+- APK：`HyperMusicCover-0.9.45-Plus6.apk`，版本号 `945010`，11592095 字节。已解码 Manifest 确认版本／应用 ID，并确认实际地图采样与胶囊诊断进入 DEX。
+- APK SHA256：`d607bd157e715d0f3db426a3ba090b01bd5c425b1b34ad9e9291a67e14b5ca03`。
+- v2 签名验证通过，证书 SHA256：`296a9ea955897efb1a4f5abd15583a03ec317ef2ac2adcc7ebbb9230c89d2540`。与 Plus5 不同，不能直接普通覆盖安装；更换测试版前先导出配置。
+- APK、原始测试报告、构建日志、归档摘要、签名与核验结果保存在 `../artifacts/d072470/`（相对仓库根目录）。当前环境未执行 HyperOS 锁屏真机验证。
 
 ## 真机验收
 
