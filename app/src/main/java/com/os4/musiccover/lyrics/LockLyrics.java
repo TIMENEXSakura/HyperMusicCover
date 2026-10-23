@@ -74,6 +74,11 @@ public final class LockLyrics {
 
     /** Actual scene destruction/new non-capsule entry, not a card presentation handoff. */
     public static void resetCapsuleLayoutOrigin() { sCapsuleLayoutOrigin = false; }
+    /** A new ordinary entry must not inherit the previous capsule's closing presentation. */
+    public static void prepareStandardPresentation() {
+        resetCapsuleLayoutOrigin();
+        sCapsuleFadeOnly = false;
+    }
     /** A new visibility request re-evaluates temporary navigation contrast once. */
     private static long sContrastRequestId;
 

@@ -3819,7 +3819,7 @@ public class Main extends XposedModule {
         // start out of a card that then never turns into anything.
         if (!sCoverFeatureOn || sCapsuleOverNavigation) return;
         if (!fromCapsule && !LockLyrics.capsulePageRequested())
-            LockLyrics.resetCapsuleLayoutOrigin();
+            LockLyrics.prepareStandardPresentation();
         long t0 = System.nanoTime();
         enterFromTapNow(why);
         noteToggleCost("in", System.nanoTime() - t0);
