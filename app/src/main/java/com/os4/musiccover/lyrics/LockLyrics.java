@@ -65,22 +65,67 @@ public final class LockLyrics {
      * cover. Written by setEnabled, toggleByTap and the state file, and nowhere else.
      */
     public static volatile boolean sTapHidden;
-    /** Transient page request, separate from cover mode and the media-card morph. */
+    /** A capsule's page request. The background still belongs to the configured cover scene. */
     private static boolean sCapsulePage;
 
-    public static boolean toggleFromCapsule(String key, MediaController controller) {
-        boolean visible = wanted() && (sCapsulePage || Main.coverModeOn());
-        sCapsulePage = !visible && !Main.coverModeOn();
-        sTapHidden = visible;
-        if (!visible) notePopOrigin(com.os4.musiccover.island.MiniPlayerRuntime.musicIslandCentreOnScreen());
-        show(!visible, key, controller, "hidden by capsule");
-        ModuleState.saveState();
-        return !visible;
+    /** Includes a request still loading, so a second tap can cancel it immediately. */
+    public static boolean capsulePageRequested() {
+        return sCapsulePage;
     }
 
+    /** Main selects the normal background scene first; this only changes the lyric page. */
+    public static void setCapsuleVisible(boolean visible, String key, MediaController controller) {
+        sCapsulePage = visible;
+        sTapHidden = !visible;
+        if (visible) notePopOrigin(com.os4.musiccover.island.MiniPlayerRuntime.musicIslandCentreOnScreen());
+        else notePopTarget(com.os4.musiccover.island.MiniPlayerRuntime.musicIslandHomeOnScreen());
+        show(visible, key, controller, "hidden by capsule");
+        ModuleState.saveState();
+        startCapsuleDiagnostics(visible);
+    }
+
+    /** Handoff to the normal card/cover keeps the lyric choice and loaded data. */
     public static void clearCapsulePage() {
         sCapsulePage = false;
+        Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         refresh();
+    }
+
+    // A request/animation is not proof of drawing. Three bounded follow-ups capture the
+    // missing-data, host, clock, layout and alpha gates without recording song/lyric contents.
+    // New requests and handoffs cancel this one callback; there is no permanent retry loop.
+    private static int sCapsuleDiagnosticStep;
+    private static final Runnable CAPSULE_DIAGNOSTIC = new Runnable() {
+        @Override public void run() {
+            if (!sCapsulePage) return;
+            logCapsuleVisibility();
+            if (++sCapsuleDiagnosticStep < 3) {
+                Main.main().postDelayed(this, sCapsuleDiagnosticStep == 1 ? 1250L : 3500L);
+            }
+        }
+    };
+
+    private static void startCapsuleDiagnostics(boolean visible) {
+        Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
+        sCapsuleDiagnosticStep = 0;
+        logCapsuleVisibility();
+        if (visible) Main.main().postDelayed(CAPSULE_DIAGNOSTIC, 250L);
+    }
+
+    private static void logCapsuleVisibility() {
+        View anchor = Main.sContainer;
+        LyricView view = sView;
+        Xp.log(TAG + "capsule visibility requested=" + sCapsulePage + " hidden=" + sTapHidden
+                + " keyReady=" + !sKey.isEmpty() + " source=" + srcName(sSource)
+                + " loading=" + sLoading + " lines=" + sLines.size()
+                + " cover=" + Main.coverModeOn() + " hdr=" + hdr() + " window=" + wantsWindow()
+                + " shown=" + wantsShown() + " phase=" + ClockCollapse.phase()
+                + " clockMeasured=" + !Float.isNaN(ClockCollapse.contentBottomOnScreen())
+                + " pageProgress=" + pageProgress()
+                + " container=" + (anchor == null ? "none" : "attached="
+                    + anchor.isAttachedToWindow() + "/shown=" + anchor.isShown()
+                    + "/alpha=" + anchor.getAlpha())
+                + " view={" + (view == null ? "none" : view.renderStatus()) + "}");
     }
 
 
@@ -1267,7 +1312,7 @@ public final class LockLyrics {
      */
     private static String lyricKey(String cardKey, MediaController c) {
         String fallback = cardKey == null ? "" : cardKey;
-        if (c == null || fallback.isEmpty()) return fallback;
+        if (c == null) return fallback;
         try {
             android.media.MediaMetadata md = c.getMetadata();
             if (md == null) return fallback;
@@ -1275,8 +1320,8 @@ public final class LockLyrics {
             String artist = TrackName.singer(c.getPackageName(),
                     md.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST), album);
             long dur = md.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION);
-            if (artist == null && album == null && dur <= 0) return fallback;
-            return c.getPackageName() + "|" + artist + "|" + album + "|" + dur;
+            return LyricTrackKey.fromMetadata(fallback, c.getPackageName(),
+                    md.getString(android.media.MediaMetadata.METADATA_KEY_TITLE), artist, album, dur);
         } catch (Throwable t) {
             return fallback;
         }
@@ -1385,7 +1430,10 @@ public final class LockLyrics {
     }
 
     public static void refresh() {
-        Main.syncCapsuleLyricsHold(sCapsulePage && wanted() && hasLyrics());
+        // A configured cover already owns the clock. Only the cover-master-off fallback
+        // needs a lyric-only owner; it must not introduce a different wallpaper treatment.
+        Main.syncCapsuleLyricsHold(LyricPageVisibility.needsIndependentClock(
+                sCapsulePage, Main.coverModeOn(), wanted(), hasLyrics()));
         // 保留壁纸 hangs the clock on the lyric page, and this is where the page comes and goes.
         Main.syncCoverHold(Main.screenOnCached());
         updateBlur();
@@ -1401,7 +1449,10 @@ public final class LockLyrics {
     /** The app's switch. The setting: it is written to the state file and the app reads it back. */
     public static void setEnabled(boolean on, String key, MediaController c) {
         sEnabled = on;
-        if (!on) sCapsulePage = false;
+        if (!on) {
+            sCapsulePage = false;
+            Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
+        }
         // The switch is the master, so it takes the tap's answer with it. Switching the lyrics
         // off and on again brings them back; without this, turning them on while a previous tap
         // had hidden them would leave the lock screen on the cover with the switch saying on.

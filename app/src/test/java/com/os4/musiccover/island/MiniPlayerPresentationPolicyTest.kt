@@ -27,6 +27,7 @@ class MiniPlayerPresentationPolicyTest {
         transitionActive: Boolean = false,
         controlCenterOpen: Boolean = false,
         miniShowsMusic: Boolean = true,
+        capsuleKeepsMini: Boolean = false,
     ) = MiniPlayerPresentationPolicy.evaluate(
         MiniPlayerPresentationInput(
             enabled,
@@ -38,6 +39,7 @@ class MiniPlayerPresentationPolicyTest {
             transitionActive,
             controlCenterOpen,
             miniShowsMusic,
+            capsuleKeepsMini,
         ),
     )
 
@@ -93,6 +95,65 @@ class MiniPlayerPresentationPolicyTest {
             sceneVisible = false,
             nativeSceneOverride = true,
         ))
+    }
+
+    @Test fun bodyTapKeepsTheMusicTouchableOverTheExistingCoverScene() {
+        assertEquals(MiniPlayerPresentation(true, true), presentation(
+            nativeSceneOverride = true, capsuleKeepsMini = true))
+        // The control centre keeps the same ownership; it does not reveal a second player.
+        assertEquals(MiniPlayerPresentation(true, true), presentation(
+            sceneVisible = false, controlCenterOpen = true,
+            nativeSceneOverride = true, capsuleKeepsMini = true))
+    }
+
+    @Test fun closingAndReopeningALyricSceneDoesNotDropTheIslandDuringClockExit() {
+        for (scene in listOf(true, false, true)) {
+            assertEquals(MiniPlayerPresentation(true, true), presentation(
+                nativeSceneOverride = scene, capsuleKeepsMini = true))
+        }
+    }
+
+    @Test fun committedUpwardGestureHandsTheSameSceneToTheNativeCard() {
+        val selection = MiniPlayerSessionSelection()
+        val token = Any()
+        selection.observe(token)
+        assertEquals(MiniPlayerPresentation(true, true), presentation(
+            nativeRequested = selection.nativeRequestedFor(token),
+            nativeSceneOverride = true, capsuleKeepsMini = true))
+        selection.requestNative(token)
+        assertEquals(MiniPlayerPresentation(true, false), presentation(
+            nativeRequested = selection.nativeRequestedFor(token), nativeSceneOverride = true,
+            transitionActive = true, capsuleKeepsMini = false))
+        assertEquals(MiniPlayerPresentation(false, false), presentation(
+            nativeRequested = selection.nativeRequestedFor(token), nativeSceneOverride = true))
+    }
+
+    @Test fun cancelledSwipeKeepsTheRequestedLyricsSceneFolded() {
+        assertEquals(MiniPlayerPresentation(true, false), presentation(
+            nativeSceneOverride = true, transitionActive = true, capsuleKeepsMini = true))
+        assertEquals(MiniPlayerPresentation(true, true), presentation(
+            nativeSceneOverride = true, capsuleKeepsMini = true))
+    }
+
+    @Test fun cancellingAMultiIslandNativePreviewRestoresTheCapsuleOverItsCover() {
+        val selection = MiniPlayerSessionSelection()
+        val token = Any()
+        selection.observe(token)
+        // beginNoteDrag prepares native geometry before there is a committed upward lift.
+        selection.requestNative(token)
+        assertEquals(MiniPlayerPresentation(true, false), presentation(
+            nativeRequested = selection.nativeRequestedFor(token), transitionActive = true,
+            nativeSceneOverride = true, capsuleKeepsMini = true))
+        // Both a cancelled lift and rowWait timing out take the music back into the row.
+        selection.requestMini(token)
+        assertEquals(MiniPlayerPresentation(true, true), presentation(
+            nativeRequested = selection.nativeRequestedFor(token),
+            nativeSceneOverride = true, capsuleKeepsMini = true))
+        // A second attempted swipe can still complete and hand ownership to the media card.
+        selection.requestNative(token)
+        assertEquals(MiniPlayerPresentation(false, false), presentation(
+            nativeRequested = selection.nativeRequestedFor(token),
+            nativeSceneOverride = true, capsuleKeepsMini = false))
     }
 
     @Test fun manuallyOpenedCoverHidesMusicEvenIfTheLockscreenStillReportsTheRowVisible() {

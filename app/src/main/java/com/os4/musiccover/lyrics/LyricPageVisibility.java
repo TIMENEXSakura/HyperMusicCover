@@ -10,4 +10,9 @@ final class LyricPageVisibility {
         if (coverMode) return Math.max(0f, Math.min(1f, cardProgress));
         return capsulePage ? 1f : 0f;
     }
+
+    static boolean needsIndependentClock(boolean capsulePage, boolean coverMode,
+                                         boolean wanted, boolean hasLyrics) {
+        return capsulePage && !coverMode && wanted && hasLyrics;
+    }
 }

@@ -13,6 +13,7 @@ internal data class MiniPlayerPresentationInput(
     val transitionActive: Boolean = false,
     val controlCenterOpen: Boolean = false,
     val miniShowsMusic: Boolean = true,
+    val capsuleKeepsMini: Boolean = false,
 )
 
 internal data class MiniPlayerPresentation(
@@ -32,14 +33,17 @@ internal object MiniPlayerPresentationPolicy {
 
     fun evaluate(input: MiniPlayerPresentationInput): MiniPlayerPresentation {
         val available = input.enabled && input.sessionUsable
+        // A body tap uses the same background scene while leaving the media card folded.
+        // A committed swipe clears capsuleKeepsMini and restores the ordinary scene override.
+        val sceneOwnsCard = input.nativeSceneOverride && !input.capsuleKeepsMini
         val miniSelected = !input.nativeRequested &&
-            !(input.nativeSceneOverride && input.miniShowsMusic)
+            !(sceneOwnsCard && input.miniShowsMusic)
         val lockscreenSurfaceVisible = input.sceneVisible || input.controlCenterOpen
         return MiniPlayerPresentation(
             showMini = available &&
                 (input.transitionActive || miniSelected && lockscreenSurfaceVisible),
             suppressNative = available && miniSelected && input.keyguardOwned && lockscreenSurfaceVisible &&
-                !input.nativeSceneOverride && !input.transitionActive,
+                !sceneOwnsCard && !input.transitionActive,
         )
     }
 }

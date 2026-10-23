@@ -2920,6 +2920,17 @@ final class LyricView extends View {
         }
     }
 
+    /** One bounded entry diagnostic: no song text and no clearing the detailed probe counters. */
+    String renderStatus() {
+        return "attached=" + isAttachedToWindow() + " shown=" + isShown()
+                + " size=" + getWidth() + "x" + getHeight() + " laidOut=" + lines.size()
+                + " band=" + (bandOk ? r2(bandTop) + ".." + r2(bandBottom) : "none")
+                + " focus=" + focus + " glyphsReady=" + (main.length == lines.size())
+                + " show=" + r2(show) + " alpha=" + r2(getAlpha())
+                + " transition=" + r2(getTransitionAlpha()) + " popAlpha=" + r2(popA.x)
+                + " parent=" + (getParent() != null);
+    }
+
     String describe() {
         int words = 0;
         for (LyricLine l : lines) if (l.hasWords()) words++;

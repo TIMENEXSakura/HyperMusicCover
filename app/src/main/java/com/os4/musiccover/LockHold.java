@@ -31,7 +31,7 @@ final class LockHold {
         COVER(true),
         /** A full-screen immersive page: ImmersiveHost. */
         IMMERSIVE(false),
-        /** Lyrics opened from an island keep the media card folded. */
+        /** Lyrics with the cover master off still need room below the clock. */
         LYRICS(false);
 
         /**

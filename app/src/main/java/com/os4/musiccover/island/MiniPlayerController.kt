@@ -1811,7 +1811,7 @@ internal class MiniPlayerController(
     private var growHeldSince = 0L
 
     /** The clock going into the cover or out of it: the row is put away or brought back by that, not by its islands. */
-    private fun coverMoving(): Boolean = Main.coverSceneActive() && ClockCollapse.phase().let {
+    private fun coverMoving(): Boolean = Main.coverNeedsNativeCard() && ClockCollapse.phase().let {
         // The cover's clock only: 高德's map moves the same clock and puts nothing away.
         it == ClockCollapse.Phase.ENTER || it == ClockCollapse.Phase.EXIT
     }
@@ -1919,7 +1919,7 @@ internal class MiniPlayerController(
      * in a frame (2026-09-29, `op mini`: CUT sel=music cover=true after each).
      */
     private fun musicCarded(music: MediaController?): Boolean =
-        music != null && (MiniPlayerRuntime.nativeRequested(music.sessionToken) || Main.coverModeOn())
+        music != null && (MiniPlayerRuntime.nativeRequested(music.sessionToken) || Main.coverNeedsNativeCard())
 
     private fun startDisappear() {
         val view = player ?: return
@@ -3168,7 +3168,7 @@ internal class MiniPlayerController(
      * goes out and comes back as a flight, as a notification does, and they keep the row.
      * Alone it has the media card's own morph, the pill and the card one or the other.
      */
-    private fun musicFlies(): Boolean = !Main.coverSceneActive() && othersBesideMusic()
+    private fun musicFlies(): Boolean = !Main.coverNeedsNativeCard() && othersBesideMusic()
 
     /** There are islands other than the music's, in the row or out as their rows. */
     private fun othersBesideMusic(): Boolean {
@@ -3266,7 +3266,7 @@ internal class MiniPlayerController(
         sessionUsable = controller?.let(::isUsable) == true,
         musicInRow = MUSIC_ISLAND in islandKeys,
         nativeRequested = MiniPlayerRuntime.nativeRequested(controller?.sessionToken),
-        coverActive = includeCover && Main.coverModeOn(),
+        coverActive = includeCover && Main.coverNeedsNativeCard(),
     )
 
     /** The music is out as the media card, the row holding the others. */
@@ -3842,7 +3842,10 @@ internal class MiniPlayerController(
             return
         }
         val token = controller?.sessionToken ?: return
-        MiniPlayerRuntime.chooseNative(token)
+        // A music flight needs the native card laid out before the finger commits. Keep
+        // the capsule lyric request during that preview, so cancellation can return to it.
+        val preview = noteDrag?.let { it.key == key && it.opening && !it.ended } == true
+        MiniPlayerRuntime.chooseNative(token, commitScene = !preview)
         updateVisibility()
         transitionHeader()?.let(::hideRow)
     } finally { android.os.Trace.endSection() } }
@@ -4386,7 +4389,7 @@ internal class MiniPlayerController(
             }
             val m = Mover(out, view, native)
             m.fromCard = true
-            m.cover = out == MUSIC_ISLAND && Main.coverModeOn()
+            m.cover = out == MUSIC_ISLAND && Main.coverNeedsNativeCard()
             // Leaves from where it is drawn and stays there: the row going up into the stack moves
             // it on the stack's side (the stack is laid out from the bottom up), and the pin may
             // still be holding it lower than the stack has it.
@@ -4619,7 +4622,7 @@ internal class MiniPlayerController(
         MiniPlayerRuntime.noteTouch("body action=$action small=${view === smallIsland}")
         when (action) {
             CapsuleTapPolicy.Action.MUSIC -> {
-                Main.miniPlayerToggleLyrics()?.let { view?.showLyricStatus(it) }
+                Main.miniPlayerToggleLyrics(controller)?.let { view?.showLyricStatus(it) }
             }
             CapsuleTapPolicy.Action.NAVIGATION, CapsuleTapPolicy.Action.SCENE -> {
                 val entered = runCatching { LockIslands.toggleScene(key) }.onFailure {
@@ -6053,7 +6056,7 @@ internal class MiniPlayerController(
             noteMorphKey = null
             noteDrag = null
             dropFlight()
-            if (!toRow) takeIn(key)
+            if (!toRow || key == MUSIC_ISLAND && Main.capsuleKeepsMini()) takeIn(key)
             refresh()
             return false
         }
@@ -6061,6 +6064,7 @@ internal class MiniPlayerController(
             if (drag.ended) {
                 // The finger already let go, committed: it opens from where the pull left it.
                 noteDrag = null
+                if (drag.toRow && key == MUSIC_ISLAND) Main.handCapsuleSceneToNative()
                 val (p, nudge) = notePose(drag)
                 next.drag(p, nudge, drag.nudgeX)
                 next.release(drag.toRow, noteVelocity(drag))
@@ -6272,6 +6276,7 @@ internal class MiniPlayerController(
 
     /** A notification's morph, let go by a finger that caught it: to its row or its island. */
     private fun releaseNote(toRow: Boolean, velocity: Float) {
+        if (toRow && noteMorphKey == MUSIC_ISLAND) Main.handCapsuleSceneToNative()
         morph?.release(toRow, velocity)
         noteMorphKey?.let { turnTo(it, toRow) }
         if (toRow && noteMorphKey == STACK_ISLAND) showStackAsList("turned out")
@@ -6351,6 +6356,8 @@ internal class MiniPlayerController(
             spanOf(drag), cancelled)
         drag.toRow = toRow
         drag.speed = if (drag.pulled() > drag.threshold) speed else 0f
+        // If the row is not ready yet, startNoteMorph performs the handoff only after a
+        // successful start. A timeout must still be able to return to the capsule page.
         // Flung open short of the threshold: the list now, not once the card is there.
         if (toRow && drag.opening && drag.key == STACK_ISLAND && !drag.listAsked) {
             drag.listAsked = true
@@ -7757,7 +7764,7 @@ internal class MiniPlayerController(
         if (spread != null) return false
         val current = controller ?: return false
         if (!isUsable(current)) return false
-        return Main.coverModeOn() || wantsNativeArtworkGesture()
+        return Main.coverNeedsNativeCard() || wantsNativeArtworkGesture()
     }
 
     fun sessionToken(): Any? = controller?.sessionToken
@@ -7964,7 +7971,7 @@ internal class MiniPlayerController(
         // the two it keeps its place until it lands.
         // The cover is the music's card as much as the media card is.
         val carded = music != null &&
-            (MiniPlayerRuntime.nativeRequested(music.sessionToken) || Main.coverModeOn())
+            (MiniPlayerRuntime.nativeRequested(music.sessionToken) || Main.coverNeedsNativeCard())
         val others = notes.isNotEmpty() || returning.isNotEmpty() || exchange != null ||
             noteMorphKey.let { it != null && it != MUSIC_ISLAND }
         val musicInRow = music != null && (!carded || !others || musicMoving)
@@ -9052,6 +9059,7 @@ internal class MiniPlayerController(
                 keyguardOwned = keyguardOwned,
                 sceneVisible = sceneVisible,
                 nativeSceneOverride = keyguardOwned && Main.coverSceneActive(),
+                capsuleKeepsMini = Main.capsuleKeepsMini(),
                 transitionActive = transition,
                 controlCenterOpen = controlCenterOpen,
                 miniShowsMusic = pillShowsMusic,
@@ -9140,7 +9148,7 @@ internal class MiniPlayerController(
                 // music and has just gone up into its card - that has already gone, as its morph.
                 val rowGone = target == View.GONE && !pillShowsMusic &&
                     islandKeys.none { it != MUSIC_ISLAND } &&
-                    (islandKeys.isEmpty() || nativeRequested || Main.coverModeOn()) && enabled &&
+                    (islandKeys.isEmpty() || nativeRequested || Main.coverNeedsNativeCard()) && enabled &&
                     Main.keyguardLocked() && !coverMoving() && !MiniPlayerScene.blocksMiniPlayer &&
                     !controlCenterOpen && !frameTaken()
                 // Only a pill on screen goes back where it can be seen. The power key takes the
@@ -9193,11 +9201,11 @@ internal class MiniPlayerController(
         }
         updateNativeSuppression(suppressCard && musicSettled)
         if (morph == null && keyguardOwned &&
-            (nativeRequested || Main.coverSceneActive())) ensureNativeHeaderVisible()
+            (nativeRequested || Main.coverNeedsNativeCard())) ensureNativeHeaderVisible()
         val log = "nativeRequested=$nativeRequested " +
             "showMini=${presentation.showMini} suppressNative=${presentation.suppressNative} " +
             "keyguardOwned=$keyguardOwned sceneVisible=$sceneVisible center=$controlCenterOpen " +
-            "sceneOverride=${Main.coverSceneActive()} transition=${morph != null}"
+            "sceneOverride=${Main.coverSceneActive()} foldedScene=${Main.capsuleKeepsMini()} transition=${morph != null}"
         if (log != lastPresentationLog) {
             lastPresentationLog = log
             Xp.d("MCMini: presentation $log")

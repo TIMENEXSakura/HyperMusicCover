@@ -2538,8 +2538,7 @@ public class Main extends XposedModule {
     }
 
     static boolean lyricsDimWanted() {
-        return (keepsWallpaper() && coverHoldsClock()) || sCapsuleLyricsHeld ||
-                LockHold.exitingFor(LockHold.Owner.LYRICS);
+        return keepsWallpaper() && coverHoldsClock();
     }
 
     /**
@@ -2572,6 +2571,7 @@ public class Main extends XposedModule {
     /** ClockCollapse let go of the clock. Outside cover mode, the card goes back with it. */
     static void onClockReleased() {
         LockHold.clockReleased();
+        if (!LockLyrics.capsulePageRequested()) sCapsuleKeepsMini = false;
         if (sCoverMode) return;
         MediaCard.sCardP = 0f;
         MediaCard.applyMediaCard();
@@ -2588,6 +2588,13 @@ public class Main extends XposedModule {
     public static boolean coverSceneActive() {
         return sCoverMode || LockHold.exitingFor(LockHold.Owner.COVER);
     }
+
+    /** The same cover scene can sit behind the folded island or its expanded media card. */
+    public static boolean coverNeedsNativeCard() {
+        return coverSceneActive() && !sCapsuleKeepsMini;
+    }
+
+    public static boolean capsuleKeepsMini() { return sCapsuleKeepsMini; }
 
     public static MediaController miniPlayerSession() {
         return sWatched;
@@ -2644,7 +2651,7 @@ public class Main extends XposedModule {
      * keyguard up. Awake or dozing, pad or no pad - those only stop the pill taking touches.
      */
     public static boolean miniPlayerPresentable() {
-        return MediaCard.sCardShowing && !coverSceneActive() && keyguardShowing();
+        return MediaCard.sCardShowing && !coverNeedsNativeCard() && keyguardShowing();
     }
 
     /**
@@ -2739,7 +2746,7 @@ public class Main extends XposedModule {
     }
 
     private static boolean islandsDisplayEligible(boolean inCover) {
-        if (!inCover && coverSceneActive() || !screenOnCached() ||
+        if (!inCover && coverNeedsNativeCard() || !screenOnCached() ||
                 !keyguardShowing() || !onKeyguardNow()) return false;
         long now = android.os.SystemClock.uptimeMillis();
         if (now - sMiniBouncerCheckedAt > 100L) {
@@ -2749,13 +2756,65 @@ public class Main extends XposedModule {
         return !sMiniBouncerUp;
     }
 
-    /** Capsule body only: change the lyric page, never open the detailed media panel. */
-    public static Boolean miniPlayerToggleLyrics() {
-        if (!miniPlayerCanShow() || !LockLyrics.sEnabled) return null;
-        boolean visible = LockLyrics.toggleFromCapsule(sTrackKey, sWatched);
-        Xp.log(TAG + "capsule lyrics=" + visible + " source=" + LockLyrics.sourceName()
-                + " attached=" + LockLyrics.wantsAttached());
+    /** Kept through the clock's exit so another tap can reverse it without losing the island. */
+    private static boolean sCapsuleKeepsMini;
+    /** Only a cover opened by this body tap is closed by its matching second tap. */
+    private static boolean sCapsuleOwnsCover;
+
+    /** Capsule body only: the existing lyric/cover scene, with its media card still folded. */
+    public static Boolean miniPlayerToggleLyrics(MediaController selected) {
+        if (!miniPlayerCanShow() || !LockLyrics.sEnabled) {
+            Xp.log(TAG + "capsule lyrics refused: eligible=" + miniPlayerCanShow()
+                    + " enabled=" + LockLyrics.sEnabled);
+            return null;
+        }
+        MediaController current = selected != null ? selected : sWatched;
+        if (current == null) {
+            Xp.log(TAG + "capsule lyrics refused: no media session");
+            return null;
+        }
+        boolean visible = !LockLyrics.capsulePageRequested() || LockLyrics.sTapHidden;
+        String key = trackKey(current);
+        if (visible) {
+            sCapsuleKeepsMini = true;
+            // A two-finger hide can leave this same scene requested. Reopening its lyrics
+            // must preserve ownership, so the later body tap can still restore the wallpaper.
+            sCapsuleOwnsCover |= !sCoverMode && sCoverFeatureOn;
+            MiniPlayerRuntime.forgetRestoreScene();
+            // The island's controller is authoritative. A retained cover key can be empty or
+            // stale while automatic cover entry is off or was dismissed by the user.
+            watchSession(current);
+            sTrackKey = key;
+            if (sCoverFeatureOn && !sCoverMode) {
+                // Use the same background, clock and cover settings as swipe/artwork entry.
+                // The presentation flag above keeps this from selecting the expanded card.
+                setCoverEnabled(true, true, false);
+            }
+            LockLyrics.setCapsuleVisible(true, key, current);
+        } else {
+            LockLyrics.setCapsuleVisible(false, key, current);
+            if (sCapsuleOwnsCover && sCoverMode) {
+                sTapSuppressed = true;
+                setCoverEnabled(false, true, false);
+            }
+            sCapsuleOwnsCover = false;
+            if (!coverSceneActive()) sCapsuleKeepsMini = false;
+        }
+        MiniPlayerRuntime.refresh();
+        Xp.log(TAG + "capsule lyrics request=" + visible + " session=" + current.getPackageName()
+                + " keyReady=" + !key.isEmpty() + " cover=" + sCoverMode
+                + " folded=" + sCapsuleKeepsMini + " source=" + LockLyrics.sourceName()
+                + " attached=" + LockLyrics.wantsAttached() + " shown=" + LockLyrics.wantsShown());
         return visible;
+    }
+
+    /** A committed upward gesture gives this same scene to the original media-card route. */
+    public static void handCapsuleSceneToNative() {
+        if (!sCapsuleKeepsMini && !LockLyrics.capsulePageRequested()) return;
+        sCapsuleKeepsMini = false;
+        sCapsuleOwnsCover = false;
+        LockLyrics.clearCapsulePage();
+        Xp.log(TAG + "capsule lyrics handed to native card: cover=" + sCoverMode);
     }
 
     private static boolean sCapsuleLyricsHeld;
@@ -2765,14 +2824,17 @@ public class Main extends XposedModule {
         if (wanted == sCapsuleLyricsHeld) return;
         sCapsuleLyricsHeld = wanted;
         if (wanted) LockHold.take(LockHold.Owner.LYRICS, screenOnCached(), "capsule lyrics");
-        else {
-            LockHold.give(LockHold.Owner.LYRICS, screenOnCached());
-            if (!screenOnCached()) KeepDim.apply(0f);
-        }
+        else LockHold.give(LockHold.Owner.LYRICS, screenOnCached());
     }
 
     public static void miniPlayerEnterCover() {
+        if (sCapsuleKeepsMini && sCoverMode) {
+            handCapsuleSceneToNative();
+            MiniPlayerRuntime.openCardInstead();
+            return;
+        }
         if (!miniPlayerCanShow()) return;
+        handCapsuleSceneToNative();
         // No cover to open: the island opens into the plain card, as a pull up on it does.
         if (!sCoverFeatureOn) {
             MiniPlayerRuntime.openCardInstead();
@@ -3958,6 +4020,11 @@ public class Main extends XposedModule {
         if (ctx == null) return;
         MediaController c = MediaCard.controllerFromCard(ctx);
         if (c == null) c = pickController(ctx);
+        watchSession(c);
+    }
+
+    /** Shares callback ownership between system card updates and the island's actual session. */
+    private static synchronized void watchSession(MediaController c) {
         boolean same = c != null && sWatched != null
                 && c.getSessionToken().equals(sWatched.getSessionToken());
         if (!same) {
@@ -4002,7 +4069,15 @@ public class Main extends XposedModule {
                     Xp.w(TAG + "registerCallback failed: " + t);
                 }
             } else {
+                boolean ownedCover = sCapsuleOwnsCover;
+                boolean capsuleRequested = LockLyrics.capsulePageRequested();
                 LockLyrics.clearCapsulePage();
+                sCapsuleKeepsMini = false;
+                sCapsuleOwnsCover = false;
+                // Manual cover mode does not react to MediaCard.applyCardState. A cover
+                // temporarily opened by this capsule still belongs to the ended session.
+                if (ownedCover && sCoverMode) setCoverEnabled(false, screenOnCached(), false);
+                if (capsuleRequested) LockLyrics.onTrack("", null);
                 Xp.log(TAG + "no active media session");
             }
         }
@@ -4133,11 +4208,15 @@ public class Main extends XposedModule {
         // the last song's at that moment - so the motion cover follows the metadata itself. It
         // keys on the song, so a player singing into TITLE does not look it up per line.
         if (sCoverMode) MotionCover.onCover(sCoverCardStyle.mode == CoverCardStyle.CARD);
+        // Dismissing automatic cover entry must not stop lyrics following the selected player.
+        // Use live session identity here, not the cover's last successfully committed key.
+        if (LockLyrics.capsulePageRequested()) LockLyrics.onTrack(trackKey(sWatched), sWatched);
         if (!sAuto || !MediaCard.sCardShowing) return;
         // The user tapped the cover away and the card is still up. The one case where "there is
         // a card" must not mean "put the cover back".
         if (sTapSuppressed) return;
-        String key = MediaCard.sCardKey.isEmpty() ? trackKey(sWatched) : MediaCard.sCardKey;
+        String key = LockLyrics.capsulePageRequested() || MediaCard.sCardKey.isEmpty()
+                ? trackKey(sWatched) : MediaCard.sCardKey;
         // One track, several keys. The string itself changes under a track that has not: the
         // card's own key is pkg|song|artist and the session fallback appends the album, so the
         // moment the card is torn down and rebuilt - which is what a wake from the AOD is - the
@@ -4430,7 +4509,8 @@ public class Main extends XposedModule {
     static void detachCover() {
         // The session watch belongs to auto mode, not to the (legacy) in-SystemUI ImageView, so
         // dropping that view must not stop the module following the music.
-        if (!sAuto && sWatched != null && sMediaCb != null) {
+        if (!sAuto && !LockLyrics.capsulePageRequested() && !sCapsuleKeepsMini
+                && sWatched != null && sMediaCb != null) {
             try {
                 sWatched.unregisterCallback(sMediaCb);
             } catch (Throwable ignored) {

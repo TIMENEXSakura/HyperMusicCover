@@ -82,7 +82,7 @@ final class KeepDim {
      */
     static void resume() {
         if (Main.lyricsDimWanted()) {
-            apply(Main.coverModeOn() ? MediaCard.cardProgress() : 1f);
+            apply(MediaCard.cardProgress());
         }
     }
 

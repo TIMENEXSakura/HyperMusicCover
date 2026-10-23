@@ -3,6 +3,8 @@ package com.os4.musiccover.lyrics;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class LyricPageVisibilityTest {
     @Test public void capsulePageIsVisibleWhileDetailedMediaCardRemainsFolded() {
@@ -27,5 +29,16 @@ public class LyricPageVisibilityTest {
 
     @Test public void staleCardProgressCannotKeepAClosedPageVisible() {
         assertEquals(0f, LyricPageVisibility.progress(false, false, 1f), 0f);
+    }
+
+    @Test public void configuredBackgroundOwnsTheClockWithoutAnIndependentLyricsHold() {
+        assertFalse(LyricPageVisibility.needsIndependentClock(true, true, true, true));
+        assertTrue(LyricPageVisibility.needsIndependentClock(true, false, true, true));
+    }
+
+    @Test public void noDataDismissalAndHandoffReleaseTheIndependentClock() {
+        assertFalse(LyricPageVisibility.needsIndependentClock(true, false, true, false));
+        assertFalse(LyricPageVisibility.needsIndependentClock(true, false, false, true));
+        assertFalse(LyricPageVisibility.needsIndependentClock(false, false, true, true));
     }
 }
