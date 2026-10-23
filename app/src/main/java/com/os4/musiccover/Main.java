@@ -3620,12 +3620,12 @@ public class Main extends XposedModule {
                 // is read at UP rather than at DOWN: a cover that came up under the finger
                 // during the gesture (the OEM can re-lay the card out at any point) would
                 // otherwise send the tap the wrong way.
-                MediaLyricEntryPolicy.Artwork action = MediaLyricEntryPolicy.artwork(
+                MediaLyricEntryPolicy.Artwork artworkAction = MediaLyricEntryPolicy.artwork(
                         LockLyrics.capsulePageRequested(), sCoverMode);
-                if (action == MediaLyricEntryPolicy.Artwork.RESUME_LYRICS) {
+                if (artworkAction == MediaLyricEntryPolicy.Artwork.RESUME_LYRICS) {
                     handCapsuleSceneToNative();
                     ensureLyricBackgroundFromCard();
-                } else if (action == MediaLyricEntryPolicy.Artwork.EXIT_COVER) exitFromTap("artwork tapped");
+                } else if (artworkAction == MediaLyricEntryPolicy.Artwork.EXIT_COVER) exitFromTap("artwork tapped");
                 else if (MiniPlayerRuntime.wantsNativeArtworkGesture()) miniPlayerEnterCover();
                 else enterFromTap("artwork tapped");
             }
