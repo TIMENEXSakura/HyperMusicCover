@@ -26,7 +26,11 @@
 
 ## 构建和验证
 
-- 本地独立 JVM 集成回归 **150 项通过**：包含既有 TTML／和声、LRC、来源与格式回退，以及本轮歌曲身份、页面进度、展示策略和绘字反馈；另完成入口调用链审阅及 `git diff --check`。云端 Android 全量构建结果在交付前补入本节。
+- 本地独立 JVM 集成回归 **150 项通过**：包含既有 TTML／和声、LRC、来源与格式回退，以及本轮歌曲身份、页面进度、展示策略和绘字反馈；另完成入口调用链审阅及 `git diff --check`。这一独立运行器用于当前环境的源码回归，不代替完整 Android 构建。
+- 云端 [Actions 39876461318](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39876461318) 成功，构建代码提交 `8727ab12e2b1db18aea35d61b72852c3c4d8956b`。全量 Android 单元测试 **50 组 325 项通过**，0 失败／错误／跳过；Release APK、lint 和 Xposed 入口检查通过。Lint 为 310 条警告、5 条提示、0 错误。
+- 交付版本 `0.9.45-Plus4` / `945008`，产物位于源码目录上一级 `artifacts/8727ab1/HyperMusicCover-0.9.45-Plus4.apk`，11,575,711 字节，SHA-256：`34f7c0d0dcece75ca63499881be01550ad83c63a7c784eca6755e90064a6e108`。下载压缩包摘要与 GitHub 一致，APK 摘要与 CI 校验文件一致；解码 Manifest 核对版本名、版本号及应用 ID，并确认本轮诊断进入 DEX。
+- APK v2 签名验证通过，证书 SHA-256：`63c1baffdd90563eaab0147b9bc9fac1ad8badbbb687bbb15c2c0db3d91e5143`。项目未配置发布密钥时使用临时 Debug 签名，本次与 Plus3 不同，不能普通覆盖安装；更换测试版前先导出配置，并重新确认模块启用与作用域。没有自动卸载／安装。
+- 同目录保留 APK／报告压缩包、JUnit／lint 报告、云端完整日志、本地测试输出、签名验证、`verification.json` 和 `BUILD-INFO.txt`。
 - 本轮没有安装 APK、操作真机锁屏或重启 SystemUI。构建／状态测试通过不等于真机绘制、Android 触摸分发或高刷新率实际生效。
 - 仍按用户要求，真机验收后再按功能分别整理中文上游 PR。本轮入口与绘字反馈归入“音乐胶囊点按直接切换锁屏歌词”这一项；不提交整个集成分支。
 
