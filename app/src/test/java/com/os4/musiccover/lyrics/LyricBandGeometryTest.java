@@ -19,6 +19,13 @@ public class LyricBandGeometryTest {
         return LyricBandGeometry.visibleBottom(band[0], band[1], layoutFloor, floor);
     }
 
+    @Test public void wrappedRowTallerThanViewportRemainsReadableWithoutScaling() {
+        assertEquals(1f, LyricBandGeometry.rowAlpha(-1000f, 2000f, 100f, 800f, 40f), 0f);
+        assertEquals(0.5f, LyricBandGeometry.rowAlpha(780f, 2000f, 100f, 800f, 40f), 0f);
+        assertEquals(0f, LyricBandGeometry.rowAlpha(800f, 2000f, 100f, 800f, 40f), 0f);
+        assertEquals(0.5f, LyricBandGeometry.rowAlpha(120f, 300f, 100f, 800f, 40f), 0f);
+    }
+
     @Test public void foldedCardDoesNotConsumeTheSpaceAboveTheCapsule() {
         float floor = add(Float.NaN, false, 1500f, 600f);
         floor = add(floor, true, 2160f, 140f);
@@ -38,14 +45,12 @@ public class LyricBandGeometryTest {
         float layoutFloor = reference.floor(1L, 2400f, 1500f);
         float[] layout = band(layoutFloor);
         float previous = clip(layout, layoutFloor, 2160f);
-        float focusFit = LyricFocus.fit(1000f, layout[1] - layout[0]);
         for (float top : new float[]{2050f, 1900f, 1750f, 1600f, 1500f}) {
             float floor = add(add(Float.NaN, true, 2160f, 140f), true, top, 600f);
             assertEquals(top, floor, 0f);
             float stableFloor = reference.floor(1L, 2400f, top);
             float[] next = band(stableFloor);
             assertArrayEquals(layout, next, 0f);
-            assertEquals(focusFit, LyricFocus.fit(1000f, next[1] - next[0]), 0f);
             float now = clip(next, stableFloor, floor);
             assertTrue(now < previous);
             previous = now;
@@ -95,17 +100,15 @@ public class LyricBandGeometryTest {
         assertEquals(1500f, reference.floor(1L, 2400f, Float.NaN), 0f);
     }
 
-    @Test public void independentOpeningClockCannotClipRowsOrMoveTheirReadingAnchorOrFit() {
+    @Test public void independentOpeningClockCannotClipRowsOrMoveTheirReadingAnchor() {
         float[] settled = band(1500f);
         float anchor = (settled[0] + settled[1]) / 2f;
-        float fit = LyricFocus.fit(1000f, settled[1] - settled[0]);
         for (float drawnClock : new float[]{1700f, 1400f, 1100f, 800f, 600f}) {
             float[] opening = new float[2];
             float targetClock = LyricBandGeometry.layoutClock(true, drawnClock, 600f);
             assertTrue(LyricStyle.DEFAULT.writeBand(targetClock, 1500f, 3f, 75f, opening));
             assertArrayEquals(settled, opening, 0f);
             assertEquals(anchor, (opening[0] + opening[1]) / 2f, 0f);
-            assertEquals(fit, LyricFocus.fit(1000f, opening[1] - opening[0]), 0f);
             float clipTop = LyricBandGeometry.visibleTop(true, opening[0], targetClock, drawnClock);
             assertEquals(settled[0], clipTop, 0f);
             // The independently rising card still consumes only the bottom of this band.
