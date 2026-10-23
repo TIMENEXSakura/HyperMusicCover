@@ -4602,6 +4602,10 @@ internal class MiniPlayerController(
     }
 
     /** What a tap on an island does: the music opens the cover, a notification its row. */
+    private fun notificationClicker(row: View): View.OnClickListener? = runCatching {
+        Xp.getObjectField(Xp.callMethod(row, "getInjector"), "clickListener") as? View.OnClickListener
+    }.getOrNull()
+
     private fun tapIsland(key: String) {
         val note = LockIslands.noteFor(key)
         if (note != null && !note.redacted &&
