@@ -845,12 +845,9 @@ final class LyricView extends View {
             }
         }
 
-        float availableBand = bandBottom - bandTop;
-        float edgeFade = Math.min(EDGE_FADE_DP * density, availableBand / 3f);
-        // A single lead can also be tall when it carries several backgrounds or translations.
-        float fitTarget = singing.count > 0
-                ? LyricFocus.fit(singing.height(base, height), availableBand - 2f * edgeFade) : 1f;
-        changed |= transition.update(singing, base, dotsFor, ABOVE_ALPHA, fitTarget, dt,
+        // StaticLayout wraps long main/background/translation text at the configured size.
+        // Overflow is handled by the viewport and scrolling, never by fitting the group.
+        changed |= transition.update(singing, base, dotsFor, ABOVE_ALPHA, dt,
                 initialFocus || startingPage || still || gone);
         float target = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
         // Band-relative so it means the same on any screen; the fallback is for the frames
@@ -2116,7 +2113,7 @@ final class LyricView extends View {
                     + " anchor=" + r2(anchorY()) + " focus=" + focus
                     + " scroll=" + (focus >= 0 && focus < scroll.length ? r2(scroll[focus]) : "none")
                     + " show=" + r2(show) + " entry=" + r2(entryMotion.progress()) + " offset=" + r2(presentationOffset())
-                    + " groupScale=" + r2(presentationScale()) + " fit=" + r2(transition.fit)
+                    + " groupScale=" + r2(presentationScale())
                     + " windowY=" + loc[1] + " viewY=" + r2(getTranslationY())
                     + " viewScale=" + r2(getScaleY()) + " viewAlpha=" + r2(getAlpha())
                     + " clock=" + layoutClockSource + " clockIndependent=" + LockLyrics.sClockIndependentMotion);
@@ -2128,9 +2125,9 @@ final class LyricView extends View {
     private boolean rowOnScreen(int index) {
         if (transition.alpha(index) <= 0.003f) return false;
         float center = (bandTop + bandBottom) / 2f;
-        float top = center + (LyricTransition.scaledTop(anchorY() + transition.position(index) - scroll[index],
-                height[index], scale[index]) - center) * transition.fit;
-        float bottom = top + height[index] * scale[index] * transition.fit;
+        float top = LyricTransition.scaledTop(anchorY() + transition.position(index) - scroll[index],
+                height[index], scale[index]);
+        float bottom = top + height[index] * scale[index];
         float offset = presentationOffset(), group = presentationScale();
         return LyricBandGeometry.presentedY(top, center, offset, group) <= clipBandBottom
                 && LyricBandGeometry.presentedY(bottom, center, offset, group) >= clipBandTop;
@@ -2211,17 +2208,15 @@ final class LyricView extends View {
         if (presentationOffset != 0f) canvas.translate(0f, presentationOffset);
         if (presentationScale != 1f)
             canvas.scale(presentationScale, presentationScale, getWidth() / 2f, homeY());
-        float groupScale = transition.fit;
         float center = (bandTop + bandBottom) / 2f;
-        canvas.scale(groupScale, groupScale, getWidth() / 2f, center);
         long drawAt = now();
         for (int i = 0; i < n; i++) {
             LyricLineExit.Row exit = lineExits.row(i);
             if (exit != null && exit.departing()) {
-                if (!exit.finished && groupScale > 0f) {
+                if (!exit.finished) {
                     // Freeze the lyric scroll, not the whole page's closing movement. The
                     // media card can also rise into this row while its own exit is running.
-                    float y = exit.y + floatOffset * groupScale;
+                    float y = exit.y + floatOffset;
                     float sc = exit.scale * exit.scale(drawAt);
                     float top = LyricTransition.scaledTop(y, height[i], sc);
                     float shownTop = LyricBandGeometry.presentedY(top, center, presentationOffset, presentationScale);
@@ -2231,9 +2226,6 @@ final class LyricView extends View {
                             clipBandTop, clipBandBottom, fade);
                     if (a <= 0.003f) continue;
                     int rowSave = canvas.save();
-                    // The group can reflow when an overlapping singer takes focus. Undo only
-                    // that group's fit; the page's clip, pop and navigation slide stay intact.
-                    canvas.scale(1f / groupScale, 1f / groupScale, getWidth() / 2f, center);
                     drawLine(canvas, i, exit.x, y, vis * a * exit.alpha(drawAt),
                             sc, exit.emphasis, exit.blur, exit.lit);
                     canvas.restoreToCount(rowSave);
@@ -2245,10 +2237,10 @@ final class LyricView extends View {
             // sit there dim from the start rather than leaving a hole until their turn.
             if (!Float.isNaN(dotsTop[i]) && !(singing.count > 0 && i >= singing.first && i <= singing.last)) {
                 float dy = anchor + dotsTop[i] + transition.position(i) - base[i] - scroll[i];
-                float screenDots = center + (dy - center) * groupScale;
+                float screenDots = dy;
                 float dh = DOTS_SLOT_EM * textPx;
                 float shownDots = LyricBandGeometry.presentedY(screenDots, center, presentationOffset, presentationScale);
-                float shownDotsBottom = LyricBandGeometry.presentedY(screenDots + dh * groupScale, center,
+                float shownDotsBottom = LyricBandGeometry.presentedY(screenDots + dh, center,
                         presentationOffset, presentationScale);
                 float dEdge = Math.min(clamp01((shownDots - clipBandTop) / fade),
                         clamp01((clipBandBottom - shownDotsBottom) / fade));
@@ -2257,24 +2249,21 @@ final class LyricView extends View {
                 if (da > 0.003f) drawDots(canvas, i, side, dy, da);
             }
             float y = anchor + transition.position(i) - scroll[i];
-            float screenY = center + (LyricTransition.scaledTop(y, height[i], scale[i]) - center) * groupScale;
-            float screenBottom = screenY + height[i] * scale[i] * groupScale;
+            float screenY = LyricTransition.scaledTop(y, height[i], scale[i]);
+            float screenBottom = screenY + height[i] * scale[i];
             float shownY = LyricBandGeometry.presentedY(screenY, center, presentationOffset, presentationScale);
             float shownBottom = LyricBandGeometry.presentedY(screenBottom, center, presentationOffset, presentationScale);
             if (shownY > clipBandBottom) continue;
             if (shownBottom < clipBandTop) continue;
             // Faded by the row's own top against the top edge and its own bottom against the
             // bottom edge, so a line is already gone by the time it would be cut.
-            float edge = Math.min(clamp01((shownY - clipBandTop) / fade),
-                    clamp01((clipBandBottom - shownBottom) / fade));
+            float edge = LyricBandGeometry.rowAlpha(shownY, shownBottom, clipBandTop, clipBandBottom, fade);
             float a = vis * edge * transition.alpha(i);
             if (a <= 0.003f) continue;
-            float pivot = linePivotX(i);
             lineExits.capture(i,
-                    getWidth() / 2f + (side + pivot - getWidth() / 2f) * groupScale - pivot,
-                    center + (y + height[i] / 2f - center) * groupScale - height[i] / 2f
-                            - floatOffset * groupScale,
-                    scale[i] * groupScale, edge * transition.alpha(i), emph[i], lit[i], blur[i]);
+                    side,
+                    y - floatOffset,
+                    scale[i], edge * transition.alpha(i), emph[i], lit[i], blur[i]);
             drawLine(canvas, i, side, y, a);
         }
         canvas.restoreToCount(save);
@@ -2447,7 +2436,7 @@ final class LyricView extends View {
         int src = Main.coverTint();
         LyricAppearance next = LockLyrics.sAppearance;
         boolean withNavigation = (LockLyrics.wantsAttached() || show > 0.003f)
-                && com.os4.musiccover.immersive.ImmersiveHost.navigationRunning();
+                && com.os4.musiccover.immersive.ImmersiveHost.presentedNavigationKey() != null;
         com.os4.musiccover.LyricContrastBackground.Reading background = withNavigation
                 ? Main.lyricContrastReading() : null;
         int contrast = navigationContrast.update(withNavigation,

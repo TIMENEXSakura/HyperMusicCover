@@ -4,6 +4,16 @@ package com.os4.musiccover.lyrics;
 public final class LyricBandGeometry {
     private LyricBandGeometry() {}
 
+    /** Preserve readable overflow: a tall wrapped row cannot fit between both fade edges. */
+    static float rowAlpha(float top, float bottom, float clipTop, float clipBottom, float fade) {
+        if (bottom <= clipTop || top >= clipBottom || clipBottom <= clipTop) return 0f;
+        if (fade <= 0f) return 1f;
+        float distance = bottom - top > clipBottom - clipTop - 2f * fade
+                ? Math.min(bottom - clipTop, clipBottom - top)
+                : Math.min(top - clipTop, clipBottom - bottom);
+        return Math.max(0f, Math.min(1f, distance / fade));
+    }
+
     /** One measured clock destination, kept across phase changes but never across old hosts. */
     public static final class ClockTarget {
         private java.lang.ref.WeakReference<Object> owner = new java.lang.ref.WeakReference<>(null);

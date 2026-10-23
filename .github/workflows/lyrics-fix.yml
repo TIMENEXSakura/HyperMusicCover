@@ -31,7 +31,7 @@ jobs:
       - name: Build APK
         run: |
           ./gradlew --no-daemon :app:assembleRelease \
-            -PmcVersionName=0.9.45 -PmcVersionCode=945014
+            -PmcVersionName=0.9.45 -PmcVersionCode=945015
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.45.apk
           cd dist

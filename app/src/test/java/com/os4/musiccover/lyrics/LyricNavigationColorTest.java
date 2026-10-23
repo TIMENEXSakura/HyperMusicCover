@@ -9,6 +9,22 @@ public class LyricNavigationColorTest {
     private static final int WHITE = LyricContrastState.WHITE;
     private static final int MONET = 0xff6c95dd;
 
+    @Test public void hiddenNavigationRestoresCurrentPaletteEvenWithCachedMapSample() {
+        LyricContrastState state = new LyricContrastState();
+        LyricNavigationColor color = new LyricNavigationColor();
+        color.update(state.update(true, "map", 1L, BLACK), false, 0L);
+        assertEquals(BLACK, color.apply(MONET));
+        // Navigation may still be running and its last sample may remain cached.
+        // Only actual presentation authorizes monochrome colors.
+        color.update(state.update(false, "map", 1L, BLACK), true, 10L);
+        color.update(state.update(false, "map", 1L, WHITE), true, 310L);
+        for (int palette : new int[]{MONET, 0x7fdd955a, 0xff102030, WHITE}) {
+            assertEquals(palette, color.apply(palette));
+        }
+        assertTrue(color.identity());
+        assertEquals(WHITE, state.update(true, "map", 1L, WHITE));
+    }
+
     @Test public void hiddenEntryHasNoColoredFirstFrame() {
         LyricNavigationColor color = new LyricNavigationColor();
         color.update(0, false, 0L);
