@@ -6,7 +6,7 @@
 
 | 问题 | 已确认的源码路径 | 本轮修改 |
 | --- | --- | --- |
-| 胶囊歌词打开时上闪 | `LyricView.step` 在有效 band 未出现时已经初始化 focus/anchorFix；首个有效 band 到来后把差值加入 scroll，再回弹到行目标。首次分支另有先写 focus 再判断 focus<0 的问题。 | `LyricView` 等有效布局后才定位，首个可见帧同步安放 anchor/scroll/fit，不从不可见的旧位置回弹。换句与实际快进动画保留。 |
+| 胶囊歌词打开时上闪 | `LyricView.step` 在有效 band 未出现时已经初始化 focus/anchorFix；首个有效 band 到来后把差值加入 scroll，再回弹到行目标。旧页重新进入时也没有把已隐藏的位置作为首次可见布局重新安放。 | `LyricView` 等有效布局后才定位，首个可见帧同步安放 anchor/scroll/fit，不从不可见的旧位置回弹。换句与实际快进动画保留。 |
 | 入场受时钟遮挡 | 上边缘 clip 随实际移动时钟变化；`ClockCollapse` 从 ENTER 切到 ON 的瞬间又切回上一帧实际时钟位置。 | ENTER/ON 共用目标缓存，首个 ON pose 写完后更新；宿主、尺寸、设置和重建会失效。新增开关控制移动时钟 clip，最终排版与媒体卡底部裁剪继续保留。 |
 | 导航小球在音乐拖动中消失 | `prepareGroupUnsafe` 已令其他通知留在胶囊中，`g.other=null`；旧 `groupShowsSmall` 却把未由动画接管的小球隐藏。 | `MiniPlayerPresentationPolicy` 按实际绘制所有权决定隐藏；音乐大胶囊变形时，旁边导航小球保留。 |
 | 拖动结束后整行短暂消失 | morph/group 清理后没有重算胶囊列表，旧音乐位置叠加 nativeRequested 导致整行关闭，等待下次外部 refresh 才恢复。 | `MiniPlayerController.morphListener.onSettled` 先 refresh 稳定位置与绑定，再更新显隐；取消及反向落地走同一清理。 |

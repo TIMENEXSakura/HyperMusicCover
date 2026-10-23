@@ -29,6 +29,28 @@ public final class LyricBandGeometry {
         }
     }
 
+    /** A page keeps its first usable reading band; only a new hidden page or real resize reflows it. */
+    public static final class FixedBand {
+        private long request = Long.MIN_VALUE;
+        private int width, height;
+        private Object style;
+        private float top = Float.NaN, bottom = Float.NaN;
+        public void clear() { top = bottom = Float.NaN; style = null; }
+        public boolean update(long nextRequest, int w, int h, Object nextStyle, boolean visible,
+                              float candidateTop, float candidateBottom) {
+            if (width != w || height != h || style != nextStyle || request != nextRequest && !visible)
+                clear();
+            request = nextRequest; width = w; height = h; style = nextStyle;
+            if (!Float.isFinite(top) && w > 0 && h > 0 && Float.isFinite(candidateTop)
+                    && Float.isFinite(candidateBottom) && candidateBottom > candidateTop) {
+                top = candidateTop; bottom = candidateBottom;
+            }
+            return Float.isFinite(top);
+        }
+        public float top() { return top; }
+        public float bottom() { return bottom; }
+    }
+
     /** Stable layout reference for one displayed page, independent of the visible clip. */
     static final class Reference {
         private long request = Long.MIN_VALUE;

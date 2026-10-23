@@ -2910,6 +2910,7 @@ public class Main extends XposedModule {
     public static void miniPlayerEnterCover() {
         if (LockLyrics.capsulePageRequested()) {
             handCapsuleSceneToNative();
+            ensureLyricBackgroundFromCard();
             MiniPlayerRuntime.openCardInstead();
             return;
         }
@@ -3619,7 +3620,12 @@ public class Main extends XposedModule {
                 // is read at UP rather than at DOWN: a cover that came up under the finger
                 // during the gesture (the OEM can re-lay the card out at any point) would
                 // otherwise send the tap the wrong way.
-                if (sCoverMode) exitFromTap("artwork tapped");
+                MediaLyricEntryPolicy.Artwork action = MediaLyricEntryPolicy.artwork(
+                        LockLyrics.capsulePageRequested(), sCoverMode);
+                if (action == MediaLyricEntryPolicy.Artwork.RESUME_LYRICS) {
+                    handCapsuleSceneToNative();
+                    ensureLyricBackgroundFromCard();
+                } else if (action == MediaLyricEntryPolicy.Artwork.EXIT_COVER) exitFromTap("artwork tapped");
                 else if (MiniPlayerRuntime.wantsNativeArtworkGesture()) miniPlayerEnterCover();
                 else enterFromTap("artwork tapped");
             }
@@ -3627,6 +3633,24 @@ public class Main extends XposedModule {
             sArtSwallow = false;
         }
         return true;
+    }
+
+    /** An explicit media-card entry restores the configured background, not a stale capsule flag. */
+    private static void ensureLyricBackgroundFromCard() {
+        String navigation = ImmersiveHost.requestedNavigationKey();
+        if (navigation != null) onNavigationPageOpened(navigation);
+        else if (sCapsuleOverNavigation || sNavigationLyricBackground.pending())
+            cancelCapsuleNavigationBackground();
+        if (!MediaLyricEntryPolicy.restoreMusic(sCoverFeatureOn, navigation != null)) return;
+        sTapSuppressed = false;
+        sTrackKey = trackKey(sWatched);
+        if (!sCoverMode) setCoverEnabled(true, screenOnCached(), false);
+        else {
+            CoverPush.sendKeptFirst();
+            LockLyrics.refresh();
+        }
+        Xp.log(TAG + "media lyric background cover=" + sCoverMode
+                + " requested=" + LockLyrics.capsulePageRequested() + " hidden=" + LockLyrics.sTapHidden);
     }
 
     /** The artwork's rectangle as this code sees it, for the log line above. */
@@ -4600,6 +4624,7 @@ public class Main extends XposedModule {
             }
         }
         LockLyrics.toggleByTap(sTrackKey, sWatched);
+        if (!LockLyrics.sTapHidden) ensureLyricBackgroundFromCard();
         // How long the swap took. Nothing is written down, so this is its whole cost.
         LockTaps.sTwoWhy = "lyrics " + (LockLyrics.sTapHidden ? "hidden" : "shown") + " in "
                 + (android.os.SystemClock.uptimeMillis() - t0) + "ms";

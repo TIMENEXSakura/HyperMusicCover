@@ -369,6 +369,8 @@ final class LyricView extends View {
     private int popMode = POP_NONE;
     /** One transform for the whole lyric group; it never enters the per-line layout. */
     private final LyricGestureFeedback gestureFeedback = new LyricGestureFeedback();
+    private final LyricEntryMotion entryMotion = new LyricEntryMotion();
+    private final LyricBandGeometry.FixedBand fixedCapsuleBand = new LyricBandGeometry.FixedBand();
     private boolean popped;
     private long popOutAt;
     private final float[] popPoint = new float[2];
@@ -473,6 +475,8 @@ final class LyricView extends View {
      */
     void rejoin() {
         gestureFeedback.reset();
+        entryMotion.reset();
+        fixedCapsuleBand.clear();
         lastStep = 0L;
         lastLoopFrame = 0L;
         LockLyrics.startTick();
@@ -539,6 +543,8 @@ final class LyricView extends View {
     @Override
     protected void onDetachedFromWindow() {
         gestureFeedback.reset();
+        entryMotion.reset();
+        fixedCapsuleBand.clear();
         appearance = null;
         lineExits.reset(lines.size());
         navigationContrast.clear();
@@ -637,6 +643,11 @@ final class LyricView extends View {
         }
 
         float showTo = showTarget();
+        if (capsulePresentation()) {
+            boolean requested = LockLyrics.sEnabled && !LockLyrics.sTapHidden
+                    && (LockLyrics.capsulePageRequested() || Main.coverModeOn());
+            changed |= entryMotion.step(requested, showTo > 0f, dt, still || gone);
+        } else entryMotion.reset();
         // Remember this before show advances: a late layout/clock measurement may make the
         // first visible frame exceed 0.02 already, but its group still needs its final fit.
         boolean startingPage = show < 0.02f;
@@ -995,8 +1006,10 @@ final class LyricView extends View {
         }
         float v = LockLyrics.pageProgress();
         View c = Main.sContainer;
-        if (c != null) v *= clamp01(c.getAlpha());
-        return v;
+        // Clock entry can animate this container's alpha independently of keyguard visibility.
+        // Actual shade/AOD/unlock visibility remains handled by wantsWindow and dimTarget.
+        return LyricEntryMotion.opacity(v, c == null ? 1f : c.getAlpha(),
+                capsulePresentation() && LockLyrics.sClockIndependentMotion);
     }
 
     /** The lyrics went out for the control centre and have not come all the way back yet. */
@@ -1428,16 +1441,16 @@ final class LyricView extends View {
 
     private float presentationScale() {
         return capsulePresentation()
-                ? LyricGestureFeedback.presentationScale(show, gestureFeedback.scale()) : gestureFeedback.scale();
+                ? LyricGestureFeedback.presentationScale(entryMotion.progress(), gestureFeedback.scale()) : gestureFeedback.scale();
     }
 
     private float presentationOffset() {
-        return capsulePresentation() ? LyricGestureFeedback.entryOffset(show) * CAPSULE_ENTRY_DP * density : 0f;
+        return capsulePresentation() ? LyricGestureFeedback.entryOffset(entryMotion.progress()) * CAPSULE_ENTRY_DP * density : 0f;
     }
 
     private boolean needsFrames() {
         if (!isAttachedToWindow() || LyricWindow.parked(this)) return false;
-        if (gestureFeedback.moving()) return true;
+        if (gestureFeedback.moving() || entryMotion.moving()) return true;
         if (navigationColor.moving()) return true;
         if (show != showTarget()) return true;
         if (popMode == POP_IN || popMode == POP_OUT) return true;
@@ -1944,24 +1957,36 @@ final class LyricView extends View {
         layoutClockSource = !capsule ? "live" : Float.isFinite(clock) ? "cover-target" : "cover-pending";
         boolean ok = false;
         float top = bandTop, bottom = bandBottom, clipTop = clipBandTop, clipBottom = clipBandBottom;
-        if (!Float.isNaN(clock) && isAttachedToWindow()) {
+        if (isAttachedToWindow()) {
             getLocationOnScreen(loc);
             float me = loc[1];
             float floor = bandFloor();
             float layoutFloor = capsule
                     ? ClockCollapse.unzoomY(this, LockLyrics.capsuleLayoutBottomOnScreen()) : floor;
             if (!Float.isFinite(layoutFloor)) layoutFloor = floor;
-            if (LockLyrics.sStyle.writeBand(clock, layoutFloor, density, textPx, bandBounds)) {
+            boolean measured = Float.isFinite(clock)
+                    && LockLyrics.sStyle.writeBand(clock, layoutFloor, density, textPx, bandBounds)
+                    && bandBounds[1] - bandBounds[0] >= MIN_BAND_ROWS * textPx - 0.01f;
+            if (capsule) {
+                // Pin the reading area, including through clock target updates and temporary
+                // missing measurements. Only the real card edge below keeps moving.
+                measured = fixedCapsuleBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                        LockLyrics.sStyle, show > 0.003f,
+                        measured ? bandBounds[0] : Float.NaN, measured ? bandBounds[1] : Float.NaN);
+                if (measured) {
+                    bandBounds[0] = fixedCapsuleBand.top();
+                    bandBounds[1] = fixedCapsuleBand.bottom();
+                }
+            } else fixedCapsuleBand.clear();
+            if (measured) {
                 top = bandBounds[0] - me;
                 bottom = bandBounds[1] - me;
-                // Independent motion keeps the entire group intact. Disabling that option
-                // restores the moving clock's old occlusion without changing the layout.
                 clipTop = capsule ? LyricBandGeometry.visibleTop(LockLyrics.sClockIndependentMotion,
                         bandBounds[0], clock, LockLyrics.sClockIndependentMotion ? Float.NaN
                                 : ClockCollapse.contentBottomFor(this)) - me : top;
                 clipBottom = capsule ? LyricBandGeometry.visibleBottom(bandBounds[0],
                         bandBounds[1], layoutFloor, floor) - me : bottom;
-                ok = bottom - top >= MIN_BAND_ROWS * textPx - 0.01f;
+                ok = true;
             }
         }
         boolean changed = ok != bandOk
@@ -2090,7 +2115,7 @@ final class LyricView extends View {
                     + " clip=" + r2(clipBandTop) + ".." + r2(clipBandBottom)
                     + " anchor=" + r2(anchorY()) + " focus=" + focus
                     + " scroll=" + (focus >= 0 && focus < scroll.length ? r2(scroll[focus]) : "none")
-                    + " show=" + r2(show) + " offset=" + r2(presentationOffset())
+                    + " show=" + r2(show) + " entry=" + r2(entryMotion.progress()) + " offset=" + r2(presentationOffset())
                     + " groupScale=" + r2(presentationScale()) + " fit=" + r2(transition.fit)
                     + " windowY=" + loc[1] + " viewY=" + r2(getTranslationY())
                     + " viewScale=" + r2(getScaleY()) + " viewAlpha=" + r2(getAlpha())
