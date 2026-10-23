@@ -163,11 +163,6 @@ public final class ModuleState {
         sLoading = true;
         try {
             String body = new String(f.readFully()).trim();
-            // The first version of this file was a bare "1"/"0"; keep reading those so an
-            // upgrade does not silently drop a cover that is still on the phone.
-            if (body.length() <= 1) {
-                cover = "1".equals(body);
-            } else {
                 String localFormat = null, legacyFormats = null;
             for (String line : body.split("\n")) {
                 int eq = line.indexOf('=');
