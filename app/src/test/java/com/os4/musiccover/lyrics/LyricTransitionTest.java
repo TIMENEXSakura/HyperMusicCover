@@ -89,6 +89,25 @@ public class LyricTransitionTest {
         assertFalse(transition.moving);
     }
 
+    @Test public void firstFocusFitsTallOverlappingLinesBeforeAnyVisibleFrame() {
+        float[] base = {0, 420, 840}, heights = {400, 400, 400};
+        LyricFocus focus = focusAt(75, base, heights);
+        float fit = LyricFocus.fit(focus.height(base, heights), 650f);
+        assertTrue(fit < 1f);
+        for (float dt : new float[]{0f, 1f / 120f, 1f / 60f, 0.05f}) {
+            LyricTransition transition = new LyricTransition();
+            transition.reset(base);
+            // A newly applied layout uses initialFocus, even if the page alpha already rose
+            // earlier in this step. Its first frame must not shrink from an unfitted group.
+            transition.update(focus, base, -1, 0.6f, fit, dt, true);
+            assertEquals(fit, transition.fit, 0f);
+            assertFalse(transition.moving);
+            // Subsequent line changes retain the existing smooth group-size transition.
+            transition.update(focus, base, -1, 0.6f, 1f, 0.016f, false);
+            assertTrue(transition.fit > fit && transition.fit < 1f);
+        }
+    }
+
     @Test public void departingOverlapRemainsVisibleDuringFade() {
         float[] base = {0, 120, 240}, heights = {100, 100, 100};
         LyricTransition transition = new LyricTransition();

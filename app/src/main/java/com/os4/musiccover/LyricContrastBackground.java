@@ -61,7 +61,7 @@ public final class LyricContrastBackground {
                     Color.WHITE, "aod-neutral");
         }
         int night = context.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
-        String navigation = ImmersiveHost.presentedNavigationKey();
+        String navigation = ImmersiveHost.requestedNavigationKey();
         if (navigation != null) {
             Reading actual = NavigationSurfaceContrast.current(navigation);
             return remember(actual.key, actual.color, actual.source);

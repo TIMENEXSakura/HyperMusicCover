@@ -2786,7 +2786,7 @@ public class Main extends XposedModule {
         if (visible) {
             sCapsuleKeepsMini = true;
             sCapsuleOverNavigation = sCapsuleOverNavigation
-                    || ImmersiveHost.presentedNavigationKey() != null;
+                    || ImmersiveHost.requestedNavigationKey() != null;
             if (sCapsuleOverNavigation) {
                 ++sCapsuleNavigationEpoch;
                 ++sPushGen;
@@ -2873,8 +2873,9 @@ public class Main extends XposedModule {
             MiniPlayerRuntime.openCardInstead();
             return;
         }
-        // Taken before the entry moves anything: the lyrics grow out of the island as it is now.
-        LockLyrics.notePopOrigin(MiniPlayerRuntime.musicIslandCentreOnScreen());
+        // Capture the resting layout before the card moves; the whole lyric group rises into
+        // that position, using the same bounded presentation as a capsule body tap.
+        LockLyrics.prepareCapsulePresentation();
         if (!sAuto) {
             // A manual entry owns the same container transition as automatic cover mode.
             // This also adopts an upward swipe still settling when its artwork is tapped.
@@ -2885,7 +2886,7 @@ public class Main extends XposedModule {
             }
             setCoverEnabled(true, true, false);
         } else {
-            enterFromTap("mini player tapped");
+            enterFromTap("mini player tapped", true);
         }
     }
 
@@ -2921,10 +2922,9 @@ public class Main extends XposedModule {
         }
         if (enter) {
             if (sCoverMode || !sCoverFeatureOn) return;
-            // Back out of the island mid-morph: the lyrics come out of it too, from where it is.
-            LockLyrics.notePopOrigin(MiniPlayerRuntime.musicIslandCentreOnScreen());
+            LockLyrics.prepareCapsulePresentation();
             if (!sAuto) setCoverEnabled(true, true, false);
-            else enterFromTap("mini player pulled back up");
+            else enterFromTap("mini player pulled back up", true);
         } else {
             if (!sCoverMode) return;
             LockLyrics.notePopTarget(MiniPlayerRuntime.musicIslandHomeOnScreen());
@@ -3811,10 +3811,15 @@ public class Main extends XposedModule {
     }
 
     static void enterFromTap(String why) {
+        enterFromTap(why, false);
+    }
+
+    private static void enterFromTap(String why, boolean fromCapsule) {
         // Before the morph is begun, not only at setCoverEnabled: the morph would otherwise
         // start out of a card that then never turns into anything.
         if (!sCoverFeatureOn || sCapsuleOverNavigation) return;
-        if (!LockLyrics.capsulePageRequested()) LockLyrics.resetCapsuleLayoutOrigin();
+        if (!fromCapsule && !LockLyrics.capsulePageRequested())
+            LockLyrics.resetCapsuleLayoutOrigin();
         long t0 = System.nanoTime();
         enterFromTapNow(why);
         noteToggleCost("in", System.nanoTime() - t0);

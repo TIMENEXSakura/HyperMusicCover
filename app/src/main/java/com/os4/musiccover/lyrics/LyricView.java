@@ -196,6 +196,7 @@ final class LyricView extends View {
      * around from where it is instead of from the far end.
      */
     private static final float FLOAT_DP = 26f;
+    private static final float CAPSULE_ENTRY_DP = 36f;
 
     /*
      * The lyrics and the mini player's island, both ways: ColorOS's capsule-to-immersive entry
@@ -366,8 +367,8 @@ final class LyricView extends View {
      * the island: the springs stop where they are and the page fades as any other does.
      */
     private int popMode = POP_NONE;
-    /** A reversible downward dismissal, separate from the stationary capsule entry. */
-    private float capsuleExitY;
+    /** One transform for the whole lyric group; it never enters the per-line layout. */
+    private final LyricGestureFeedback gestureFeedback = new LyricGestureFeedback();
     private boolean popped;
     private long popOutAt;
     private final float[] popPoint = new float[2];
@@ -376,8 +377,9 @@ final class LyricView extends View {
             popA = new Spring(1f), popB = new Spring();
     private float popToX, popToY, popBlur;
     private float bandTop, bandBottom;
-    /** Draw/edge-fade floor only; card gestures must not change the layout band's anchor. */
-    private float clipBandBottom;
+    /** Clock/card occlusion only; neither travelling edge changes the layout band's anchor. */
+    private float clipBandTop, clipBandBottom;
+    private String layoutClockSource = "live";
     private final float[] bandBounds = new float[2];
     private boolean bandOk;
     private float anchorFix;
@@ -532,7 +534,7 @@ final class LyricView extends View {
 
     @Override
     protected void onDetachedFromWindow() {
-        capsuleExitY = 0f;
+        gestureFeedback.reset();
         appearance = null;
         lineExits.reset(lines.size());
         navigationContrast.clear();
@@ -596,6 +598,13 @@ final class LyricView extends View {
         boolean gone = LyricWindow.owns(this) && LockLyrics.lockScreenGone();
         pageWanted = LockLyrics.wantsWindow();
         float dtTo = still || gone ? Float.POSITIVE_INFINITY : dt;
+        if (still || gone || !pageWanted && show == 0f) {
+            changed |= gestureFeedback.scale() != 1f;
+            gestureFeedback.reset();
+        } else {
+            changed |= gestureFeedback.step(
+                    com.os4.musiccover.island.MiniPlayerRuntime.capsuleLyricSwipeVelocityDpPerSecond(), dt);
+        }
         // Not before the first layout: a width of zero would wrap every line a character a row.
         // Leaving, the lines are frozen like the band below: switching the lyrics off empties
         // them, and laying the empty set out at once cut the lines off in one frame instead of
@@ -624,10 +633,9 @@ final class LyricView extends View {
         }
 
         float showTo = showTarget();
-        if (show == 0f && showTo > 0f && capsuleExitY != 0f) {
-            capsuleExitY = 0f;
-            changed = true;
-        }
+        // Remember this before show advances: a late layout/clock measurement may make the
+        // first visible frame exceed 0.02 already, but its group still needs its final fit.
+        boolean startingPage = show < 0.02f;
         if (turnPop(now, showTo, still || gone)) changed = true;
         // Going into the island, the page stays up and the pop's alpha is its fade; coming out
         // of it, `show` only carries the card's progress and the clock's alpha, so it goes
@@ -649,13 +657,6 @@ final class LyricView extends View {
         if (stepPop(now, dt, showTo)) {
             changed = true;
             why |= 4;
-        }
-        float exitTarget = capsuleExitTarget();
-        float exit = approach(capsuleExitY, exitTarget, dtTo, TAU_HIDE);
-        if (Math.abs(exit - exitTarget) < 0.004f) exit = exitTarget;
-        if (exit != capsuleExitY) {
-            capsuleExitY = exit;
-            changed = true;
         }
         trace(now, gone);
         if (show == 0f && showTo == 0f && !LockLyrics.wantsAttached()) {
@@ -831,7 +832,7 @@ final class LyricView extends View {
         float fitTarget = singing.count > 0
                 ? LyricFocus.fit(singing.height(base, height), availableBand - 2f * edgeFade) : 1f;
         changed |= transition.update(singing, base, dotsFor, ABOVE_ALPHA, fitTarget, dt,
-                still || gone || show < 0.02f);
+                initialFocus || startingPage || still || gone);
         float target = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
         // Band-relative so it means the same on any screen; the fallback is for the frames
         // before the band has been measured.
@@ -1262,14 +1263,17 @@ final class LyricView extends View {
      * @return whether anything changed
      */
     private boolean turnPop(long now, float showTo, boolean cut) {
-        if (LockLyrics.capsuleUsesFade()) {
-            // Keep body-tap lyrics at the reading position. Their existing show/float fade
-            // handles entry and downward dismissal, including a reversal on the next tap.
-            if (popMode == POP_NONE) return false;
-            float visible = show * clamp01(popA.x);
-            endPop("capsule anchor fade");
-            show = visible;
-            return true;
+        if (capsulePresentation()) {
+            // Body taps and upward capsule entries share one bounded whole-group arrival.
+            // Never add the old island-origin POP on top of that translation and scale.
+            boolean changed = popped || popMode != POP_NONE;
+            if (popMode != POP_NONE) {
+                float visible = show * clamp01(popA.x);
+                endPop("capsule group arrival");
+                show = visible;
+            }
+            popped = false;
+            return changed;
         }
         if (cut) {
             // Unlocked, or the AOD's still frames: nothing animates there, the page is simply cut.
@@ -1410,13 +1414,22 @@ final class LyricView extends View {
         applyBlur();
     }
 
-    private float capsuleExitTarget() {
-        return LockLyrics.capsuleUsesFade() && LockLyrics.sTapHidden ? 1f - show : 0f;
+    private boolean capsulePresentation() {
+        return LockLyrics.capsuleUsesFade() || LockLyrics.capsuleLayoutOrigin();
+    }
+
+    private float presentationScale() {
+        return capsulePresentation()
+                ? LyricGestureFeedback.presentationScale(show, gestureFeedback.scale()) : gestureFeedback.scale();
+    }
+
+    private float presentationOffset() {
+        return capsulePresentation() ? LyricGestureFeedback.entryOffset(show) * CAPSULE_ENTRY_DP * density : 0f;
     }
 
     private boolean needsFrames() {
         if (!isAttachedToWindow()) return false;
-        if (capsuleExitY != capsuleExitTarget()) return true;
+        if (gestureFeedback.moving()) return true;
         if (navigationColor.moving()) return true;
         if (show != showTarget()) return true;
         if (popMode == POP_IN || popMode == POP_OUT) return true;
@@ -1916,20 +1929,25 @@ final class LyricView extends View {
         if (lines.isEmpty() && show == 0f) return false;
         // Both edges as drawn, in this view's unzoomed frame: a swipe zooms the clock's and the
         // card's containers and not this layer. See ClockCollapse.contentBottomFor.
-        float clock = ClockCollapse.contentBottomFor(this);
+        float drawnClock = ClockCollapse.contentBottomFor(this);
+        boolean capsule = LockLyrics.capsuleLayoutOrigin();
+        float clock = LyricBandGeometry.layoutClock(capsule, drawnClock,
+                capsule ? ClockCollapse.coverContentBottomFor(this) : Float.NaN);
+        layoutClockSource = !capsule ? "live" : Float.isFinite(clock) ? "cover-target" : "cover-pending";
         boolean ok = false;
-        float top = bandTop, bottom = bandBottom, clipBottom = clipBandBottom;
+        float top = bandTop, bottom = bandBottom, clipTop = clipBandTop, clipBottom = clipBandBottom;
         if (!Float.isNaN(clock) && isAttachedToWindow()) {
             getLocationOnScreen(loc);
             float me = loc[1];
             float floor = bandFloor();
-            boolean capsule = LockLyrics.capsuleLayoutOrigin();
             float layoutFloor = capsule
                     ? ClockCollapse.unzoomY(this, LockLyrics.capsuleLayoutBottomOnScreen()) : floor;
             if (!Float.isFinite(layoutFloor)) layoutFloor = floor;
             if (LockLyrics.sStyle.writeBand(clock, layoutFloor, density, textPx, bandBounds)) {
                 top = bandBounds[0] - me;
                 bottom = bandBounds[1] - me;
+                clipTop = capsule ? LyricBandGeometry.visibleTop(bandBounds[0], clock,
+                        drawnClock) - me : top;
                 clipBottom = capsule ? LyricBandGeometry.visibleBottom(bandBounds[0],
                         bandBounds[1], layoutFloor, floor) - me : bottom;
                 ok = bottom - top >= MIN_BAND_ROWS * textPx - 0.01f;
@@ -1937,11 +1955,13 @@ final class LyricView extends View {
         }
         boolean changed = ok != bandOk
                 || Math.abs(top - bandTop) >= 0.5f || Math.abs(bottom - bandBottom) >= 0.5f
+                || Math.abs(clipTop - clipBandTop) >= 0.5f
                 || Math.abs(clipBottom - clipBandBottom) >= 0.5f;
         bandOk = ok;
         if (ok) {
             bandTop = top;
             bandBottom = bottom;
+            clipBandTop = clipTop;
             clipBandBottom = clipBottom;
         }
         return changed;
@@ -2035,7 +2055,10 @@ final class LyricView extends View {
         float center = (bandTop + bandBottom) / 2f;
         float top = center + (LyricTransition.scaledTop(anchorY() + transition.position(index) - scroll[index],
                 height[index], scale[index]) - center) * transition.fit;
-        return top <= clipBandBottom && top + height[index] * scale[index] * transition.fit >= bandTop;
+        float bottom = top + height[index] * scale[index] * transition.fit;
+        float offset = presentationOffset(), group = presentationScale();
+        return LyricBandGeometry.presentedY(top, center, offset, group) <= clipBandBottom
+                && LyricBandGeometry.presentedY(bottom, center, offset, group) >= clipBandTop;
     }
 
     // ------------------------------------------------------------------ drawing
@@ -2080,14 +2103,15 @@ final class LyricView extends View {
     private void drawLyrics(Canvas canvas) {
         drawCount++;
         if (show <= 0.003f || lines.isEmpty() || focus < 0 || main.length != lines.size()) return;
-        float bandH = clipBandBottom - bandTop;
+        float bandH = clipBandBottom - clipBandTop;
         if (bandH <= 0f) return;
         // The float, added to the anchor so the lines, their dots and their edge fades all move
         // as one block: a line's alpha is taken from its own position against the band's edges,
         // and offsetting the canvas instead would have left those alphas describing where the
         // line was going to be rather than where it is.
         // Grown out of the island instead: the pop is the arrival's movement, all of it.
-        float floatAmount = LockLyrics.capsuleUsesFade() ? capsuleExitY : 1f - show;
+        boolean capsule = capsulePresentation();
+        float floatAmount = capsule ? 0f : 1f - show;
         float floatOffset = popped ? 0f : floatAmount * FLOAT_DP * density;
         float anchor = anchorY() + floatOffset;
         float vis = show * clamp01(popA.x);
@@ -2104,7 +2128,13 @@ final class LyricView extends View {
             float sc = Math.max(0f, popS.x);
             canvas.scale(sc, sc, getWidth() / 2f, homeY());
         }
-        canvas.clipRect(0f, bandTop, getWidth(), clipBandBottom);
+        canvas.clipRect(0f, clipBandTop, getWidth(), clipBandBottom);
+        // The scene's clip stays still. All lyrics, harmonies, dots and departing rows then
+        // travel as a single group; changing this transform cannot retarget a line spring.
+        float presentationScale = presentationScale(), presentationOffset = presentationOffset();
+        if (presentationOffset != 0f) canvas.translate(0f, presentationOffset);
+        if (presentationScale != 1f)
+            canvas.scale(presentationScale, presentationScale, getWidth() / 2f, homeY());
         float groupScale = transition.fit;
         float center = (bandTop + bandBottom) / 2f;
         canvas.scale(groupScale, groupScale, getWidth() / 2f, center);
@@ -2118,8 +2148,11 @@ final class LyricView extends View {
                     float y = exit.y + floatOffset * groupScale;
                     float sc = exit.scale * exit.scale(drawAt);
                     float top = LyricTransition.scaledTop(y, height[i], sc);
-                    float a = LyricLineExit.edgeAlpha(exit.alpha, top, top + height[i] * sc,
-                            bandTop, clipBandBottom, fade);
+                    float shownTop = LyricBandGeometry.presentedY(top, center, presentationOffset, presentationScale);
+                    float shownBottom = LyricBandGeometry.presentedY(top + height[i] * sc, center,
+                            presentationOffset, presentationScale);
+                    float a = LyricLineExit.edgeAlpha(exit.alpha, shownTop, shownBottom,
+                            clipBandTop, clipBandBottom, fade);
                     if (a <= 0.003f) continue;
                     int rowSave = canvas.save();
                     // The group can reflow when an overlapping singer takes focus. Undo only
@@ -2138,8 +2171,11 @@ final class LyricView extends View {
                 float dy = anchor + dotsTop[i] + transition.position(i) - base[i] - scroll[i];
                 float screenDots = center + (dy - center) * groupScale;
                 float dh = DOTS_SLOT_EM * textPx;
-                float dEdge = Math.min(clamp01((screenDots - bandTop) / fade),
-                        clamp01((clipBandBottom - (screenDots + dh * groupScale)) / fade));
+                float shownDots = LyricBandGeometry.presentedY(screenDots, center, presentationOffset, presentationScale);
+                float shownDotsBottom = LyricBandGeometry.presentedY(screenDots + dh * groupScale, center,
+                        presentationOffset, presentationScale);
+                float dEdge = Math.min(clamp01((shownDots - clipBandTop) / fade),
+                        clamp01((clipBandBottom - shownDotsBottom) / fade));
                 float da = vis * dEdge * transition.alpha(i);
                 if (dotsFor >= 0 ? i < dotsFor : i <= focus) da *= ABOVE_ALPHA;
                 if (da > 0.003f) drawDots(canvas, i, side, dy, da);
@@ -2147,12 +2183,14 @@ final class LyricView extends View {
             float y = anchor + transition.position(i) - scroll[i];
             float screenY = center + (LyricTransition.scaledTop(y, height[i], scale[i]) - center) * groupScale;
             float screenBottom = screenY + height[i] * scale[i] * groupScale;
-            if (screenY > clipBandBottom) continue;
-            if (screenBottom < bandTop) continue;
+            float shownY = LyricBandGeometry.presentedY(screenY, center, presentationOffset, presentationScale);
+            float shownBottom = LyricBandGeometry.presentedY(screenBottom, center, presentationOffset, presentationScale);
+            if (shownY > clipBandBottom) continue;
+            if (shownBottom < clipBandTop) continue;
             // Faded by the row's own top against the top edge and its own bottom against the
             // bottom edge, so a line is already gone by the time it would be cut.
-            float edge = Math.min(clamp01((screenY - bandTop) / fade),
-                    clamp01((clipBandBottom - screenBottom) / fade));
+            float edge = Math.min(clamp01((shownY - clipBandTop) / fade),
+                    clamp01((clipBandBottom - shownBottom) / fade));
             float a = vis * edge * transition.alpha(i);
             if (a <= 0.003f) continue;
             float pivot = linePivotX(i);
@@ -3060,8 +3098,10 @@ final class LyricView extends View {
         return "attached=" + isAttachedToWindow() + " shown=" + isShown()
                 + " size=" + getWidth() + "x" + getHeight() + " laidOut=" + lines.size()
                 + " band=" + (bandOk ? r2(bandTop) + ".." + r2(bandBottom) : "none")
+                + " layoutClock=" + layoutClockSource + " clipTop=" + r2(clipBandTop)
                 + " clipBottom=" + r2(clipBandBottom)
                 + " focus=" + focus + " glyphsReady=" + (main.length == lines.size())
+                + " groupEntry=" + capsulePresentation() + " gestureScale=" + r2(gestureFeedback.scale())
                 + " show=" + r2(show) + " alpha=" + r2(getAlpha())
                 + " transition=" + r2(getTransitionAlpha()) + " popAlpha=" + r2(popA.x)
                 + " parent=" + (getParent() != null);
@@ -3093,6 +3133,7 @@ final class LyricView extends View {
                 // be told apart from one that was measured.
                 + " band=" + (bandOk ? Math.round(bandTop) + ".." + Math.round(bandBottom)
                         + "(" + LockLyrics.bandSource() + ")" : "none")
+                + " layoutClock=" + layoutClockSource + " clipTop=" + Math.round(clipBandTop)
                 + " clipBottom=" + Math.round(clipBandBottom)
                 + " looping=" + looping + " parent=" + (getParent() instanceof ViewGroup)
                 // The last few frames that moved, oldest first: what the page did while the lock

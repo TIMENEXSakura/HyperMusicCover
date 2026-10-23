@@ -95,6 +95,85 @@ public class LyricBandGeometryTest {
         assertEquals(1500f, reference.floor(1L, 2400f, Float.NaN), 0f);
     }
 
+    @Test public void openingClockUncoversRowsWithoutMovingTheirReadingAnchorOrFit() {
+        float[] settled = band(1500f);
+        float anchor = (settled[0] + settled[1]) / 2f;
+        float fit = LyricFocus.fit(1000f, settled[1] - settled[0]);
+        float previousClip = Float.POSITIVE_INFINITY;
+        for (float drawnClock : new float[]{1700f, 1400f, 1100f, 800f, 600f}) {
+            float[] opening = new float[2];
+            float targetClock = LyricBandGeometry.layoutClock(true, drawnClock, 600f);
+            assertTrue(LyricStyle.DEFAULT.writeBand(targetClock, 1500f, 3f, 75f, opening));
+            assertArrayEquals(settled, opening, 0f);
+            assertEquals(anchor, (opening[0] + opening[1]) / 2f, 0f);
+            assertEquals(fit, LyricFocus.fit(1000f, opening[1] - opening[0]), 0f);
+            float clipTop = LyricBandGeometry.visibleTop(opening[0], targetClock, drawnClock);
+            assertTrue(clipTop >= opening[0]);
+            assertTrue(clipTop >= drawnClock);
+            assertTrue(clipTop < previousClip);
+            previousClip = clipTop;
+            // The independently rising card still consumes only the bottom of this band.
+            assertEquals(clip(settled, 1500f, 1800f), clip(opening, 1500f, 1800f), 0f);
+        }
+        assertEquals(settled[0], previousClip, 0f);
+    }
+
+    @Test public void missingDestinationDoesNotBrieflyLayOutAgainstTheFullClock() {
+        float[] bounds = new float[2];
+        float first = LyricBandGeometry.layoutClock(true, 1000f, Float.NaN);
+        assertTrue(Float.isNaN(first));
+        assertFalse(LyricStyle.DEFAULT.writeBand(first, 1500f, 3f, 75f, bounds));
+        assertTrue(LyricStyle.DEFAULT.writeBand(
+                LyricBandGeometry.layoutClock(true, 980f, 600f), 1500f, 3f, 75f, bounds));
+        assertArrayEquals(band(1500f), bounds, 0f);
+        // A new entry whose target is not ready must not borrow the prior entry's layout.
+        assertTrue(Float.isNaN(LyricBandGeometry.layoutClock(true, 650f, Float.NaN)));
+    }
+
+    @Test public void ordinaryCoverKeepsItsLiveClockLayoutAndCustomSpacingStillApplies() {
+        assertEquals(900f, LyricBandGeometry.layoutClock(false, 900f, 600f), 0f);
+        assertEquals(800f, LyricBandGeometry.layoutClock(false, 800f, Float.NaN), 0f);
+        LyricStyle style = LyricStyle.DEFAULT.with("fill", 0.5f).with("pos", 0.8f);
+        for (float size : new float[]{54f, 75f, 108f}) {
+            float[] bounds = new float[2];
+            assertTrue(style.writeBand(600f, 1500f, 3f, size, bounds));
+            float gap = bounds[0] - 600f;
+            assertEquals(950f + gap, LyricBandGeometry.visibleTop(bounds[0], 600f, 950f), 0.001f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(bounds[0], 600f, 600f), 0f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(bounds[0], 600f, Float.NaN), 0f);
+        }
+    }
+
+    @Test public void shrinkingTheGroupCanBringAnOffscreenRowBackInsideTheFixedClip() {
+        float top = 1410f, bottom = 1430f, clipBottom = 1400f;
+        assertTrue(top > clipBottom); // The old pre-transform cull rejected this entire row.
+        float shownTop = LyricBandGeometry.presentedY(top, 1000f, 0f, 0.86f);
+        float shownBottom = LyricBandGeometry.presentedY(bottom, 1000f, 0f, 0.86f);
+        assertTrue(shownTop < shownBottom && shownBottom < clipBottom);
+        assertEquals((bottom - top) * 0.86f, shownBottom - shownTop, 0.001f);
+        assertTrue(LyricLineExit.edgeAlpha(1f, shownTop, shownBottom, 600f, clipBottom, 40f) > 0f);
+        // A cancelled drag restores the original geometry, without changing the row's pose.
+        assertEquals(top, LyricBandGeometry.presentedY(top, 1000f, 0f, 1f), 0f);
+        assertEquals(bottom, LyricBandGeometry.presentedY(bottom, 1000f, 0f, 1f), 0f);
+    }
+
+    @Test public void entryAndDepartingRowsFadeAtTheirDrawnEdgesRatherThanHardClipping() {
+        // This applies equally to a dot slot, a live row and a cached departing-row pose.
+        float top = 1300f, bottom = 1320f;
+        float before = LyricLineExit.edgeAlpha(1f, top, bottom, 600f, 1400f, 40f);
+        assertEquals(1f, before, 0f);
+        float shiftedTop = LyricBandGeometry.presentedY(top, 1000f, 54f, 0.97f);
+        float shiftedBottom = LyricBandGeometry.presentedY(bottom, 1000f, 54f, 0.97f);
+        float edge = LyricLineExit.edgeAlpha(1f, shiftedTop, shiftedBottom, 600f, 1400f, 40f);
+        assertTrue(edge > 0f && edge < before);
+        assertEquals(0.4f, LyricLineExit.edgeAlpha(0.4f, shiftedTop, shiftedBottom,
+                600f, 1400f, 40f), 0f);
+        assertEquals(1054f, LyricBandGeometry.presentedY(1000f, 1000f, 54f, 0.97f), 0f);
+        // Screen-space checks never overwrite the saved untransformed pose.
+        assertEquals(1300f, top, 0f);
+        assertEquals(1320f, bottom, 0f);
+    }
+
     @Test public void highestOfSeveralCapsulesAndMovingCardsWinsIndependentlyOfOrder() {
         float pillFirst = add(add(add(Float.NaN, true, 2160f, 140f), true, 2090f, 180f),
                 true, 1770f, 450f);

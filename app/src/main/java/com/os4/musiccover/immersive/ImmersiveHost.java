@@ -269,6 +269,19 @@ public final class ImmersiveHost {
         return scene != null && scene.isNavigation() && isPresented(scene) ? scene.id() : null;
     }
 
+    /** A map waiting for its surface still owns the background choice; never sample a cover. */
+    public static String requestedNavigationKey() {
+        ImmersiveScene scene = sOpen;
+        return scene != null && scene.isNavigation() && isOpenRequested(scene) ? scene.id() : null;
+    }
+
+    /** No map text/location: explains why a requested map cannot yet supply a pixel sample. */
+    public static String navigationContrastState() {
+        ImmersiveScene scene = sOpen;
+        return presentationState(scene) + (scene instanceof LiveAlertScene
+                ? " surface=" + ((LiveAlertScene) scene).contrastSurfaceState() : " surface=not-remote");
+    }
+
     /** Read-only remote subtree, available only for the navigation page actually presented. */
     public static LiveAlertScene.ContrastSurface presentedNavigationSurface() {
         ImmersiveScene scene = sOpen;

@@ -78,10 +78,20 @@ public final class LockLyrics {
     private static long sContrastRequestId;
 
     static long contrastRequestId() { return sContrastRequestId; }
-    /** Body taps fade at the lyric anchor; retained through their closing frames. */
+    /** Capsule taps/pulls use one bounded group slide, retained through closing frames. */
     private static boolean sCapsuleFadeOnly;
 
     static boolean capsuleUsesFade() { return sCapsuleFadeOnly; }
+
+    /** A capsule pull keeps the user's lyric choice, but shares the body's stable presentation. */
+    public static void prepareCapsulePresentation() {
+        if (!sCapsuleLayoutOrigin) sContrastRequestId++;
+        sCapsuleLayoutOrigin = true;
+        sCapsuleFadeOnly = true;
+        notePopOrigin(null);
+        notePopTarget(null);
+        capsuleLayoutBottomOnScreen();
+    }
 
     /** Includes a request still loading, so a second tap can cancel it immediately. */
     public static boolean capsulePageRequested() {
@@ -1384,6 +1394,12 @@ public final class LockLyrics {
         sStateReadAt = SystemClock.uptimeMillis();
         LyricView v = sView;
         if (v != null) v.kick();
+    }
+
+    /** Touch feedback wakes only drawing; it never reattaches windows or refreshes the cover. */
+    public static void onGestureFeedback() {
+        LyricView view = sView;
+        if (view != null) view.kick();
     }
 
     /**

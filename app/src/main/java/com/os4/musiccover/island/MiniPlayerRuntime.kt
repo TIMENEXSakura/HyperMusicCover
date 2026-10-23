@@ -10,6 +10,8 @@ import com.os4.musiccover.ClockRoomPolicy
 import com.os4.musiccover.CoverMorphMotion
 import com.os4.musiccover.Main
 import com.os4.musiccover.lyrics.TrackName
+import com.os4.musiccover.lyrics.LyricGestureFeedback
+import com.os4.musiccover.lyrics.LockLyrics
 import com.os4.musiccover.Xp
 import com.os4.musiccover.immersive.ImmersiveHost
 import android.content.Context
@@ -1133,6 +1135,82 @@ object MiniPlayerRuntime {
 
     private var routed: WeakReference<MiniPlayerView>? = null
 
+    private const val LYRIC_TOUCH_CAPSULE = 1
+    private const val LYRIC_TOUCH_CARD = 2
+    private const val LYRIC_TOUCH_FRESH_MS = 120L
+    private var lyricTouchSource = 0
+    private var lyricTouchView: WeakReference<View>? = null
+    private var lyricTouchTracker: VelocityTracker? = null
+    private var lyricTouchDownAt = 0L
+    private var lyricTouchAt = 0L
+    private var lyricTouchX = 0f
+    private var lyricTouchY = 0f
+    private var lyricTouchDensity = 1f
+    private var lyricTouchSlop = 0f
+    private var lyricTouchVertical = false
+    private var lyricTouchSpeed = 0f
+
+    /** Read only: the finger's speed, not a card's fling/spring after the finger has gone. */
+    @JvmStatic fun capsuleLyricSwipeVelocityDpPerSecond(): Float {
+        val age = android.os.SystemClock.uptimeMillis() - lyricTouchAt
+        return if (lyricTouchTracker != null && lyricTouchVertical && age in 0L..LYRIC_TOUCH_FRESH_MS &&
+            lyricTouchView?.get()?.isAttachedToWindow == true && LockLyrics.wantsShown()) lyricTouchSpeed
+        else Float.NaN
+    }
+
+    internal fun cancelLyricGesture() {
+        val wasActive = lyricTouchTracker != null
+        lyricTouchTracker?.recycle()
+        lyricTouchTracker = null
+        lyricTouchView = null
+        lyricTouchSource = 0
+        lyricTouchVertical = false
+        lyricTouchSpeed = 0f
+        if (wasActive) LockLyrics.onGestureFeedback()
+    }
+
+    private fun beginLyricGesture(ev: MotionEvent, view: View?, source: Int) {
+        cancelLyricGesture()
+        if (view == null || !view.isAttachedToWindow || !LockLyrics.wantsShown() ||
+            ev.pointerCount != 1 || !ev.rawX.isFinite() || !ev.rawY.isFinite()) return
+        lyricTouchView = WeakReference(view)
+        lyricTouchSource = source
+        lyricTouchDownAt = ev.downTime
+        lyricTouchAt = ev.eventTime
+        lyricTouchX = ev.rawX
+        lyricTouchY = ev.rawY
+        lyricTouchDensity = view.resources.displayMetrics.density
+        lyricTouchSlop = ViewConfiguration.get(view.context).scaledTouchSlop.toFloat()
+        lyricTouchTracker = VelocityTracker.obtain().also { it.addMovement(ev) }
+    }
+
+    private fun observeLyricGesture(ev: MotionEvent, source: Int) {
+        if (lyricTouchSource != source || ev.downTime != lyricTouchDownAt) return
+        val tracker = lyricTouchTracker ?: return
+        if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL ||
+            ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN || !ev.rawX.isFinite() || !ev.rawY.isFinite()) {
+            cancelLyricGesture()
+            return
+        }
+        if (ev.actionMasked != MotionEvent.ACTION_MOVE) return
+        tracker.addMovement(ev)
+        val dx = ev.rawX - lyricTouchX
+        val dy = ev.rawY - lyricTouchY
+        if (!lyricTouchVertical && abs(dy) > lyricTouchSlop && abs(dy) >= abs(dx)) lyricTouchVertical = true
+        if (!lyricTouchVertical) return
+        tracker.computeCurrentVelocity(1000)
+        lyricTouchSpeed = LyricGestureFeedback.upwardSpeed(tracker.yVelocity, lyricTouchDensity)
+        lyricTouchAt = ev.eventTime
+        LockLyrics.onGestureFeedback()
+    }
+
+    /** Observe the native card as well when its upward pull belongs to the OEM list. */
+    @JvmStatic fun observeNativeCardLyricTouch(ev: MotionEvent, onCard: Boolean) {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            if (onCard) beginLyricGesture(ev, Main.miniPlayerMediaHeader(), LYRIC_TOUCH_CARD)
+        } else observeLyricGesture(ev, LYRIC_TOUCH_CARD)
+    }
+
     /**
      * Hands a whole gesture that starts on the pill to the pill and to nothing else. The pill's
      * own requestDisallowInterceptTouchEvent could not stop swipe-to-unlock, which the keyguard
@@ -1140,6 +1218,10 @@ object MiniPlayerRuntime {
      */
     @JvmStatic fun routeTouch(ev: MotionEvent): Boolean { android.os.Trace.beginSection("MC t.route"); try {
         val action = ev.actionMasked
+        // Even if an immersive page consumes the terminal event before CardTouch sees it,
+        // the feedback must stop reading this finger immediately.
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
+            action == MotionEvent.ACTION_POINTER_DOWN) cancelLyricGesture()
         if (action == MotionEvent.ACTION_DOWN) failedRoute = false
         else if (failedRoute) {
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) failedRoute = false
@@ -1147,6 +1229,7 @@ object MiniPlayerRuntime {
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) releasePress()
         if (action == MotionEvent.ACTION_DOWN) {
+            cancelLyricGesture()
             routedX = ev.rawX
             routedY = ev.rawY
             routedDrag = false
@@ -1192,6 +1275,9 @@ object MiniPlayerRuntime {
             val pillOwner = pill?.let { p -> live().firstOrNull { it.pill() === p } }
             routedSmall = pillOwner?.smallIslandAt(ev.rawX, ev.rawY) == true
             routedControl = !routedSmall && pill?.controlAt(ev.rawX, ev.rawY) == true
+            if (pillOwner?.lyricGestureIsMusic(routedSmall, routedMorph) == true) {
+                beginLyricGesture(ev, pill, LYRIC_TOUCH_CAPSULE)
+            }
             if (routedSmall && pillOwner != null && !routedMorph) {
                 // Taken where it is, the pill's nudge left alone.
                 pill?.springNudgeBack(0f, 0f)
@@ -1209,6 +1295,7 @@ object MiniPlayerRuntime {
                 "small=$routedSmall caught=$routedMorph disc=${hit?.second}" +
                 (pillOwner?.smallProbe(ev.rawX, ev.rawY)?.let { " [$it]" } ?: ""))
         }
+        observeLyricGesture(ev, LYRIC_TOUCH_CAPSULE)
         // A drag on the lock screen itself - the swipe up to the PIN pad - is the lock screen
         // leaving: the buttons held through the wake are let go so they fade with it.
         if (routed?.get() == null && action == MotionEvent.ACTION_MOVE && !routedSwiped) {
@@ -1411,6 +1498,7 @@ object MiniPlayerRuntime {
 
     /** An exception in our click handler must not open the system panel under our capsule. */
     @JvmStatic fun cancelOwnedTouch(): Boolean {
+        cancelLyricGesture()
         val target = routed?.get()
         failedRoute = target != null
         if (target != null) {
@@ -1424,6 +1512,7 @@ object MiniPlayerRuntime {
     }
 
     private fun endRoute() {
+        if (lyricTouchSource == LYRIC_TOUCH_CAPSULE) cancelLyricGesture()
         routedOwner?.stopAnticipating()
         routedIsland = false
         routedNote = false

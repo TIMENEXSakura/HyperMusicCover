@@ -345,12 +345,48 @@ public class LiveAlertScene implements ImmersiveScene {
         }
     }
 
+    private static volatile java.lang.reflect.Method sContrastSurfaceAccessor;
+    private String mContrastSurfaceAccess = "pending";
+
+    /** Resolve the one hidden accessor on the sampler's worker, never on a rendering frame. */
+    public static void prepareContrastSurfaceAccess() throws ReflectiveOperationException {
+        if (sContrastSurfaceAccessor != null) return;
+        java.lang.reflect.Method method;
+        try { method = SurfaceControlViewHost.SurfacePackage.class.getMethod("getSurfaceControl"); }
+        catch (NoSuchMethodException hidden) {
+            method = org.lsposed.hiddenapibypass.HiddenApiBypass.getDeclaredMethod(
+                    SurfaceControlViewHost.SurfacePackage.class, "getSurfaceControl");
+        }
+        method.setAccessible(true);
+        sContrastSurfaceAccessor = method;
+    }
+
+    /** Read-only state without notification content or map coordinates. */
+    public String contrastSurfaceState() {
+        SurfaceView view = mSurface;
+        return "content=" + mContent + ",shown=" + mShown
+                + ",attached=" + (view != null && view.isAttachedToWindow())
+                + ",visible=" + (view != null && view.isShown())
+                + ",fade=" + Math.round(mFade * 100f) + ",scale=" + Math.round(mScale * 100f)
+                + ",size=" + (view == null ? "none" : view.getWidth() + "x" + view.getHeight())
+                + ",package=" + (mPackage != null) + ",accessor=" + (sContrastSurfaceAccessor != null)
+                + ",control=" + mContrastSurfaceAccess;
+    }
+
     /** Main thread only: the remote app's subtree, excluding SystemUI glyphs and lyric overlays. */
     public ContrastSurface contrastSurface() {
         SurfaceView view = mSurface;
         if (!mContent || !mShown || view == null || !view.isAttachedToWindow() || !view.isShown()
                 || mFade < 0.98f || Math.abs(mScale - 1f) > 0.01f) return null;
-        SurfaceControl control = packageControl();
+        SurfaceControl control = null;
+        try {
+            java.lang.reflect.Method accessor = sContrastSurfaceAccessor;
+            if (accessor != null && mPackage != null) control = (SurfaceControl) accessor.invoke(mPackage);
+            mContrastSurfaceAccess = control == null ? "null" : control.isValid() ? "valid" : "invalid";
+        } catch (Throwable failure) {
+            Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+            mContrastSurfaceAccess = cause.toString().replace('\n', ' ').replace('\r', ' ');
+        }
         if (control == null || !control.isValid() || view.getWidth() <= 0 || view.getHeight() <= 0)
             return null;
         return new ContrastSurface(control, view.getWidth(), view.getHeight(), mContrastSurfaceGeneration);

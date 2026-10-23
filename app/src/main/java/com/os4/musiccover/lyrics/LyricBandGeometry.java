@@ -33,6 +33,25 @@ public final class LyricBandGeometry {
         return Math.max(layoutTop, obstacleFloor - (layoutFloor - layoutBottom));
     }
 
+    /** Never use the travelling full-size clock as a capsule's temporary layout anchor. */
+    static float layoutClock(boolean capsule, float drawnClock, float coverClock) {
+        return capsule ? coverClock : drawnClock;
+    }
+
+    /** The clock can uncover rows as it shrinks, without pushing or resizing those rows. */
+    static float visibleTop(float layoutTop, float layoutClock, float drawnClock) {
+        if (!Float.isFinite(layoutTop) || !Float.isFinite(layoutClock)
+                || !Float.isFinite(drawnClock)) return layoutTop;
+        return Math.max(layoutTop, drawnClock + Math.max(0f, layoutTop - layoutClock));
+    }
+
+    /** Match the outer canvas translation/scale when testing a row against a fixed clip. */
+    static float presentedY(float y, float center, float offset, float scale) {
+        if (!Float.isFinite(y) || !Float.isFinite(center) || !Float.isFinite(offset)
+                || !Float.isFinite(scale) || scale <= 0f) return y;
+        return offset + center + (y - center) * scale;
+    }
+
     /** Keep the capsule's geometry through panel handoffs and any closing container morph. */
     public static boolean usesCapsuleSpace(boolean requested, boolean keptMini,
                                           boolean musicMoving, boolean previouslyUsed) {

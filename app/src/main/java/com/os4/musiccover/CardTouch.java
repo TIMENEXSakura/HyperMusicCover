@@ -161,6 +161,9 @@ public final class CardTouch {
      * and taps (the buttons) never qualify, and are left alone from the DOWN on.
      */
     static int cardSwipe(MotionEvent ev) { android.os.Trace.beginSection("MC t.cardSwipe"); try {
+        if (ev.getActionMasked() != MotionEvent.ACTION_DOWN) {
+            MiniPlayerRuntime.observeNativeCardLyricTouch(ev, false);
+        }
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
                 if (sCardSwipeFired && sCardSwipeSpread) {
@@ -175,6 +178,7 @@ public final class CardTouch {
                 boolean onCard = MiniPlayerRuntime.wantsNativeCardSwipe()
                         && !Main.sGestureOnCentre && !ChargeAnim.sGestureOnCharge
                         && MediaCard.cardRectContains(ev.getRawX(), ev.getRawY());
+                MiniPlayerRuntime.observeNativeCardLyricTouch(ev, onCard);
                 if (!onCard && !sCardSwipeSpread && !Main.sGestureOnCentre && !ChargeAnim.sGestureOnCharge) {
                     sCardSwipeRow = MiniPlayerRuntime.releasedRowAt(ev.getRawX(), ev.getRawY());
                 }

@@ -545,6 +545,11 @@ internal class MiniPlayerController(
 
     fun selectedIsMusic(): Boolean = selectedIsland == MUSIC_ISLAND
 
+    /** A small place or an in-flight view may hold a different island from the main pill. */
+    fun lyricGestureIsMusic(small: Boolean, catchingMorph: Boolean): Boolean =
+        if (catchingMorph) noteMorphKey == null || noteMorphKey == MUSIC_ISLAND
+        else (if (small) smallKey else selectedIsland) == MUSIC_ISLAND
+
     fun allowsSideSwitch(): Boolean = !stackedStyle()
 
     fun allowsStackSwitch(): Boolean = stackedStyle() && islandCount() >= 2 &&
@@ -7254,6 +7259,7 @@ internal class MiniPlayerController(
     }
 
     fun destroy() {
+        MiniPlayerRuntime.cancelLyricGesture()
         destroyed = true
         capsuleLyricGeometry = false
         pendingSceneFeedback = null
