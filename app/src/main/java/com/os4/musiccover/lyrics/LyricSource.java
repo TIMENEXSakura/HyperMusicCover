@@ -540,16 +540,6 @@ public final class LyricSource {
         }
     }
 
-    private static String documentOfLyricInfo(String json) {
-        if (json == null || json.isEmpty()) return null;
-        try {
-            String doc = jsonString(new org.json.JSONObject(json), "ttml");
-            return doc == null || doc.trim().isEmpty() ? null : doc;
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
     /**
      * A string field of a payload, or null when it is absent, null, or not a string at all.
      *
