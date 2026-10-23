@@ -39,10 +39,10 @@ public class LyricLineExitTest {
         assertEquals(2, lines.size()); // presentation never removes lyric data
     }
 
-    @Test public void leadWaitsForEveryBackgroundAndLeavesUnfinishedOverlapVisible() {
+    @Test public void leadWaitsForBackgroundAndLeavesUnfinishedOverlapVisible() {
         LyricLine lead = line(0, 1000);
-        lead.addBackground(line(400, 1800));
-        lead.addBackground(line(1200, 2400));
+        lead.bg = line(400, 2400);
+        lead.end = Math.max(lead.end, lead.bg.end);
         List<LyricLine> lines = Arrays.asList(lead, line(500, 3000));
         LyricLineExit exits = new LyricLineExit();
         exits.step(lines, 900, 100L, true, false, true);
@@ -55,7 +55,7 @@ public class LyricLineExitTest {
         exits.step(lines, 2400, 1600L, true, false, true);
         assertTrue(exits.row(0).departing());
         assertFalse(exits.row(1).departing());
-        assertEquals(2, lead.backgrounds().length);
+        assertEquals(2400, lead.bg.end);
     }
 
     @Test public void losingFocusToANewerSingerCannotEndAnUnfinishedVoice() {
