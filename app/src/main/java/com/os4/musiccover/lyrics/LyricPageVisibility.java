@@ -5,10 +5,11 @@ final class LyricPageVisibility {
     private LyricPageVisibility() {}
 
     static float progress(boolean capsulePage, boolean coverMode, float cardProgress) {
-        // Cover mode still owns its card/lyric transition, including a page first opened from
-        // an island. Outside cover mode the card is deliberately kept at zero progress.
+        // Body taps own a lyric overlay, even when a cover is retained behind navigation.
+        // Its fade must not wait for an intentionally folded native card to unfold.
+        if (capsulePage) return 1f;
         if (coverMode) return Math.max(0f, Math.min(1f, cardProgress));
-        return capsulePage ? 1f : 0f;
+        return 0f;
     }
 
     static boolean needsIndependentClock(boolean capsulePage, boolean coverMode,

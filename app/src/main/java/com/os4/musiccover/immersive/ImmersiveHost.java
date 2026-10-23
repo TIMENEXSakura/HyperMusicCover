@@ -269,6 +269,13 @@ public final class ImmersiveHost {
         return scene != null && scene.isNavigation() && isPresented(scene) ? scene.id() : null;
     }
 
+    /** Read-only remote subtree, available only for the navigation page actually presented. */
+    public static LiveAlertScene.ContrastSurface presentedNavigationSurface() {
+        ImmersiveScene scene = sOpen;
+        return scene instanceof LiveAlertScene && scene.isNavigation() && isPresented(scene)
+                ? ((LiveAlertScene) scene).contrastSurface() : null;
+    }
+
     /** The scene a tap on this focus island opens; null for an island that has none. */
     public static ImmersiveScene sceneFor(String pkg, boolean focus, String key) {
         for (ImmersiveScene s : SCENES) {

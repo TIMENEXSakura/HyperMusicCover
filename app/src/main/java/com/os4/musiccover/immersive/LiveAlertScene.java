@@ -229,6 +229,7 @@ public class LiveAlertScene implements ImmersiveScene {
     private float mScaleTo = 1f;
     private android.animation.ValueAnimator mScaleAnim;
     private SurfaceControlViewHost.SurfacePackage mPackage;
+    private long mContrastSurfaceGeneration;
     private final SurfaceControl.Transaction mScaleTx = new SurfaceControl.Transaction();
 
     /** The scale follows the fade's direction, as the host's springs both start on one call. */
@@ -331,6 +332,30 @@ public class LiveAlertScene implements ImmersiveScene {
         }
     }
 
+    /** Borrowed handle and local size only; consumers must never release the scene's handle. */
+    public static final class ContrastSurface {
+        public final SurfaceControl control;
+        public final int width, height;
+        public final long generation;
+        ContrastSurface(SurfaceControl control, int width, int height, long generation) {
+            this.control = control;
+            this.width = width;
+            this.height = height;
+            this.generation = generation;
+        }
+    }
+
+    /** Main thread only: the remote app's subtree, excluding SystemUI glyphs and lyric overlays. */
+    public ContrastSurface contrastSurface() {
+        SurfaceView view = mSurface;
+        if (!mContent || !mShown || view == null || !view.isAttachedToWindow() || !view.isShown()
+                || mFade < 0.98f || Math.abs(mScale - 1f) > 0.01f) return null;
+        SurfaceControl control = packageControl();
+        if (control == null || !control.isValid() || view.getWidth() <= 0 || view.getHeight() <= 0)
+            return null;
+        return new ContrastSurface(control, view.getWidth(), view.getHeight(), mContrastSurfaceGeneration);
+    }
+
     /**
      * Both halves of the alpha: the view's, which SurfaceView carries onto its surface in its own
      * updates, and the SurfaceControl's directly, so the frame this is called in has it whether or
@@ -380,6 +405,7 @@ public class LiveAlertScene implements ImmersiveScene {
         mFade = 1f;
         stopScale();
         mPackage = null;
+        mContrastSurfaceGeneration++;
         mScale = 1f;
         mScaleTo = 1f;
         boolean had = mContent;
@@ -459,6 +485,7 @@ public class LiveAlertScene implements ImmersiveScene {
             }
             mSurface.setChildSurfacePackage(pkg);
             mPackage = pkg;
+            mContrastSurfaceGeneration++;
             // A new page takes the scale the fade has it at.
             applyScale(mScale);
             boolean first = !mContent;

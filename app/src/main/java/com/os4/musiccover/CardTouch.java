@@ -245,7 +245,9 @@ public final class CardTouch {
                         && !MiniPlayerRuntime.islandsTakeRows();
                 MiniPlayerRuntime.noteTouch("card swipe fired cover=" + Main.sCoverMode
                         + " shared=" + sCardSwipeShared);
-                if (Main.sCoverMode) {
+                // A capsule page keeps its cover/lyrics: use the ordinary card drag below,
+                // whose UP/CANCEL decides whether only the controls should fold.
+                if (Main.sCoverMode && !LockLyrics.capsulePageRequested()) {
                     // Out of the cover or the lyrics, landing on the pill: the scene exit
                     // shrinks the card into it.
                     MiniPlayerRuntime.preferMini();

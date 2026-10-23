@@ -4,7 +4,36 @@ package com.os4.musiccover.lyrics;
 public final class LyricBandGeometry {
     private LyricBandGeometry() {}
 
-    /** A committed swipe clears the request before its moving container reaches the card. */
+    /** Stable layout reference for one displayed page, independent of the visible clip. */
+    static final class Reference {
+        private long request = Long.MIN_VALUE;
+        private float fraction = Float.NaN;
+
+        float floor(long newRequest, float screenHeight, float restingCardTop) {
+            if (!Float.isFinite(screenHeight) || screenHeight <= 0f) return Float.NaN;
+            if (request != newRequest || !Float.isFinite(fraction)) {
+                if (!Float.isFinite(restingCardTop) || restingCardTop <= 0f
+                        || restingCardTop >= screenHeight) return Float.NaN;
+                fraction = restingCardTop / screenHeight;
+                request = newRequest;
+            }
+            return fraction * screenHeight;
+        }
+    }
+
+    /**
+     * Extra room extends downward only. A rising card changes this clip, never the layout
+     * band's anchor, focus fit, scroll target or spring. Preserve the configured bottom gap.
+     */
+    static float visibleBottom(float layoutTop, float layoutBottom, float layoutFloor,
+                               float obstacleFloor) {
+        if (!Float.isFinite(layoutTop) || !Float.isFinite(layoutBottom)
+                || !Float.isFinite(layoutFloor) || !Float.isFinite(obstacleFloor)
+                || layoutBottom <= layoutTop || layoutFloor < layoutBottom) return layoutBottom;
+        return Math.max(layoutTop, obstacleFloor - (layoutFloor - layoutBottom));
+    }
+
+    /** Keep the capsule's geometry through panel handoffs and any closing container morph. */
     public static boolean usesCapsuleSpace(boolean requested, boolean keptMini,
                                           boolean musicMoving, boolean previouslyUsed) {
         return requested || keptMini || musicMoving && previouslyUsed;

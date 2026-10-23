@@ -67,30 +67,46 @@ public final class LockLyrics {
     public static volatile boolean sTapHidden;
     /** A capsule's page request. The background still belongs to the configured cover scene. */
     private static boolean sCapsulePage;
+    /** The current page began in a capsule, including its subsequent native-card handoff. */
+    private static boolean sCapsuleLayoutOrigin;
+
+    public static boolean capsuleLayoutOrigin() { return sCapsuleLayoutOrigin; }
+
+    /** Actual scene destruction/new non-capsule entry, not a card presentation handoff. */
+    public static void resetCapsuleLayoutOrigin() { sCapsuleLayoutOrigin = false; }
     /** A new visibility request re-evaluates temporary navigation contrast once. */
     private static long sContrastRequestId;
 
     static long contrastRequestId() { return sContrastRequestId; }
+    /** Body taps fade at the lyric anchor; retained through their closing frames. */
+    private static boolean sCapsuleFadeOnly;
+
+    static boolean capsuleUsesFade() { return sCapsuleFadeOnly; }
 
     /** Includes a request still loading, so a second tap can cancel it immediately. */
     public static boolean capsulePageRequested() {
         return sCapsulePage;
     }
 
-    /** Main selects the normal background scene first; this only changes the lyric page. */
+    /** Prepare the lyric request/cache before Main enters the chosen background scene. */
     public static void setCapsuleVisible(boolean visible, String key, MediaController controller) {
         sCapsulePage = visible;
+        sCapsuleLayoutOrigin = visible;
         sTapHidden = !visible;
-        if (visible) notePopOrigin(com.os4.musiccover.island.MiniPlayerRuntime.musicIslandCentreOnScreen());
-        else notePopTarget(com.os4.musiccover.island.MiniPlayerRuntime.musicIslandHomeOnScreen());
+        sCapsuleFadeOnly = true;
+        notePopOrigin(null);
+        notePopTarget(null);
+        if (!visible) Main.clearCapsuleNavigationOverlay();
         show(visible, key, controller, "hidden by capsule");
+        if (visible) capsuleLayoutBottomOnScreen();
         ModuleState.saveState();
         startCapsuleDiagnostics(visible);
     }
 
-    /** Handoff to the normal card/cover keeps the lyric choice and loaded data. */
+    /** End the explicit page request when its media session is destroyed. */
     public static void clearCapsulePage() {
         sCapsulePage = false;
+        Main.clearCapsuleNavigationOverlay();
         Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         refresh();
     }
@@ -371,6 +387,9 @@ public final class LockLyrics {
     private static final long STILL_BLUR_WAIT_MS = 1200L;
 
     static boolean blurSettled() {
+        // A body tap already prepared lyrics before the initial cover request. Fade them
+        // with that entry, rather than append a second arrival after the cover's blur ack.
+        if (sCapsulePage) return true;
         if (!blurWanted()) return true;
         long now = SystemClock.uptimeMillis();
         if (!Main.sVideoWallpaper) {
@@ -673,6 +692,7 @@ public final class LockLyrics {
             sPopAt = 0L;
             return;
         }
+        if (!sCapsulePage) sCapsuleFadeOnly = false;
         sPopX = centre[0];
         sPopY = centre[1];
         sPopAt = SystemClock.uptimeMillis();
@@ -797,6 +817,8 @@ public final class LockLyrics {
      * the module's band and the app's preview in the same place.
      */
     private static final float CARD_TOP_FRACTION = 1700f / 2608f;
+    private static final LyricBandGeometry.Reference sCapsuleLayoutReference =
+            new LyricBandGeometry.Reference();
     /** Which geometry route answered last; -1 until one has. */
     private static volatile int sBandSrc = -1;
 
@@ -870,6 +892,20 @@ public final class LockLyrics {
         }
         setBandSource(BAND_DEFAULT);
         return Main.screenHeight() * CARD_TOP_FRACTION;
+    }
+
+    /**
+     * Capsule pages keep the ordinary card area's layout anchor, adding only visible rows
+     * below it. Read the recorded resting card before any drag and retain that reference for
+     * this visibility request: moving/folding the card must not re-centre or rescale the text.
+     * Kept outside LyricView so rebuilding its window does not pick a new mid-swipe anchor.
+     */
+    static float capsuleLayoutBottomOnScreen() {
+        float screen = Main.screenHeight();
+        float recorded = MediaCard.sampledCardTop();
+        float candidate = Float.isFinite(recorded) && recorded >= screen / 3f && recorded < screen
+                ? recorded : screen * CARD_TOP_FRACTION;
+        return sCapsuleLayoutReference.floor(sContrastRequestId, screen, candidate);
     }
 
     /**
@@ -1467,6 +1503,8 @@ public final class LockLyrics {
         sEnabled = on;
         if (!on) {
             sCapsulePage = false;
+            resetCapsuleLayoutOrigin();
+            Main.clearCapsuleNavigationOverlay();
             Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         }
         // The switch is the master, so it takes the tap's answer with it. Switching the lyrics
@@ -1487,6 +1525,10 @@ public final class LockLyrics {
      */
     public static void toggleByTap(String key, MediaController c) {
         if (!sEnabled) return;
+        if (!sCapsulePage) {
+            resetCapsuleLayoutOrigin();
+            sCapsuleFadeOnly = false;
+        }
         sTapHidden = !sTapHidden;
         Xp.log(TAG + "two-finger tap: lyrics " + (sTapHidden ? "hidden" : "shown"));
         show(!sTapHidden, key, c, "hidden by the two-finger tap");
@@ -1499,8 +1541,10 @@ public final class LockLyrics {
      * which of them did it and one of them is a setting.
      */
     private static void show(boolean on, String key, MediaController c, String why) {
-        sContrastRequestId++;
         if (on) {
+            // Closing keeps the current ink through its fade; only a new display request
+            // reselects contrast and captures a fresh layout reference.
+            sContrastRequestId++;
             sKey = "";
             onTrack(key, c);
         } else if (!sDemo) {
@@ -1653,6 +1697,9 @@ public final class LockLyrics {
 
     /** again = tell the other side even when the answer has not changed. */
     private static void updateBlur(boolean again) {
+        // Navigation owns the currently presented background. Changing a lyric overlay
+        // must not frost/unfrost an album cover still retained underneath that page.
+        if (Main.capsuleLyricsOverNavigation()) return;
         if (!Main.coverModeOn()) {
             setBlurSent(false);
             return;

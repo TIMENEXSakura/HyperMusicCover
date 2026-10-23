@@ -9,42 +9,90 @@ public class LyricBandGeometryTest {
         return LyricBandGeometry.include(previous, drawn, 120f, top, 600f, height, 1080f, 2300f);
     }
 
-    private static float bandHeight(float floor) {
+    private static float[] band(float floor) {
         float[] band = new float[2];
         assertTrue(LyricStyle.DEFAULT.writeBand(600f, floor, 3f, 75f, band));
-        return band[1] - band[0];
+        return band;
+    }
+
+    private static float clip(float[] band, float layoutFloor, float floor) {
+        return LyricBandGeometry.visibleBottom(band[0], band[1], layoutFloor, floor);
     }
 
     @Test public void foldedCardDoesNotConsumeTheSpaceAboveTheCapsule() {
         float floor = add(Float.NaN, false, 1500f, 600f);
         floor = add(floor, true, 2160f, 140f);
         assertEquals(2160f, floor, 0f);
-        // Exercise the production band calculation: more room means additional full rows,
-        // while text size, the gap and the user's existing fill setting are left intact.
-        assertTrue(bandHeight(floor) / 75f > bandHeight(1500f) / 75f + 8f);
+        float[] layout = band(1500f);
+        float bottom = clip(layout, 1500f, floor);
+        // Extra rows extend only below the original layout. Its centre is now above the
+        // visible area's centre rather than moving down to centre the larger list.
+        assertEquals(660f, bottom - layout[1], 0f);
+        assertTrue((bottom - layout[1]) / 75f > 8f);
+        assertTrue((layout[0] + layout[1]) / 2f < (layout[0] + bottom) / 2f);
         assertEquals(25f, LyricStyle.DEFAULT.sizeSp, 0f);
     }
 
-    @Test public void risingMediaContainerContinuouslyPushesTheBandUp() {
-        float previous = bandHeight(2160f);
+    @Test public void risingMediaContainerOnlyClipsBottomWithoutRecenteringOrRescaling() {
+        LyricBandGeometry.Reference reference = new LyricBandGeometry.Reference();
+        float layoutFloor = reference.floor(1L, 2400f, 1500f);
+        float[] layout = band(layoutFloor);
+        float previous = clip(layout, layoutFloor, 2160f);
+        float focusFit = LyricFocus.fit(1000f, layout[1] - layout[0]);
         for (float top : new float[]{2050f, 1900f, 1750f, 1600f, 1500f}) {
             float floor = add(add(Float.NaN, true, 2160f, 140f), true, top, 600f);
             assertEquals(top, floor, 0f);
-            float now = bandHeight(floor);
+            float stableFloor = reference.floor(1L, 2400f, top);
+            float[] next = band(stableFloor);
+            assertArrayEquals(layout, next, 0f);
+            assertEquals(focusFit, LyricFocus.fit(1000f, next[1] - next[0]), 0f);
+            float now = clip(next, stableFloor, floor);
             assertTrue(now < previous);
             previous = now;
         }
+        assertEquals(layout[1], previous, 0f);
     }
 
-    @Test public void cancellingAReverseSwipeRestoresTheSameLargeBand() {
-        float expanded = bandHeight(add(Float.NaN, true, 2160f, 140f));
-        float previous = bandHeight(1600f);
+    @Test public void cancellingAReverseSwipeRestoresBottomRowsAtTheirOriginalPositions() {
+        float[] layout = band(1500f);
+        float expanded = clip(layout, 1500f, 2160f);
+        float previous = clip(layout, 1500f, 1600f);
         for (float top : new float[]{1750f, 1900f, 2050f, 2160f}) {
-            float now = bandHeight(add(Float.NaN, true, top, 140f));
+            float now = clip(layout, 1500f, add(Float.NaN, true, top, 140f));
             assertTrue(now > previous);
             previous = now;
         }
         assertEquals(expanded, previous, 0f);
+        assertArrayEquals(band(1500f), layout, 0f);
+    }
+
+    @Test public void referenceSurvivesRebuildAndHandoffButNewRequestCanChooseANewAnchor() {
+        LyricBandGeometry.Reference reference = new LyricBandGeometry.Reference();
+        assertEquals(1500f, reference.floor(7L, 2400f, 1500f), 0f);
+        assertEquals(1500f, reference.floor(7L, 2400f, 1900f), 0f);
+        // Recreated views ask the same request-owned reference; rotation scales that reference.
+        assertEquals(750f, reference.floor(7L, 1200f, 1000f), 0f);
+        assertEquals(1400f, reference.floor(8L, 2400f, 1400f), 0.001f);
+    }
+
+    @Test public void aFullyOccludingCardHidesRowsWithoutShrinkingTheLayout() {
+        float[] layout = band(1500f);
+        assertEquals(layout[0], clip(layout, 1500f, 400f), 0f);
+        assertEquals(layout[1], clip(layout, 1500f, Float.NaN), 0f);
+        assertArrayEquals(band(1500f), layout, 0f);
+        LyricStyle style = LyricStyle.DEFAULT.with("fill", 0.5f).with("pos", 0.8f);
+        float[] custom = new float[2];
+        assertTrue(style.writeBand(600f, 1500f, 3f, 75f, custom));
+        assertEquals(660f, clip(custom, 1500f, 2160f) - custom[1], 0f);
+        assertEquals(1500f - custom[1], 2160f - clip(custom, 1500f, 2160f), 0f);
+    }
+
+    @Test public void invalidReferenceCannotPoisonTheNextValidLayout() {
+        LyricBandGeometry.Reference reference = new LyricBandGeometry.Reference();
+        assertTrue(Float.isNaN(reference.floor(1L, 0f, 1500f)));
+        assertTrue(Float.isNaN(reference.floor(1L, 2400f, Float.NaN)));
+        assertEquals(1500f, reference.floor(1L, 2400f, 1500f), 0f);
+        assertEquals(1500f, reference.floor(1L, 2400f, Float.NaN), 0f);
     }
 
     @Test public void highestOfSeveralCapsulesAndMovingCardsWinsIndependentlyOfOrder() {

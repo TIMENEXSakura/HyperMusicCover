@@ -2485,6 +2485,7 @@ public class Main extends XposedModule {
      * the display is off, or nothing was taken over - it is handed back in one frame.
      */
     private static void exitCoverMode(boolean animate) {
+        if (!LockLyrics.capsulePageRequested()) LockLyrics.resetCapsuleLayoutOrigin();
         CoverCardLayer.leaving();
         sCoverMode = false;
         PaletteThrottle.INSTANCE.retriggerSoon(CoverPush.PALETTE_AFTER_PUSH_MS);
@@ -2760,6 +2761,13 @@ public class Main extends XposedModule {
     private static boolean sCapsuleKeepsMini;
     /** Only a cover opened by this body tap is closed by its matching second tap. */
     private static boolean sCapsuleOwnsCover;
+    /** A lyric-only overlay must not yield an already presented navigation page to cover art. */
+    private static volatile boolean sCapsuleOverNavigation;
+    private static volatile int sCapsuleNavigationEpoch;
+
+    public static boolean capsuleLyricsOverNavigation() { return sCapsuleOverNavigation; }
+
+    public static void clearCapsuleNavigationOverlay() { sCapsuleOverNavigation = false; }
 
     /** Capsule body only: the existing lyric/cover scene, with its media card still folded. */
     public static Boolean miniPlayerToggleLyrics(MediaController selected) {
@@ -2777,20 +2785,32 @@ public class Main extends XposedModule {
         String key = trackKey(current);
         if (visible) {
             sCapsuleKeepsMini = true;
+            sCapsuleOverNavigation = sCapsuleOverNavigation
+                    || ImmersiveHost.presentedNavigationKey() != null;
+            if (sCapsuleOverNavigation) {
+                ++sCapsuleNavigationEpoch;
+                ++sPushGen;
+                sTapSuppressed = true;
+            }
             // A two-finger hide can leave this same scene requested. Reopening its lyrics
             // must preserve ownership, so the later body tap can still restore the wallpaper.
-            sCapsuleOwnsCover |= !sCoverMode && sCoverFeatureOn;
+            if (sCapsuleOverNavigation) sCapsuleOwnsCover = false;
+            else sCapsuleOwnsCover |= !sCoverMode && sCoverFeatureOn;
             MiniPlayerRuntime.forgetRestoreScene();
             // The island's controller is authoritative. A retained cover key can be empty or
             // stale while automatic cover entry is off or was dismissed by the user.
-            watchSession(current);
             sTrackKey = key;
-            if (sCoverFeatureOn && !sCoverMode) {
+            // Restore visibility and cached lyrics before either session watching or the
+            // cover entry can send a kept picture. Otherwise a second open sends sharp art
+            // using the previous tap's hidden state, then brings lyrics in as a second step.
+            LockLyrics.setCapsuleVisible(true, key, current);
+            watchSession(current);
+            if (!sCapsuleOverNavigation && sCoverFeatureOn && !sCoverMode) {
                 // Use the same background, clock and cover settings as swipe/artwork entry.
                 // The presentation flag above keeps this from selecting the expanded card.
                 setCoverEnabled(true, true, false);
             }
-            LockLyrics.setCapsuleVisible(true, key, current);
+            LockLyrics.refresh();
         } else {
             LockLyrics.setCapsuleVisible(false, key, current);
             if (sCapsuleOwnsCover && sCoverMode) {
@@ -2803,7 +2823,8 @@ public class Main extends XposedModule {
         MiniPlayerRuntime.refresh();
         Xp.log(TAG + "capsule lyrics request=" + visible + " session=" + current.getPackageName()
                 + " keyReady=" + !key.isEmpty() + " cover=" + sCoverMode
-                + " folded=" + sCapsuleKeepsMini + " source=" + LockLyrics.sourceName()
+                + " folded=" + sCapsuleKeepsMini + " navigationOverlay=" + sCapsuleOverNavigation
+                + " source=" + LockLyrics.sourceName()
                 + " attached=" + LockLyrics.wantsAttached() + " shown=" + LockLyrics.wantsShown());
         return visible;
     }
@@ -2812,9 +2833,16 @@ public class Main extends XposedModule {
     public static void handCapsuleSceneToNative() {
         if (!sCapsuleKeepsMini && !LockLyrics.capsulePageRequested()) return;
         sCapsuleKeepsMini = false;
-        sCapsuleOwnsCover = false;
-        LockLyrics.clearCapsulePage();
+        // Opening controls changes only their presentation. Keep the lyric request and
+        // background ownership so folding the card cannot dismiss an explicitly opened page.
         Xp.log(TAG + "capsule lyrics handed to native card: cover=" + sCoverMode);
+    }
+
+    /** A real panel-collapse choice, before its morph is created or visibility refreshed. */
+    public static void foldCapsuleControls() {
+        if (!LockLyrics.capsulePageRequested()) return;
+        sCapsuleKeepsMini = true;
+        MiniPlayerRuntime.forgetRestoreScene();
     }
 
     private static boolean sCapsuleLyricsHeld;
@@ -2828,6 +2856,11 @@ public class Main extends XposedModule {
     }
 
     public static void miniPlayerEnterCover() {
+        if (LockLyrics.capsulePageRequested()) {
+            handCapsuleSceneToNative();
+            MiniPlayerRuntime.openCardInstead();
+            return;
+        }
         if (sCapsuleKeepsMini && sCoverMode) {
             handCapsuleSceneToNative();
             MiniPlayerRuntime.openCardInstead();
@@ -2858,6 +2891,11 @@ public class Main extends XposedModule {
 
     /** An island opened from the cover: the cover goes, its card coming down into the row. */
     public static void miniPlayerLeaveCover() {
+        if (LockLyrics.capsulePageRequested()) {
+            foldCapsuleControls();
+            MiniPlayerRuntime.refresh();
+            return;
+        }
         if (!sCoverMode) return;
         // Left the way a swipe down leaves it, and remembered the same way: the exit below holds
         // the cover off (sTapSuppressed) so a track change does not put it back over the page,
@@ -2875,6 +2913,12 @@ public class Main extends XposedModule {
      */
     public static void miniPlayerTurnScene(boolean enter) {
         if (!keyguardShowing() || bouncerUp()) return;
+        if (LockLyrics.capsulePageRequested()) {
+            sCapsuleKeepsMini = !enter;
+            MiniPlayerRuntime.forgetRestoreScene();
+            MiniPlayerRuntime.refresh();
+            return;
+        }
         if (enter) {
             if (sCoverMode || !sCoverFeatureOn) return;
             // Back out of the island mid-morph: the lyrics come out of it too, from where it is.
@@ -3769,7 +3813,8 @@ public class Main extends XposedModule {
     static void enterFromTap(String why) {
         // Before the morph is begun, not only at setCoverEnabled: the morph would otherwise
         // start out of a card that then never turns into anything.
-        if (!sCoverFeatureOn) return;
+        if (!sCoverFeatureOn || sCapsuleOverNavigation) return;
+        if (!LockLyrics.capsulePageRequested()) LockLyrics.resetCapsuleLayoutOrigin();
         long t0 = System.nanoTime();
         enterFromTapNow(why);
         noteToggleCost("in", System.nanoTime() - t0);
@@ -4072,6 +4117,7 @@ public class Main extends XposedModule {
                 boolean ownedCover = sCapsuleOwnsCover;
                 boolean capsuleRequested = LockLyrics.capsulePageRequested();
                 LockLyrics.clearCapsulePage();
+                LockLyrics.resetCapsuleLayoutOrigin();
                 sCapsuleKeepsMini = false;
                 sCapsuleOwnsCover = false;
                 // Manual cover mode does not react to MediaCard.applyCardState. A cover
@@ -4207,10 +4253,12 @@ public class Main extends XposedModule {
         // The cover is pushed off the media card's key, and the session's metadata can still be
         // the last song's at that moment - so the motion cover follows the metadata itself. It
         // keys on the song, so a player singing into TITLE does not look it up per line.
-        if (sCoverMode) MotionCover.onCover(sCoverCardStyle.mode == CoverCardStyle.CARD);
+        if (sCoverMode && !sCapsuleOverNavigation)
+            MotionCover.onCover(sCoverCardStyle.mode == CoverCardStyle.CARD);
         // Dismissing automatic cover entry must not stop lyrics following the selected player.
         // Use live session identity here, not the cover's last successfully committed key.
         if (LockLyrics.capsulePageRequested()) LockLyrics.onTrack(trackKey(sWatched), sWatched);
+        if (sCapsuleOverNavigation) return;
         if (!sAuto || !MediaCard.sCardShowing) return;
         // The user tapped the cover away and the card is still up. The one case where "there is
         // a card" must not mean "put the cover back".
@@ -4295,12 +4343,14 @@ public class Main extends XposedModule {
     static void setCoverEnabled(final boolean on, final boolean animate,
                                         final boolean fresh) {
         // The one door every way into the cover goes through, so the master switch is kept here.
-        if (on && !sCoverFeatureOn) return;
+        if (on && (!sCoverFeatureOn || sCapsuleOverNavigation)) return;
+        final int navigationEpoch = sCapsuleNavigationEpoch;
         CoverPush.pushArtAsync(on, on && fresh);
         Runnable r = new Runnable() {
             @Override
             public void run() {
                 if (on) {
+                    if (sCapsuleOverNavigation || navigationEpoch != sCapsuleNavigationEpoch) return;
                     enterCoverMode(animate && screenOn());
                     // With the lyrics' frost decided now (LockLyrics.attach), the kept cover.
                     CoverPush.sendKeptFirst();

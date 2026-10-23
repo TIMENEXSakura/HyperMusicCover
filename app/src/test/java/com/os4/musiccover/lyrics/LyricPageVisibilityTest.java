@@ -19,11 +19,21 @@ public class LyricPageVisibilityTest {
         assertEquals(1f, LyricPageVisibility.progress(true, false, 0f), 0f);
     }
 
-    @Test public void coverPageStillFollowsCardDuringEntryAndAfterCapsuleHandoff() {
-        for (boolean capsulePage : new boolean[]{false, true}) {
-            assertEquals(0f, LyricPageVisibility.progress(capsulePage, true, 0f), 0f);
-            assertEquals(.35f, LyricPageVisibility.progress(capsulePage, true, .35f), 0f);
-            assertEquals(1f, LyricPageVisibility.progress(capsulePage, true, 1f), 0f);
+    @Test public void ordinaryCoverPageStillFollowsItsCard() {
+        assertEquals(0f, LyricPageVisibility.progress(false, true, 0f), 0f);
+        assertEquals(.35f, LyricPageVisibility.progress(false, true, .35f), 0f);
+        assertEquals(1f, LyricPageVisibility.progress(false, true, 1f), 0f);
+    }
+
+    @Test public void retainedCoverBehindNavigationCannotDelayTheCapsuleOverlay() {
+        assertEquals(1f, LyricPageVisibility.progress(true, true, 0f), 0f);
+    }
+
+    @Test public void openingAndFoldingControlsKeepsExplicitLyricsVisibleInBothBackgroundModes() {
+        for (boolean cover : new boolean[]{false, true}) {
+            for (float card : new float[]{0f, .3f, 1f, .7f, 0f}) {
+                assertEquals(1f, LyricPageVisibility.progress(true, cover, card), 0f);
+            }
         }
     }
 

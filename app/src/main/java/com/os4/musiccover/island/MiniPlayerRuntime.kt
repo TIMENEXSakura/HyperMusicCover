@@ -1956,6 +1956,7 @@ object MiniPlayerRuntime {
     }
 
     internal fun selectMini(token: Any) {
+        Main.foldCapsuleControls()
         val changed = synchronized(selectionLock) { sessionSelection.requestMini(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> mini")
         live().forEach { it.beginTransition(toNative = false, scene = false) }
@@ -1969,6 +1970,7 @@ object MiniPlayerRuntime {
     }
 
     internal fun chooseMini(token: Any) {
+        Main.foldCapsuleControls()
         val changed = synchronized(selectionLock) { sessionSelection.requestMini(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> mini (out of the scene)")
     }

@@ -49,23 +49,24 @@ public final class LyricContrastBackground {
     /** Main thread: a stable target background, not each intermediate crossfade frame. */
     static Reading current() {
         Context context = Main.sAppCtx;
-        if (context == null) return remember("unknown", 0, "unknown");
+        if (context == null) {
+            NavigationSurfaceContrast.stop();
+            return remember("unknown", 0, "unknown");
+        }
         // Plain AOD is black; the held/full-screen AOD dims the scene. Never carry the lit
         // page's frozen black ink into either, and never interpret coverTint()==0 as black.
         if (!Main.screenOnCached()) {
+            NavigationSurfaceContrast.stop();
             return remember("aod:" + ClockCollapse.aodHeld() + ":" + ClockCollapse.aodFullScreen(),
                     Color.WHITE, "aod-neutral");
         }
         int night = context.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         String navigation = ImmersiveHost.presentedNavigationKey();
         if (navigation != null) {
-            // A remote SurfacePackage supplies no pixel/palette feedback. The host forwards
-            // its configuration to the page's followThemeMode; this is explicitly a fallback,
-            // never the previous album's color or the notification capsule's material color.
-            int ink = night == Configuration.UI_MODE_NIGHT_YES ? Color.WHITE : Color.BLACK;
-            return remember("navigation:" + navigation + ":" + night, ink,
-                    "navigation-theme-fallback");
+            Reading actual = NavigationSurfaceContrast.current(navigation);
+            return remember(actual.key, actual.color, actual.source);
         }
+        NavigationSurfaceContrast.stop();
         if (Main.coverModeOn() && !Main.keepsWallpaper()) {
             CoverSample sample = sCover;
             int mode = Main.sCoverCardStyle.mode;

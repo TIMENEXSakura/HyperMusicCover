@@ -34,12 +34,32 @@ public class LyricContrastStateTest {
         assertEquals(LyricContrastState.WHITE, state.update(true, "wallpaper", 7L, LyricContrastState.WHITE));
     }
 
-    @Test public void backgroundOrThemeChangeDoesNotReuseThePreviousScenesInk() {
+    @Test public void backgroundOrThemeChangeDoesNotKeepThePreviousScenesResolvedChoice() {
         LyricContrastState state = new LyricContrastState();
         state.update(true, "map:day", 3L, LyricContrastState.BLACK);
-        assertEquals(LyricContrastState.WHITE, state.update(true, "cover:pending", 3L, 0));
+        assertEquals(LyricContrastState.BLACK, state.update(true, "cover:pending", 3L, 0));
         assertEquals(LyricContrastState.BLACK, state.update(true, "cover:pending", 3L, LyricContrastState.BLACK));
         assertEquals(LyricContrastState.WHITE, state.update(true, "map:night", 3L, LyricContrastState.WHITE));
+    }
+
+    @Test public void surfaceRebuildKeepsTheVisibleInkUntilItsOwnSampleArrives() {
+        LyricContrastState state = new LyricContrastState();
+        state.update(true, "map:surface1", 8L, LyricContrastState.BLACK);
+        assertEquals(LyricContrastState.BLACK, state.update(true, "map:surface2", 8L, 0));
+        assertEquals(LyricContrastState.BLACK, state.update(true, "map:surface2", 8L, 0));
+        // The retained display color did not resolve the replacement Surface's sample.
+        assertEquals(LyricContrastState.WHITE,
+                state.update(true, "map:surface2", 8L, LyricContrastState.WHITE));
+        assertEquals(LyricContrastState.WHITE,
+                state.update(true, "map:surface2", 8L, LyricContrastState.BLACK));
+    }
+
+    @Test public void aNewVisibilityRequestDoesNotInheritThePreviousRequestsFallback() {
+        LyricContrastState state = new LyricContrastState();
+        state.update(true, "map:surface1", 8L, LyricContrastState.BLACK);
+        assertEquals(LyricContrastState.WHITE, state.update(true, "map:surface2", 9L, 0));
+        assertEquals(LyricContrastState.BLACK,
+                state.update(true, "map:surface2", 9L, LyricContrastState.BLACK));
     }
 
     @Test public void detachedViewReleasesItsPreviousChoice() {

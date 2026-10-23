@@ -4687,6 +4687,10 @@ internal class MiniPlayerController(
      * cover's card before (2026-09-25).
      */
     private fun openCover() {
+        if (LockLyrics.capsulePageRequested()) {
+            Main.miniPlayerEnterCover()
+            return
+        }
         MiniPlayerRuntime.forgetRestoreScene()
         // A notification still on its way - opening, or springing back out after a pull too
         // short to collapse it - is not "out" yet to expandedKey, and the cover came up over it
@@ -7562,7 +7566,8 @@ internal class MiniPlayerController(
 
     /** A new music gesture starts with its current origin, never a previous page's residue. */
     private fun captureCapsuleLyricGeometry() {
-        capsuleLyricGeometry = LockLyrics.capsulePageRequested() || Main.capsuleKeepsMini()
+        capsuleLyricGeometry = LockLyrics.capsuleLayoutOrigin() ||
+            LockLyrics.capsulePageRequested() || Main.capsuleKeepsMini()
     }
 
     /**
@@ -7579,7 +7584,8 @@ internal class MiniPlayerController(
             morph?.containerBox() != null) ||
             exchange?.movers?.get(MUSIC_ISLAND)?.morph?.containerBox() != null ||
             spread?.items?.any { it.key == MUSIC_ISLAND && it.morph?.containerBox() != null } == true
-        capsuleLyricGeometry = LyricBandGeometry.usesCapsuleSpace(LockLyrics.capsulePageRequested(),
+        capsuleLyricGeometry = LyricBandGeometry.usesCapsuleSpace(
+            LockLyrics.capsuleLayoutOrigin() || LockLyrics.capsulePageRequested(),
             Main.capsuleKeepsMini(), musicMoving, capsuleLyricGeometry)
         if (!capsuleLyricGeometry) return Float.NaN
 

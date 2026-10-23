@@ -185,14 +185,16 @@ internal object LockIslands {
      *
      * Opening it puts the page up behind the lock screen, the way tapping the music's island puts
      * the cover up, and like the cover it stays up across an unlock until it is pulled back into
-     * the island or the scene stops being ready. So it is kept when the rest of [released] is
-     * cleared, and dropped only by [recapture] or [forgetScene]. Kept by key rather than looked
+     * the island or the scene stops being ready. Navigation explicitly opened by a body tap
+     * also survives panel recapture; only its next body tap or scene ending closes that choice.
+     * It is kept when the rest of [released] is cleared. Kept by key rather than looked
      * up: the notification can be gone from the reads by the time it is dropped. One at a time:
      * another page's island opened takes over, and the first one's row stays a plain row until
      * the lock screen goes, as any other opened island does.
      */
     private var sceneKey: String? = null
     private var scene: ImmersiveScene? = null
+    private val sceneRetention = CapsuleSceneRetention()
 
     /** The open page's notification: its row is in the stack while the page is up. */
     fun openSceneKey(): String? = sceneKey
@@ -205,6 +207,7 @@ internal object LockIslands {
         val target = sceneOf(key) ?: return null
         if (sceneKey == key) {
             val closing = scene ?: target
+            sceneRetention.closed(key)
             sceneKey = null
             scene = null
             sceneMissingSince = 0L
@@ -217,11 +220,13 @@ internal object LockIslands {
         // invalidate it. Writing it afterwards would resurrect a page those callbacks closed.
         sceneKey = key
         scene = target
+        sceneRetention.opened(key, target.isNavigation(), fromBody = true)
         sceneMissingSince = 0L
         try {
             ImmersiveHost.open(target)
         } catch (error: Throwable) {
             if (sceneKey == key && scene === target) {
+                sceneRetention.closed(key)
                 sceneKey = null
                 scene = null
             }
@@ -276,6 +281,7 @@ internal object LockIslands {
         sceneMissingSince = 0L
         val closed = scene ?: return
         Xp.log("MCIsland: ${closed.id()}'s notification is gone; closing its page")
+        sceneRetention.closed(key)
         sceneKey = null
         scene = null
         released.remove(key)
@@ -289,11 +295,14 @@ internal object LockIslands {
      * screen is the plain one with the list on it, the page's notification a card in that list
      * like any other opened one - still let out ([released]), so it folds home with the rest.
      * It stayed as the page's before, and was left standing over the folded stack (the user,
-     * 2026-09-30). Its key, or null with no page open.
+     * 2026-09-30). Explicit navigation choices now stay behind the list and survive its collapse.
+     * Returns its key in either case, or null with no page open.
      */
     fun closeSceneForList(): String? {
         val key = sceneKey ?: return null
+        if (sceneRetention.keeps(key)) return key
         val closed = scene
+        sceneRetention.closed(key)
         sceneKey = null
         scene = null
         sceneMissingSince = 0L
@@ -306,6 +315,7 @@ internal object LockIslands {
     fun forgetScene(which: ImmersiveScene) {
         if (scene !== which) return
         val key = sceneKey
+        sceneRetention.closed(key)
         sceneKey = null
         scene = null
         if (key != null && released.remove(key)) invalidate("${which.id()} over")
@@ -591,6 +601,7 @@ internal object LockIslands {
             scene?.let { runCatching { ImmersiveHost.close(it) } }
             sceneKey = key
             scene = opened
+            sceneRetention.opened(key, opened.isNavigation(), fromBody = false)
             sceneMissingSince = 0L
             runCatching { ImmersiveHost.open(opened) }
                 .onFailure { Xp.log("MCIsland: ${opened.id()} not opened: $it") }
@@ -611,8 +622,9 @@ internal object LockIslands {
             return
         }
         if (released.remove(key)) invalidate("island $key recaptured")
-        if (key == sceneKey) {
+        if (key == sceneKey && !sceneRetention.keeps(key)) {
             val closed = scene
+            sceneRetention.closed(key)
             sceneKey = null
             scene = null
             closed?.let { runCatching { ImmersiveHost.close(it) } }
