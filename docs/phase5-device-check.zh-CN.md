@@ -30,7 +30,18 @@
 
 ## 构建验证
 
-本地独立 JVM 集成运行 174 项测试全部通过，包含提示互斥／打断、背景锁色／恢复、亮暗对比、胶囊与媒体卡几何、TTML／和声和来源回退。`git diff --check` 通过。完整 Android 编译、GitHub Actions 测试和 APK 校验结果待云构建后补入。当前环境不能执行实际 HyperOS 锁屏像素、触摸和跨进程地图验收；构建及纯状态测试不能代替下列真机检查。
+本地独立 JVM 集成运行 174 项测试全部通过，包含提示互斥／打断、背景锁色／恢复、亮暗对比、胶囊与媒体卡几何、TTML／和声和来源回退。`git diff --check` 通过。[GitHub Actions 构建](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39879738282) 的代码提交为 `eb16c54`：
+
+- Release APK、Lint 和 Xposed 入口检查全部通过。
+- 云端 53 组、349 项测试通过，0 失败／错误／跳过。
+- Lint 311 条警告、5 条提示、0 错误；较 Plus4 多一条 `UseKtx` 风格建议，未新增错误。
+- APK：`HyperMusicCover-0.9.45-Plus5.apk`，版本号 `945009`，11575711 字节。
+- SHA256：`6490e22175a2d5dc8c98c729a8090b2176b14ce06a04dc7d70b5482aa314e26b`。
+- v2 签名验证通过，证书 SHA256：`6abf5e2bf368a10d485965abc45b290cfd55f02dda37136ba8119f3b050bbe0f`。与 Plus4 的测试签名不同，普通覆盖安装会被拒绝；更换测试版前先导出配置。
+- 已核对云端产物摘要，解码 Manifest 确认版本和应用 ID，检查新增背景／胶囊边界诊断确实进入 DEX。
+- APK、原始测试报告、构建日志、摘要与验证结果保存在 `../artifacts/eb16c54/`（相对仓库根目录）。
+
+当前环境不能执行实际 HyperOS 锁屏像素、触摸和跨进程地图验收；构建及纯状态测试不能代替下列真机检查。
 
 ## 真机检查
 
