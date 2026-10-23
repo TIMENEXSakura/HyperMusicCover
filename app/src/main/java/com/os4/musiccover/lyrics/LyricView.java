@@ -469,6 +469,7 @@ final class LyricView extends View {
      * left one - the next step starts afresh rather than integrating the whole time parked.
      */
     void rejoin() {
+        gestureFeedback.reset();
         lastStep = 0L;
         lastLoopFrame = 0L;
         LockLyrics.startTick();
@@ -1428,7 +1429,7 @@ final class LyricView extends View {
     }
 
     private boolean needsFrames() {
-        if (!isAttachedToWindow()) return false;
+        if (!isAttachedToWindow() || LyricWindow.parked(this)) return false;
         if (gestureFeedback.moving()) return true;
         if (navigationColor.moving()) return true;
         if (show != showTarget()) return true;
