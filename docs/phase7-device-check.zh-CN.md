@@ -37,7 +37,16 @@ Plus6 固定了媒体卡参考下边界，但歌词上边界仍来自正在收�
 
 ## 自动化验证
 
-本地 Java 25／Kotlin 纯逻辑回归 **228 项通过**，`git diff --check` 通过。Android 云端构建结果待补充。新增回归包含稳定布局目标／首次行组适配、变换后裁剪、整组手势、Android 15／16／17 接口契约，以及超时并发上限。纯接口测试使用对应官方方法签名模型，不能代替真机上的权限和远端 Surface 验证。
+本地 Java 25／Kotlin 纯逻辑回归 **228 项通过**，`git diff --check` 通过。[GitHub Actions 构建](https://github.com/TIMENEXSakura/HyperMusicCover/actions/runs/39887410338) 对提交 `7fd41cc9b55390ec4827ec1c4faf761524888874` 完成 **60 个套件、403 项测试，0 失败／错误／跳过**；Release、Lint 和 Xposed 入口检查通过。新增回归包含稳定布局目标／首次行组适配、变换后裁剪、整组手势、Android 15／16／17 接口契约，以及超时并发上限。纯接口测试使用对应官方方法签名模型，不能代替真机上的权限和远端 Surface 验证。
+
+### 安装包与检查明细
+
+- 版本：`0.9.45-Plus7`，版本号 `945011`。
+- 本机文件：`../artifacts/7fd41cc/HyperMusicCover-0.9.45-Plus7.apk`（相对仓库根目录）。
+- APK SHA-256：`ef106f05e4bc84af2df088b65bf9e9ee4323af922b830adc4d0d665e9355b1a1`。云端压缩包摘要、APK 内 SHA 清单、清单版本、DEX 新诊断标记及 Xposed 入口均已核对。
+- APK v2 签名验证通过；证书 SHA-256：`dfda5522b74ac377215b739edec669b45e035cb0ec21ab4c0f393cedd2d3922a`。本次云端调试证书与 Plus6 不同，不能普通覆盖安装；请先导出配置后再自行处理更换安装包。没有代为卸载、安装或重启。
+- Lint：**312 Warning、5 Hint、0 Error**。相较 Plus6 新增一个 `ClockCollapse.sCoverContentTarget` 的 `StaticFieldLeak` 警告；已核对新进入／释放的缓存清理，但视图重建仍列为真机验收项。五个旧 `PrivateApi` 警告因反射集中到接口解析器而不再直接标记，不代表内部 API 的 ROM 兼容性已获真机证明。
+- 完整报告、日志、摘要和签名验证存于同一 artifacts 目录。**构建通过不等于真机行为验证通过。**
 
 ## 真机待测
 
