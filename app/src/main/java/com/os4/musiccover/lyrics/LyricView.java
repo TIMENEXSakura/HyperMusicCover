@@ -370,6 +370,7 @@ final class LyricView extends View {
     /** One transform for the whole lyric group; it never enters the per-line layout. */
     private final LyricGestureFeedback gestureFeedback = new LyricGestureFeedback();
     private final LyricEntryMotion entryMotion = new LyricEntryMotion();
+    private final LyricFinalHold finalHold = new LyricFinalHold();
     private final LyricBandGeometry.FixedBand fixedCapsuleBand = new LyricBandGeometry.FixedBand();
     private final LyricBandGeometry.FixedBand morphMiniBand = new LyricBandGeometry.FixedBand();
     private final LyricBandGeometry.FixedBand morphCardBand = new LyricBandGeometry.FixedBand();
@@ -394,6 +395,7 @@ final class LyricView extends View {
     /** Offset used only while one lead lyric is taller than the visible viewport. */
     private float overflowOffset;
     private int overflowIndex = -1;
+    private boolean overflowMoving;
     /** Bounded entry diagnostics: a start and at most three distinct visible draw frames. */
     private long placementRequest = Long.MIN_VALUE, placementFrameAt = Long.MIN_VALUE;
     private int placementBuild = -1, placementFrames;
@@ -561,8 +563,6 @@ final class LyricView extends View {
 
     @Override
     protected void onDetachedFromWindow() {
-        Gen.removeCallbacksOn(this, finalExitWake);
-        finalExitScheduledAt = -1L;
         cancelLayout();
         gestureFeedback.reset();
         entryMotion.reset();
@@ -575,6 +575,8 @@ final class LyricView extends View {
         appearance = null;
         tintFrameAt = Long.MIN_VALUE;
         lineExits.reset(lines.size());
+        finalHold.reset();
+        overflowMoving = false;
         navigationContrast.clear();
         navigationColor.clear();
         bmpPaint.setColorFilter(null);
@@ -738,10 +740,12 @@ final class LyricView extends View {
         // as music played. SystemUI's main thread went to GC for 27s in two minutes and was
         // killed for an ANR (2026-09-16 02:51). Only what moves redraws.
         ms = smoothPosition(now);
+        LyricLine finalLine = lines.get(lines.size() - 1);
+        changed |= finalHold.step(ms, LyricFocus.startOf(finalLine), LyricFocus.endOf(finalLine),
+                dt, still || gone || startingPage);
         changed |= lineExits.step(lines, ms, now, LockLyrics.playing(),
                 LyricTransition.recentSeek(now, jumpedAt, SEEK_WINDOW_MS),
                 !still && !gone && show > 0.02f);
-        scheduleFinalExit(now);
         int n = lines.size();
         int idx = indexAt(ms);
 
@@ -778,8 +782,9 @@ final class LyricView extends View {
         boolean initialFocus = LyricBandGeometry.initialPlacement(focus, startingPage);
         // When following an oversized line ends, preserve every row's current screen position
         // before normal focus scrolling takes over, including a completed line waiting to fade.
+        boolean retainFinal = finalHold.completed() && sf == n - 1;
         boolean overflowEnded = overflowIndex >= 0 && (sf != overflowIndex || dots >= 0
-                || singing.count != 1 || sf >= main.length
+                || (singing.count != 1 && !retainFinal) || sf >= main.length
                 || main[sf].getHeight() <= clipBandBottom - clipBandTop);
         if (overflowEnded) {
             LyricTransition.shift(-overflowOffset, scroll, aim, nextAim);
@@ -894,9 +899,11 @@ final class LyricView extends View {
 
         // A single lead lyric taller than the viewport follows its sung word (or the time
         // through the line when there are no word timestamps). Ordinary rows take no new path.
-        boolean followingOverflow = dotsFor < 0 && singing.count == 1 && focus >= 0
+        boolean followingOverflow = dotsFor < 0
+                && (singing.count == 1 || retainFinal && singing.count == 0) && focus >= 0
                 && focus < main.length && main[focus].getHeight() > clipBandBottom - clipBandTop
                 && clipBandBottom > clipBandTop;
+        overflowMoving = false;
         if (followingOverflow) {
             StaticLayout layout = main[focus];
             LyricLine line = lines.get(focus);
@@ -906,17 +913,22 @@ final class LyricView extends View {
             float rowY = LyricOverflowFollow.rowPosition(character, layout.getLineStart(row),
                     layout.getLineEnd(row), layout.getLineTop(row), layout.getLineBottom(row));
             float centeredTop = LyricBandGeometry.singingTop(bandTop, bandBottom, height[focus], musicCardProgress);
-            float targetOffset = LyricOverflowFollow.offset(rowY, layout.getHeight(),
-                    clipBandTop, clipBandBottom, centeredTop, musicCardProgress);
+            float targetOffset = retainFinal
+                    ? LyricOverflowFollow.scaledOffset(rowY, layout.getHeight(), height[focus],
+                            scale[focus] * finalHold.scale(), clipBandTop, clipBandBottom,
+                            centeredTop, musicCardProgress)
+                    : LyricOverflowFollow.offset(rowY, layout.getHeight(), clipBandTop,
+                            clipBandBottom, centeredTop, musicCardProgress);
             float before = overflowOffset;
             if (initialFocus || still || gone) overflowOffset = targetOffset;
             else overflowOffset = approach(overflowOffset, targetOffset, dt, 0.18f);
             if (Math.abs(overflowOffset - targetOffset) < 0.1f) overflowOffset = targetOffset;
+            overflowMoving = overflowOffset != targetOffset;
             overflowIndex = focus;
             changed |= Math.abs(overflowOffset - before) > 0.01f;
             // Line-timed text normally sleeps until the next line; this exceptional tall
             // line needs frames while playing so its viewport can follow the playhead.
-            if (!still && LockLyrics.playing()) why |= 256;
+            if (!still && LockLyrics.playing() && !retainFinal) why |= 256;
         }
 
         // StaticLayout wraps long main/background/translation text at the configured size.
@@ -1018,7 +1030,7 @@ final class LyricView extends View {
                 why |= 128;
             }
         }
-        if (!still && (wordsLive() || dotsLive())) why |= 256;
+        if (!still && ((mediaPositionKnown && wordsLive()) || dotsLive())) why |= 256;
         LockLyrics.setGlowing(glowSoon());
         prewarmGlow();
         noteWhy(why);
@@ -1524,22 +1536,6 @@ final class LyricView extends View {
         return capsulePresentation() ? LyricGestureFeedback.entryOffset(entryMotion.progress()) * CAPSULE_ENTRY_DP * density : 0f;
     }
 
-    private long finalExitScheduledAt = -1L;
-    private final Runnable finalExitWake = new Runnable() {
-        @Override public void run() {
-            finalExitScheduledAt = -1L;
-            if (isAttachedToWindow() && !LyricWindow.parked(LyricView.this)) kick();
-        }
-    };
-
-    private void scheduleFinalExit(long now) {
-        long at = lineExits.finalWakeAt();
-        if (at == finalExitScheduledAt) return;
-        Gen.removeCallbacksOn(this, finalExitWake);
-        finalExitScheduledAt = at;
-        if (at >= 0L) Gen.postDelayedOn(this, finalExitWake, Math.max(1L, at - now));
-    }
-
     private boolean needsFrames() {
         if (!isAttachedToWindow() || LyricWindow.parked(this)) return false;
         if (gestureFeedback.moving() || entryMotion.moving()) return true;
@@ -1558,6 +1554,8 @@ final class LyricView extends View {
         if (p == ClockCollapse.Phase.ENTER || p == ClockCollapse.Phase.EXIT) return true;
         if (lines.isEmpty() || focus < 0 || show == 0f) return false;
         if (lineExits.moving()) return true;
+        if (finalHold.moving()) return true;
+        if (overflowMoving) return true;
         if (transition.moving) return true;
         int n = lines.size();
         int lo = 0, hi = n - 1;
@@ -1986,6 +1984,7 @@ final class LyricView extends View {
         smoothAt = 0L;
         mediaPositionKnown = false;
         stopPosition.reset();
+        finalHold.reset();
         jumpedAt = Long.MIN_VALUE;
         scroll = new float[n];
         vel = new float[n];
@@ -2000,6 +1999,7 @@ final class LyricView extends View {
         focus = -1;
         overflowOffset = 0f;
         overflowIndex = -1;
+        overflowMoving = false;
         singing.reset();
         transition.reset(base);
         lineExits.reset(n);
@@ -2486,7 +2486,8 @@ final class LyricView extends View {
             boolean unfinished = ms >= LyricFocus.startOf(lines.get(i))
                     && ms < LyricFocus.endOf(lines.get(i));
             boolean waitingForTop = exit != null && exit.waitingForTop();
-            float rowTransitionAlpha = unfinished || waitingForTop ? 1f : transition.alpha(i);
+            boolean heldFinal = i == n - 1 && finalHold.completed();
+            float rowTransitionAlpha = unfinished || waitingForTop || heldFinal ? 1f : transition.alpha(i);
             if (rowTransitionAlpha <= 0.003f) continue;
             // The interlude slot above this line, if it has one: its dots move with the line, and
             // sit there dim from the start rather than leaving a hole until their turn.
@@ -2504,8 +2505,9 @@ final class LyricView extends View {
                 if (da > 0.003f) drawDots(canvas, i, side, dy, da);
             }
             float y = anchor + transition.position(i) - scroll[i];
-            float screenY = LyricTransition.scaledTop(y, height[i], scale[i]);
-            float screenBottom = screenY + height[i] * scale[i];
+            float rowScale = scale[i] * (i == n - 1 ? finalHold.scale() : 1f);
+            float screenY = LyricTransition.scaledTop(y, height[i], rowScale);
+            float screenBottom = screenY + height[i] * rowScale;
             float shownY = LyricBandGeometry.presentedY(screenY, center, presentationOffset, presentationScale);
             float shownBottom = LyricBandGeometry.presentedY(screenBottom, center, presentationOffset, presentationScale);
             if (shownY >= clipBandBottom || shownBottom <= clipBandTop) {
@@ -2515,8 +2517,8 @@ final class LyricView extends View {
             // An unfinished row stays opaque at the top edge; clipping can still move it
             // offscreen. Finished rows retain the normal edge treatment.
             float edge = LyricBandGeometry.rowAlphaWhilePlaying(shownY, shownBottom, clipBandTop,
-                    clipBandBottom, fade, unfinished || waitingForTop);
-            float a = vis * edge * rowTransitionAlpha;
+                    clipBandBottom, fade, unfinished || waitingForTop || heldFinal);
+            float a = vis * edge * rowTransitionAlpha * (i == n - 1 ? finalHold.alpha() : 1f);
             if (a <= 0.003f) {
                 lineExits.forgetWaitingPose(i);
                 continue;
@@ -2529,8 +2531,7 @@ final class LyricView extends View {
             // boundary does its existing 300ms fade/shrink take ownership of the pose.
             if (lineExits.startAtTop(i, shownY, clipBandTop, fade, drawAt, musicBandMorph,
                     transition.position(i) - scroll[i])) kick();
-            else if (waitingForTop && i == n - 1) scheduleFinalExit(drawAt);
-            drawLine(canvas, i, side, y, a);
+            drawLine(canvas, i, side, y, a, rowScale, emph[i], blur[i], lit[i]);
         }
         canvas.restoreToCount(save);
     }

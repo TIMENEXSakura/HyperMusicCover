@@ -41,4 +41,23 @@ public class LyricOverflowFollowTest {
         float middle = LyricBandGeometry.singingTop(100f, 500f, 1200f, .5f);
         assertEquals(0f, LyricOverflowFollow.offset(600f, 1200f, 100f, 500f, middle, .5f), 0f);
     }
+
+    @Test public void scaledVeryLongFinalLineKeepsItsEndWithinTheViewport() {
+        float height = 100000f, scale = 1.025f * .94f;
+        float top = LyricBandGeometry.singingTop(100f, 500f, height);
+        float offset = LyricOverflowFollow.scaledOffset(height, height, height, scale,
+                100f, 500f, top, 0f);
+        float scaledTop = top + height * (1f - scale) / 2f + offset;
+        assertEquals(500f, scaledTop + height * scale, .02f);
+    }
+
+    @Test public void scalingThatMakesLineFitKeepsWholeLineWithinViewport() {
+        float height = 420f, scale = .94f;
+        float top = LyricBandGeometry.singingTop(100f, 500f, height);
+        float offset = LyricOverflowFollow.scaledOffset(height, height, height, scale,
+                100f, 500f, top, 0f);
+        float scaledTop = top + height * (1f - scale) / 2f + offset;
+        assertTrue(scaledTop >= 100f);
+        assertTrue(scaledTop + height * scale <= 500.001f);
+    }
 }

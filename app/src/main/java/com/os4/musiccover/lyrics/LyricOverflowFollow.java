@@ -31,4 +31,20 @@ final class LyricOverflowFollow {
                 focusY - viewport * LyricBandGeometry.singingFraction(cardProgress)));
         return viewportTop - scroll - centredTop;
     }
+
+    /** Keep a scaled final line's sung position visible around its actual scaled centre. */
+    static float scaledOffset(float focusY, float leadHeight, float rowHeight, float scale,
+                              float viewportTop, float viewportBottom, float centredTop,
+                              float cardProgress) {
+        if (!Float.isFinite(scale) || scale <= 0f || !Float.isFinite(rowHeight)) return 0f;
+        float top = centredTop + rowHeight * (1f - scale) / 2f;
+        float height = leadHeight * scale;
+        float viewport = viewportBottom - viewportTop;
+        if (viewport <= 0f || !Float.isFinite(height) || height < 0f) return 0f;
+        if (height <= viewport) {
+            float visibleTop = Math.max(viewportTop, Math.min(top, viewportBottom - height));
+            return visibleTop - top;
+        }
+        return offset(focusY * scale, height, viewportTop, viewportBottom, top, cardProgress);
+    }
 }
