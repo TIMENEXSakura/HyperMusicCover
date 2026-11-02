@@ -21,10 +21,11 @@ final class NavigationLyricBackground {
     }
 
     /** Consume once, including when current settings/session no longer allow a music background. */
-    boolean finish(String navigationScene, boolean coverEnabled, boolean sessionAvailable) {
+    boolean finish(String navigationScene, boolean coverEnabled, boolean sessionAvailable,
+                   boolean lyricsVisible, boolean independentCover) {
         if (!belongsTo(navigationScene)) return false;
         scene = null;
-        return coverEnabled && sessionAvailable;
+        return coverEnabled && sessionAvailable && (lyricsVisible || independentCover);
     }
 
     void cancel() { scene = null; }

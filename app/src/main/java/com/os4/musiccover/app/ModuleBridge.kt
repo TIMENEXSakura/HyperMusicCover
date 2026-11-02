@@ -139,6 +139,7 @@ object ModuleBridge {
         val lyricsHdr: Boolean = false,
         /** Keep capsule lyric animation independent of the moving clock's clipping edge. */
         val lyricClockIndependent: Boolean = true,
+        val lyricFlexibleDuet: Boolean = true,
         /** Estimated Bluetooth audio latency; positive offsets advance displayed lyrics. */
         val lyricBtSync: Boolean = true,
         val lyricBtClassic: Int = 400,
@@ -510,6 +511,9 @@ object ModuleBridge {
     fun setLyricClockIndependent(context: Context, on: Boolean) =
         send(context, "lyricclockindependent") { putExtra("on", on) }
 
+    fun setLyricFlexibleDuet(context: Context, on: Boolean) =
+        send(context, "lyricflexduet") { putExtra("on", on) }
+
     fun setLyricBluetoothSync(context: Context, on: Boolean, classic: Int, le: Int) =
         send(context, "lyricbtsync") {
             putExtra("on", on)
@@ -532,7 +536,7 @@ object ModuleBridge {
         send(context, "lyricalign") { putExtra("v", mode) }
 
     fun setLyricsMaxLines(context: Context, count: Int) =
-        send(context, "lyricmaxlines") { putExtra("v", count.coerceIn(1, 4)) }
+        send(context, "lyricmaxlines") { putExtra("v", count.coerceIn(0, 4)) }
 
     fun setLyricAppearance(context: Context, json: String) =
         send(context, "lyricappearance") { putExtra("json", json) }
@@ -989,6 +993,7 @@ object ModuleBridge {
             lyricsKeepOn = b.getBoolean("lyrickeep", false),
             lyricsHdr = b.getBoolean("lyrichdr", false),
             lyricClockIndependent = b.getBoolean("lyricclockindependent", true),
+            lyricFlexibleDuet = b.getBoolean("lyricflexduet", true),
             lyricBtSync = b.getBoolean("lyricbtsync", true),
             lyricBtClassic = b.getInt("lyricbtclassic", 400).coerceIn(-500, 500),
             lyricBtLe = b.getInt("lyricbtle", 100).coerceIn(-500, 500),
@@ -999,7 +1004,7 @@ object ModuleBridge {
             aodBigClock = !b.getBoolean("aodsmall", true),
             lyricsRoma = b.getBoolean("lyricroma", false),
             lyricsAlign = b.getInt("lyricalign", 0),
-            lyricsMaxLines = b.getInt("lyricmaxlines", 3).coerceIn(1, 4),
+            lyricsMaxLines = b.getInt("lyricmaxlines", 3).coerceIn(0, 4),
             lyricBgSizeSp = b.getFloat("lyricbgsize", 17f).coerceIn(10f, 30f),
             lyricAppearance = b.getString("lyricappearance") ?: "{}",
             lyricSourceCustom = b.getBoolean("lyricsourcecustom", false),

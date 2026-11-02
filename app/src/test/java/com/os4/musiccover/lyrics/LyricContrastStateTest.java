@@ -68,4 +68,16 @@ public class LyricContrastStateTest {
         state.clear();
         assertEquals(LyricContrastState.WHITE, state.update(true, "same", 1L, LyricContrastState.WHITE));
     }
+
+    @Test public void cachedEntryIsImmediatelyVisibleButFreshCaptureCanCorrectIt() {
+        LyricContrastState state = new LyricContrastState();
+        // The source supplies a separate provisional key, so its hint cannot resolve the
+        // actual Surface's independent first capture.
+        assertEquals(LyricContrastState.BLACK,
+                state.update(true, "navigation:map:pending:0:cached", 21L, LyricContrastState.BLACK));
+        assertEquals(LyricContrastState.BLACK,
+                state.update(true, "navigation:map:surface:0:cached", 21L, LyricContrastState.BLACK));
+        assertEquals(LyricContrastState.WHITE,
+                state.update(true, "navigation:map:surface:0", 21L, LyricContrastState.WHITE));
+    }
 }

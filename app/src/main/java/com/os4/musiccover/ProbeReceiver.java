@@ -153,6 +153,9 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             ModuleState.saveState();
         } else if ("lyricclockindependent".equals(op)) {
             LockLyrics.setClockIndependentMotion(i.getBooleanExtra("on", !LockLyrics.sClockIndependentMotion));
+        } else if ("lyricflexduet".equals(op)) {
+            LockLyrics.setFlexibleDuet(i.getBooleanExtra("on", LockLyrics.sFlexibleDuet));
+            ModuleState.saveStateSoon();
         } else if ("lyricbtsync".equals(op)) {
             LockLyrics.setBluetoothSync(i.getBooleanExtra("on", LockLyrics.sBluetoothSync),
                     i.getIntExtra("classic", LockLyrics.sBluetoothClassicMs),
@@ -433,6 +436,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             out.putBoolean("lyrickeep", LockLyrics.sKeepOn);
             out.putBoolean("lyrichdr", LockLyrics.sHdr);
             out.putBoolean("lyricclockindependent", LockLyrics.sClockIndependentMotion);
+            out.putBoolean("lyricflexduet", LockLyrics.sFlexibleDuet);
             out.putBoolean("lyricbtsync", LockLyrics.sBluetoothSync);
             out.putInt("lyricbtclassic", LockLyrics.sBluetoothClassicMs);
             out.putInt("lyricbtle", LockLyrics.sBluetoothLeMs);

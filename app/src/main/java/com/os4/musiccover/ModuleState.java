@@ -80,6 +80,7 @@ public final class ModuleState {
                     + "\nlyrichidden=" + (LockLyrics.sTapHidden ? 1 : 0)
                     + "\nlyrichdr=" + (LockLyrics.sHdr ? 1 : 0)
                     + "\nlyricclockindependent=" + (LockLyrics.sClockIndependentMotion ? 1 : 0)
+                    + "\nlyricflexduet=" + (LockLyrics.sFlexibleDuet ? 1 : 0)
                     + "\nlyricbtsync=" + (LockLyrics.sBluetoothSync ? 1 : 0)
                     + "\nlyricbtclassic=" + LockLyrics.sBluetoothClassicMs
                     + "\nlyricbtle=" + LockLyrics.sBluetoothLeMs
@@ -226,6 +227,7 @@ public final class ModuleState {
                         else if ("lyrichidden".equals(k)) LockLyrics.sTapHidden = "1".equals(v);
                         else if ("lyrichdr".equals(k)) LockLyrics.sHdr = "1".equals(v);
                         else if ("lyricclockindependent".equals(k)) LockLyrics.sClockIndependentMotion = "1".equals(v);
+                        else if ("lyricflexduet".equals(k)) LockLyrics.sFlexibleDuet = "1".equals(v);
                         else if ("lyricbtsync".equals(k)) LockLyrics.sBluetoothSync = "1".equals(v);
                         else if ("lyricbtclassic".equals(k)) LockLyrics.sBluetoothClassicMs = Math.max(-500, Math.min(500, Integer.parseInt(v)));
                         else if ("lyricbtle".equals(k)) LockLyrics.sBluetoothLeMs = Math.max(-500, Math.min(500, Integer.parseInt(v)));

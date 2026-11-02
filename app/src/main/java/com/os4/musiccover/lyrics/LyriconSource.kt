@@ -305,6 +305,7 @@ object LyriconSource {
     @JvmStatic
     fun linesFor(title: String?, artist: String?, player: String?, waitForProvider: Boolean): List<LyricLine>? {
         if (!connected()) return null
+        val flexibleDuet = LockLyrics.sFlexibleDuet
         var song = sSong
         if (song == null || !isTrack(song, title, artist)) {
             // Only a provider that has shown it publishes; see sPlayerSongs.
@@ -348,7 +349,8 @@ object LyriconSource {
         }
         if (out.isEmpty()) return null
         out.sortBy { it.start }
-        return out.takeIf { connected() && song === sSong }
+        val lines = LyricParse.flexibleSpeakers(out, flexibleDuet)
+        return lines.takeIf { connected() && song === sSong && LockLyrics.sFlexibleDuet == flexibleDuet }
     }
 
     /**

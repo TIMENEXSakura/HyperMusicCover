@@ -5,6 +5,12 @@ import java.util.Arrays;
 import static org.junit.Assert.*;
 
 public class LyricTransitionTest {
+    @Test public void unlimitedVoiceCountDoesNotSlowAnimationWithoutBound() {
+        float four = LyricTransition.motionWeight(4, 10000f, 500f);
+        assertEquals(four, LyricTransition.motionWeight(1000, 10000f, 500f), 0f);
+        assertTrue(LyricTransition.motionWeight(1, 100f, 500f) < four);
+    }
+
     @Test public void resizingPreservesVisibleTopAndSpringDisplacement() {
         float[] oldHeight = {80}, height = {160}, scale = {0.97f};
         float[] scroll = {20}, aim = {40}, next = {60};

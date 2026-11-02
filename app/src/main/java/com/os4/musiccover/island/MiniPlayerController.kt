@@ -7674,8 +7674,10 @@ internal class MiniPlayerController(
     fun visibleHeightDp(): Float = configuredHeightDp
 
     fun transitionActive(): Boolean = morph != null
-    /** Expanded stacks and pill exchanges are not a settled folded-capsule lyric anchor. */
-    fun lyricBandUnstable(): Boolean = frameTaken()
+    /** Sideways swaps stay on the row; stack switches and card flights may move vertically. */
+    fun lyricBandUnstable(): Boolean = lyricBandMotionUnstable(swap?.kind == SWAP_STACK,
+        morph != null, group != null, flight != null, exchange != null,
+        noteMorphKey != null, pillLandingBox != null, spread != null)
 
     /** Only the music's own morph drives the lyric band; notification morphs are unrelated. */
     fun lyricMusicMorphProgress(): Float {

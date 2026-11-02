@@ -1325,13 +1325,13 @@ object MiniPlayerRuntime {
     private var lyricTouchY = 0f
     private var lyricTouchDensity = 1f
     private var lyricTouchSlop = 0f
-    private var lyricTouchVertical = false
+    private var lyricTouchAxis = MiniPlayerGestureAxis.UNDECIDED
     private var lyricTouchSpeed = 0f
 
     /** Read only: the finger's speed, not a card's fling/spring after the finger has gone. */
     @JvmStatic fun capsuleLyricSwipeVelocityDpPerSecond(): Float {
         val age = android.os.SystemClock.uptimeMillis() - lyricTouchAt
-        return if (lyricTouchTracker != null && lyricTouchVertical && age in 0L..LYRIC_TOUCH_FRESH_MS &&
+        return if (lyricTouchTracker != null && lyricTouchAxis == MiniPlayerGestureAxis.VERTICAL && age in 0L..LYRIC_TOUCH_FRESH_MS &&
             lyricTouchView?.get()?.isAttachedToWindow == true && LockLyrics.wantsShown()) lyricTouchSpeed
         else Float.NaN
     }
@@ -1342,7 +1342,7 @@ object MiniPlayerRuntime {
         lyricTouchTracker = null
         lyricTouchView = null
         lyricTouchSource = 0
-        lyricTouchVertical = false
+        lyricTouchAxis = MiniPlayerGestureAxis.UNDECIDED
         lyricTouchSpeed = 0f
         if (wasActive) LockLyrics.onGestureFeedback()
     }
@@ -1374,8 +1374,8 @@ object MiniPlayerRuntime {
         tracker.addMovement(ev)
         val dx = ev.rawX - lyricTouchX
         val dy = ev.rawY - lyricTouchY
-        if (!lyricTouchVertical && abs(dy) > lyricTouchSlop && abs(dy) >= abs(dx)) lyricTouchVertical = true
-        if (!lyricTouchVertical) return
+        lyricTouchAxis = lyricTouchAxis.resolve(dx, dy, lyricTouchSlop)
+        if (lyricTouchAxis != MiniPlayerGestureAxis.VERTICAL) return
         tracker.computeCurrentVelocity(1000)
         lyricTouchSpeed = LyricGestureFeedback.upwardSpeed(tracker.yVelocity, lyricTouchDensity)
         lyricTouchAt = ev.eventTime
@@ -1411,6 +1411,7 @@ object MiniPlayerRuntime {
             routedX = ev.rawX
             routedY = ev.rawY
             routedDrag = false
+            routedAxis = MiniPlayerGestureAxis.UNDECIDED
             routedSwiped = false
             routedMorph = false
             routedSpread = false
@@ -1433,6 +1434,9 @@ object MiniPlayerRuntime {
                     routedTracker = VelocityTracker.obtain()
                     routedDrag = true
                     routedMorph = true
+                    // A genuine vertical morph is already underway; keep following it even if
+                    // the finger that catches it now moves sideways or turns back.
+                    routedAxis = MiniPlayerGestureAxis.VERTICAL
                 } else routed = null
             }
             if (routed == null) {
@@ -1491,6 +1495,7 @@ object MiniPlayerRuntime {
             if (action == MotionEvent.ACTION_MOVE && kotlin.math.hypot(dx, dy) > slop) {
                 // From here the gesture moves the pill; it hears no more of it itself.
                 routedDrag = true
+                routedAxis = routedAxis.resolve(dx, dy, slop.toFloat())
                 if (!routedSmall) dispatchTo(target, ev, MotionEvent.ACTION_CANCEL)
                 // Sideways on a row of islands, the pull is the islands'; alone, it is a skip.
                 routedOwner = live().firstOrNull { it.pill() === target }
@@ -1536,7 +1541,8 @@ object MiniPlayerRuntime {
         val nx = pillNudgeX(dx, d)
         when (action) {
             MotionEvent.ACTION_MOVE -> {
-                if (!routedMorph && !routedIsland && !routedStack && !routedNote && !routedSpread &&
+                if (!routedMorph && routedAxis == MiniPlayerGestureAxis.VERTICAL &&
+                    !routedIsland && !routedStack && !routedNote && !routedSpread &&
                     -dy > DRAG_THRESHOLD_DP * d) {
                     // Pulled far enough up to mean it: the music - the pill, or the small island -
                     // starts turning into the card under the finger, the nudge handed over as it is.
@@ -1609,7 +1615,7 @@ object MiniPlayerRuntime {
                     // A short drag is only ever a nudge: it springs back and does nothing.
                     // Sideways far enough (or flung) skips; up far enough goes back into the
                     // cover or the lyrics the pill came out of.
-                    val sideways = kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                    val sideways = routedAxis == MiniPlayerGestureAxis.HORIZONTAL
                     val swipe = kotlin.math.max(48f * d, target.width * 0.15f)
                     val fling = 1200f * d
                     if (!cancelled && sideways
@@ -1632,6 +1638,7 @@ object MiniPlayerRuntime {
     private var routedBaseX = 0f
     private var routedBaseY = 0f
     private var routedDrag = false
+    private var routedAxis = MiniPlayerGestureAxis.UNDECIDED
     private var routedMorph = false
     private var routedSpread = false
     private var routedStack = false
@@ -1691,6 +1698,7 @@ object MiniPlayerRuntime {
 
     private fun endRoute() {
         if (lyricTouchSource == LYRIC_TOUCH_CAPSULE) cancelLyricGesture()
+        routedAxis = MiniPlayerGestureAxis.UNDECIDED
         routedOwner?.stopAnticipating()
         routedIsland = false
         routedNote = false

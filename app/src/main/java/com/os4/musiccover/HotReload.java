@@ -292,6 +292,8 @@ public final class HotReload {
             // in, and the shortcut row the mini player hung off.
             out.add(new Object[]{"core", new Object[]{
                     ProbeGuard.token(), Main.sVideoWallpaper, Main.sDepthHidden}});
+            // The hint is just scene IDs and colors; a fresh capture still follows adoption.
+            out.add(new Object[]{"navcontrast", NavigationSurfaceContrast.save()});
             out.add(new Object[]{"clock", Main.sContainer});
             out.add(new Object[]{"mediacard", MediaCard.save()});
             out.add(new Object[]{"island", MiniPlayerRuntime.save()});
@@ -666,6 +668,7 @@ public final class HotReload {
                 Object[] island = null;
                 Object[] notifSink = null;
                 Object[] notifPolicy = null;
+                Object[] navContrast = null;
                 android.view.View container = null;
                 for (Object[] f : features) {
                     if (f == null || f.length < 2 || !(f[0] instanceof String)) continue;
@@ -677,6 +680,9 @@ public final class HotReload {
                             if (f[1] instanceof android.view.View) {
                                 container = (android.view.View) f[1];
                             }
+                            break;
+                        case "navcontrast":
+                            if (f[1] instanceof Object[]) navContrast = (Object[]) f[1];
                             break;
                         case "mediacard":
                             card = f[1];
@@ -699,8 +705,10 @@ public final class HotReload {
                 final Object[] fIsland = island;
                 final Object[] fNotifSink = notifSink;
                 final Object[] fNotifPolicy = notifPolicy;
+                final Object[] fNavContrast = navContrast;
                 final android.view.View fContainer = container;
                 if (fCore != null) step("core", () -> applyCore(fCore));
+                if (fNavContrast != null) step("nav contrast", () -> NavigationSurfaceContrast.adopt(fNavContrast));
                 if (ctx == null) {
                     // Not a failure: the state carried no context, and the attach path will run
                     // boot when the keyguard comes back.

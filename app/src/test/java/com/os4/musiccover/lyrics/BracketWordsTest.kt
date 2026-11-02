@@ -97,6 +97,102 @@ class BracketWordsTest {
     }
 
     @Test
+    fun explicitMaleAndFemaleLabelsNeedOnlyAppearOnce() {
+        val lines = parse("[00:00.00]作词：甲", "[00:00.10]作曲：乙",
+            "[00:01.00]女声：你好", "[00:03.00]继续", "[00:05.00]男唱：再见")
+        assertEquals(listOf("作词：甲", "作曲：乙", "你好", "继续", "再见"), lines.map { it.text })
+        assertEquals(listOf(false, false, false, false, true), lines.map { it.opposite })
+    }
+
+    @Test
+    fun explicitBackingRolesAreOptionalAndCreditsStayCredits() {
+        val rows = arrayOf("[00:00.00]作词：甲", "[00:00.10]作曲：乙", "[00:00.20]和声：丙",
+            "[00:03.00]主唱第一句", "[00:05.00]和声：回声", "[00:07.00]对唱：一起")
+        try {
+            LockLyrics.sFlexibleDuet = true
+            val lines = parse(*rows)
+            assertEquals(listOf("作词：甲", "作曲：乙", "和声：丙", "主唱第一句", "回声", "一起"),
+                lines.map { it.text })
+            assertEquals(listOf(false, false, false, false, true, false), lines.map { it.opposite })
+            LockLyrics.sFlexibleDuet = false
+            assertEquals(listOf("作词：甲", "作曲：乙", "和声：丙", "主唱第一句", "和声：回声", "对唱：一起"),
+                parse(*rows).map { it.text })
+        } finally {
+            LockLyrics.sFlexibleDuet = true
+        }
+    }
+
+    @Test
+    fun explicitTtmlHarmonyAndDuetRolesAreOnlyInterpretedWhenEnabled() {
+        val body = """<tt xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><body><div>
+            <p begin="00:01.000" end="00:02.000">Main</p>
+            <p begin="00:03.000" end="00:04.000" ttm:role="x-harmony">Harmony</p>
+            <p begin="00:05.000" end="00:06.000" ttm:role="duet"><span begin="00:05.000" end="00:06.000">Together</span></p>
+            </div></body></tt>"""
+        try {
+            LockLyrics.sFlexibleDuet = true
+            assertEquals(listOf(false, true, false), LyricParse.parse(body).map { it.opposite })
+            assertEquals(listOf(false, true, false), parse("[00:01.00]Main", "[00:03.00]Harmony: Echo",
+                "[00:05.00]Duet: Together").map { it.opposite })
+            LockLyrics.sFlexibleDuet = false
+            assertEquals(listOf(false, false, false), LyricParse.parse(body).map { it.opposite })
+        } finally {
+            LockLyrics.sFlexibleDuet = true
+        }
+    }
+
+    @Test
+    fun ttmlLineTimedAgentsKeepTheirSidesAlongsideWordTimedLines() {
+        val body = """<tt xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><head><metadata>
+            <ttm:agent type="person" xml:id="v1"/><ttm:agent type="person" xml:id="v2"/>
+            <ttm:agent type="group" xml:id="v0"/></metadata></head><body><div>
+            <p begin="00:01.000" end="00:02.000" ttm:agent="v1">First</p>
+            <p begin="00:03.000" end="00:04.000" ttm:agent="v2">Second<span ttm:role="x-translation">译文</span></p>
+            <p begin="00:05.000" end="00:06.000" ttm:agent="v0">Together</p>
+            <p begin="00:07.000" end="00:08.000" ttm:agent="v1"><span begin="00:07.000" end="00:08.000">Word</span></p>
+            <p begin="00:09.000" end="00:10.000" ttm:agent="v2">Last</p>
+            </div></body></tt>"""
+        try {
+            LockLyrics.sFlexibleDuet = false
+            val lines = LyricParse.parse(body)
+            assertEquals(listOf("First", "Second", "Together", "Word", "Last"), lines.map { it.text })
+            assertEquals(listOf(false, true, false, false, true), lines.map { it.opposite })
+            assertEquals("译文", lines[1].translation)
+            assertTrue(lines[3].hasWords())
+            assertFalse(lines[1].hasWords())
+        } finally {
+            LockLyrics.sFlexibleDuet = true
+        }
+    }
+
+    @Test
+    fun lineTimedAgentsWithTheSameTimestampsStayInDocumentOrder() {
+        val body = """<tt xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><body><div>
+            <p begin="00:01.000" end="00:02.000" ttm:agent="v1">Same</p>
+            <p begin="00:01.000" end="00:02.000" ttm:agent="v2">Same</p>
+            </div></body></tt>"""
+        val lines = LyricParse.parse(body)
+        assertEquals(listOf("Same", "Same"), lines.map { it.text })
+        assertEquals(listOf(false, true), lines.map { it.opposite })
+    }
+
+    @Test
+    fun ttmlAgentIdentityKeepsItsSideWithThreeSingersAndAGroup() {
+        val body = """<tt xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><head><metadata>
+            <ttm:agent type="group" xml:id="together"/></metadata></head><body><div>
+            <p begin="00:00.000" end="00:01.000" ttm:agent="together"><span begin="00:00.000" end="00:01.000">All</span></p>
+            <p begin="00:02.000" end="00:03.000" ttm:agent="alice"><span begin="00:02.000" end="00:03.000">A1</span></p>
+            <p begin="00:04.000" end="00:05.000" ttm:agent="bob"><span begin="00:04.000" end="00:05.000">B</span></p>
+            <p begin="00:06.000" end="00:07.000" ttm:agent="carol"><span begin="00:06.000" end="00:07.000">C</span></p>
+            <p begin="00:08.000" end="00:09.000" ttm:agent="alice"><span begin="00:08.000" end="00:09.000">A2</span></p>
+            </div></body></tt>"""
+        val lines = LyricParse.parse(body)
+        assertEquals(listOf("All", "A1", "B", "C", "A2"), lines.map { it.text })
+        assertEquals(listOf(false, false, true, false, false), lines.map { it.opposite })
+        assertTrue(lines.all { it.hasWords() })
+    }
+
+    @Test
     fun aLineSungTwiceIsOneRowPerTime() {
         val lines = parse("[ti:歌]", "[00:01.00][00:05.00]副歌", "[00:03.00]主歌",
             "[00:07.00] [00:07.00]歌词")

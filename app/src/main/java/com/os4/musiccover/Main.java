@@ -2981,6 +2981,26 @@ public class Main extends XposedModule {
         ++sCapsuleNavigationEpoch;
     }
 
+    /** A disabled/destroyed lyric request cannot leave its own cover behind a navigation page. */
+    public static void capsuleLyricsRequestEnded() {
+        if (sNavigationLyricBackground.protects(ImmersiveHost.requestedNavigationKey())) {
+            // Keep the handoff record until the map itself closes. Its close will not restore
+            // a closed lyric page, and will release a cover that belonged to that page.
+            sCapsuleOverNavigation = true;
+            sTapSuppressed = true;
+            ++sCapsuleNavigationEpoch;
+            ++sPushGen;
+            return;
+        }
+        cancelCapsuleNavigationBackground();
+        boolean release = sCapsuleOwnsCover && sCoverMode;
+        sCapsuleOwnsCover = false;
+        if (release) {
+            sTapSuppressed = true;
+            setCoverEnabled(false, screenOnCached(), false);
+        }
+    }
+
     /** A map opened over an existing capsule lyric page borrows the same background intent. */
     public static void onNavigationPageOpened(String scene) {
         if (!LockLyrics.capsulePageRequested()) return;
@@ -2989,19 +3009,23 @@ public class Main extends XposedModule {
         ++sCapsuleNavigationEpoch;
         ++sPushGen;
         sTapSuppressed = true;
-        // Hiding lyrics while the map is up must not tear down its retained music background.
-        sCapsuleOwnsCover = false;
+        // Navigation temporarily covers the music page; it does not acquire a cover that was
+        // opened by the lyric capsule. Keep ownership for the matching lyric-page exit.
     }
 
     /** Navigation UI ended; restore the requested music background without changing lyric visibility. */
     public static void onNavigationPageClosed(String scene) {
         if (!sNavigationLyricBackground.belongsTo(scene)) return;
-        boolean restore = sNavigationLyricBackground.finish(scene, sCoverFeatureOn, sWatched != null);
+        boolean lyricsVisible = LockLyrics.sEnabled && LockLyrics.capsulePageRequested()
+                && !LockLyrics.sTapHidden;
+        boolean independentCover = sCoverMode && !sCapsuleOwnsCover;
+        boolean restore = sNavigationLyricBackground.finish(scene, sCoverFeatureOn,
+                sWatched != null, lyricsVisible, independentCover);
         sCapsuleOverNavigation = false;
         ++sCapsuleNavigationEpoch;
         if (restore) {
-            // Read the current settings and selected song. No saved bitmap, blur mode or
-            // colour is forced here: a hidden lyric page resumes its normal non-lyric cover.
+            // Read the current settings and song for an open lyric page or a cover the user
+            // already had open independently. A closed lyric page must not create a cover.
             sTrackKey = trackKey(sWatched);
             sTapSuppressed = false;
             if (!sCoverMode) {
@@ -3013,7 +3037,14 @@ public class Main extends XposedModule {
                 CoverPush.sendKeptFirst();
                 LockLyrics.refresh();
             }
+        } else if (sCapsuleOwnsCover && sCoverMode) {
+            // Closing lyrics over a map deferred the cover's release to avoid touching the map
+            // backdrop. The map has now relinquished it, so honour that close exactly once.
+            sCapsuleOwnsCover = false;
+            sTapSuppressed = true;
+            setCoverEnabled(false, screenOnCached(), false);
         } else {
+            sCapsuleOwnsCover = false;
             LockLyrics.refresh();
         }
         MiniPlayerRuntime.refresh();
@@ -3072,8 +3103,7 @@ public class Main extends XposedModule {
             }
             // A two-finger hide can leave this same scene requested. Reopening its lyrics
             // must preserve ownership, so the later body tap can still restore the wallpaper.
-            if (sCapsuleOverNavigation) sCapsuleOwnsCover = false;
-            else sCapsuleOwnsCover |= !sCoverMode && sCoverFeatureOn;
+            if (!sCapsuleOverNavigation) sCapsuleOwnsCover |= !sCoverMode && sCoverFeatureOn;
             MiniPlayerRuntime.forgetRestoreScene();
             // The island's controller is authoritative. A retained cover key can be empty or
             // stale while automatic cover entry is off or was dismissed by the user.
@@ -3091,11 +3121,15 @@ public class Main extends XposedModule {
             LockLyrics.refresh();
         } else {
             LockLyrics.setCapsuleVisible(false, key, current);
-            if (sCapsuleOwnsCover && sCoverMode) {
+            // The navigation page owns its backdrop until its close callback. Keep the cover
+            // ownership marker through that handoff rather than writing the wallpaper under it.
+            boolean deferCoverExit = sCapsuleOwnsCover && sCoverMode
+                    && sNavigationLyricBackground.pending();
+            if (sCapsuleOwnsCover && sCoverMode && !deferCoverExit) {
                 sTapSuppressed = true;
                 setCoverEnabled(false, true, false);
             }
-            sCapsuleOwnsCover = false;
+            if (!deferCoverExit) sCapsuleOwnsCover = false;
             if (!coverSceneActive() && !sNavigationLyricBackground.pending()) sCapsuleKeepsMini = false;
             rebindSession();
         }
@@ -4473,15 +4507,12 @@ public class Main extends XposedModule {
                     Xp.w(TAG + "registerCallback failed: " + t);
                 }
             } else {
-                boolean ownedCover = sCapsuleOwnsCover;
                 boolean capsuleRequested = LockLyrics.capsuleRequestActive();
+                // The lyric owner decides whether its cover can be released now or must wait
+                // for a navigation page to relinquish the wallpaper.
                 LockLyrics.clearCapsulePage();
                 LockLyrics.resetCapsuleLayoutOrigin();
                 sCapsuleKeepsMini = false;
-                sCapsuleOwnsCover = false;
-                // Manual cover mode does not react to MediaCard.applyCardState. A cover
-                // temporarily opened by this capsule still belongs to the ended session.
-                if (ownedCover && sCoverMode) setCoverEnabled(false, screenOnCached(), false);
                 if (capsuleRequested) LockLyrics.onTrack("", null);
                 Xp.log(TAG + "no active media session");
             }

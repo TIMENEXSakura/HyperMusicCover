@@ -21,6 +21,7 @@ final class NavigationSurfaceContrast {
     private static final long INTERVAL_MS = 1000L, TIMEOUT_MS = 2500L, API_RETRY_MS = 30000L;
     private static final long ENTRY_RETRY_MS = 100L, ENTRY_WINDOW_MS = 2000L, CONFIRM_MS = 250L;
     private static final NavigationPixelContrast.Stability STABILITY = new NavigationPixelContrast.Stability();
+    private static final NavigationContrastCache CACHE = new NavigationContrastCache();
     private static String sScene, sSurfaceKey = "pending", sLastDiagnostic;
     private static long sGeneration, sContrastEpoch, sNextRead, sEnteredAt;
     private static boolean sPollPosted, sLookupPending;
@@ -35,7 +36,7 @@ final class NavigationSurfaceContrast {
             stop();
             sScene = scene;
             sEnteredAt = SystemClock.uptimeMillis();
-            sReading = unknown(key());
+            sReading = provisional();
         }
         pollSoon();
         return sReading;
@@ -84,6 +85,16 @@ final class NavigationSurfaceContrast {
         return new LyricContrastBackground.Reading(key, 0, "navigation-surface-unknown");
     }
 
+    /** The cache key is provisional: the first new capture gets a different key and can correct it. */
+    private static LyricContrastBackground.Reading provisional() {
+        int color = CACHE.get(sScene);
+        return color == 0 ? unknown(key())
+                : new LyricContrastBackground.Reading(key() + ":cached", color, "navigation-surface-cache");
+    }
+
+    static Object[] save() { return CACHE.save(); }
+    static void adopt(Object[] state) { CACHE.adopt(state); }
+
     private static void readDue() {
         long now = SystemClock.uptimeMillis();
         sNextRead = now + INTERVAL_MS;
@@ -104,7 +115,7 @@ final class NavigationSurfaceContrast {
             if (sPending != null) sPending.expired = true;
             sContrastEpoch = 0L;
             STABILITY.reset();
-            sReading = unknown(key());
+            sReading = provisional();
         }
         if (sPending != null) return;
         if (SLOTS.size() >= 2) { diagnostic("capture-waiting-for-late-callback limit=2"); return; }
@@ -363,9 +374,13 @@ final class NavigationSurfaceContrast {
             int before = STABILITY.color();
             int color = STABILITY.accept(counts);
             if (before != 0 && color != before) sContrastEpoch++;
+            CACHE.remember(sScene, color);
             LyricContrastBackground.Reading previous = sReading;
-            sReading = new LyricContrastBackground.Reading(key(), color,
-                    color == 0 ? "navigation-surface-unknown" : "navigation-surface-ratio");
+            // A usable but exactly balanced sample has no preferred ink. It does not replace
+            // an earlier hint: a recreated view should still see the cached color until a real
+            // black/white decision arrives under the live (non-cached) key.
+            sReading = color == 0 ? provisional()
+                    : new LyricContrastBackground.Reading(key(), color, "navigation-surface-ratio");
             diagnostic("pixels " + counts.bright + " bright/" + counts.dark + " dark/"
                     + counts.total + " total -> " + (color == 0 ? "unknown" : color == 0xff000000 ? "black" : "white")
                     + " " + request.detail());
@@ -385,7 +400,7 @@ final class NavigationSurfaceContrast {
     }
 
     private static void fail(String reason) {
-        sReading = unknown(key());
+        sReading = provisional();
         diagnostic(reason);
     }
     private static void diagnostic(String message) {

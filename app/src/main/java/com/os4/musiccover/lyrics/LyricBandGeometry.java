@@ -21,6 +21,17 @@ public final class LyricBandGeometry {
         return top + (bottom - top) * singingFraction(cardProgress) - groupHeight / 2f;
     }
 
+    /** Centre a fitting group, or keep its latest lead readable when the group is taller. */
+    static float singingAnchorFix(float bandHeight, float groupHeight, float focusHeight,
+                                  float focusOffset, float cardProgress, float anchorFraction) {
+        if (groupHeight > bandHeight) {
+            return singingTop(0f, bandHeight, focusHeight, cardProgress)
+                    - anchorFraction * bandHeight;
+        }
+        return singingTop(0f, bandHeight, groupHeight, cardProgress)
+                - anchorFraction * bandHeight + focusOffset;
+    }
+
     /** Align the interlude slot's centre with the current singing position. */
     static float interludeAnchorFix(float bandHeight, float slotHeight, float cardProgress,
                                    float positionDelta) {
@@ -32,6 +43,24 @@ public final class LyricBandGeometry {
     static float morphEdge(float mini, float card, float cardProgress) {
         float p = Float.isFinite(cardProgress) ? Math.max(0f, Math.min(1f, cardProgress)) : 0f;
         return mini + (card - mini) * p;
+    }
+
+    /** Navigation keeps its own live bottom clip while both reading endpoints follow music. */
+    static void navigationMorph(float miniTop, float miniBottom, float miniClipTop,
+                                float cardTop, float cardBottom, float cardClipTop,
+                                float liveBottom, float progress, float[] out) {
+        out[0] = morphEdge(miniTop, cardTop, progress);
+        out[1] = morphEdge(miniBottom, cardBottom, progress);
+        out[2] = morphEdge(miniClipTop, cardClipTop, progress);
+        out[3] = liveBottom;
+    }
+
+    /** The settled media card, including over navigation, uses the centred anchor. */
+    static float musicCardProgress(boolean capsule, boolean keptMini, boolean follow,
+                                   float progress, boolean preserveScene, float previous) {
+        if (follow) return Math.max(0f, Math.min(1f, progress));
+        if (capsule && preserveScene) return previous;
+        return capsule && !keptMini ? 1f : 0f;
     }
 
     /** Preserve readable overflow: a tall wrapped row cannot fit between both fade edges. */
@@ -183,6 +212,19 @@ public final class LyricBandGeometry {
                 || !Float.isFinite(textHeight) || textHeight <= 0f
                 || normalCapsuleTop + textHeight > clipBottom) return existingTop;
         return Float.isFinite(existingTop) ? Math.max(existingTop, normalCapsuleTop) : normalCapsuleTop;
+    }
+
+    /** Use the ordinary reading band only when the live navigation floor leaves a text row. */
+    static boolean navigationReferenceFits(float top, float bottom, float liveBottom, float rowHeight) {
+        return Float.isFinite(top) && Float.isFinite(bottom) && bottom > top
+                && Float.isFinite(liveBottom) && Float.isFinite(rowHeight)
+                && rowHeight > 0f
+                && liveBottom >= top + SINGING_FRACTION * (bottom - top) + rowHeight / 2f;
+    }
+
+    /** A hypothetical screen band is unsafe while the ordinary capsule itself is unstable. */
+    static boolean canUseNavigationReference(boolean measuredOrdinary, boolean unstable) {
+        return measuredOrdinary || !unstable;
     }
 
 

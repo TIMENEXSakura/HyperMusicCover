@@ -374,7 +374,26 @@ final class LyricView extends View {
     private final LyricBandGeometry.FixedBand fixedCapsuleBand = new LyricBandGeometry.FixedBand();
     private final LyricBandGeometry.FixedBand morphMiniBand = new LyricBandGeometry.FixedBand();
     private final LyricBandGeometry.FixedBand morphCardBand = new LyricBandGeometry.FixedBand();
+    /** Navigation's endpoints can differ from the ordinary capsule's and must stay fixed mid-gesture. */
+    private final LyricBandGeometry.FixedBand navMorphMiniBand = new LyricBandGeometry.FixedBand();
+    private final LyricBandGeometry.FixedBand navMorphCardBand = new LyricBandGeometry.FixedBand();
+    private boolean morphOverNavigation, navMorphMiniScreen;
+    private boolean navMorphEndpointKnown, navMorphUseMini;
+    /** Last measured folded navigation clip, in screen coordinates. */
+    private float navFoldClipBottom = Float.NaN;
+    private Object navFoldStyle;
+    private int navFoldWidth, navFoldHeight;
+    /** A measured-band blend when the framework cannot create a music morph. */
+    private boolean navFallbackBand;
+    private float navFallbackFromProgress;
+    private final float[] navFallbackFrom = new float[4];
+    private final LyricPanelProgress navPanelProgress = new LyricPanelProgress();
+    private final LyricNavigationHandoff navMorphHandoff = new LyricNavigationHandoff();
+    private boolean navMorphWaiting;
     private final LyricBandGeometry.FixedBand navigationClipBand = new LyricBandGeometry.FixedBand();
+    /** The actual ordinary-page reading area, which may be a clock band during a group. */
+    private final LyricBandGeometry.FixedBand ordinaryLyricBand = new LyricBandGeometry.FixedBand();
+    private boolean ordinaryScreenBand;
     private boolean fixedCapsuleScreenBand;
     private boolean musicBandMorph;
     private boolean morphIndependentKnown, morphIndependent;
@@ -387,11 +406,20 @@ final class LyricView extends View {
             popA = new Spring(1f), popB = new Spring();
     private float popToX, popToY, popBlur;
     private float bandTop, bandBottom;
+    /** Extra row slots retained while an overlapping line is still on screen. */
+    private boolean[] overlapSlots = new boolean[0];
+    private boolean overlapSlotReflow;
     /** Fixed upper edge by default, optional clock occlusion, and the live card clip below. */
     private float clipBandTop, clipBandBottom;
+    // Geometry-only diagnostics from the last update, with no track or lyric text.
+    private boolean diagnosticNavigation, diagnosticUnstable;
+    private float diagnosticObstacle = Float.NaN, diagnosticReferenceTop = Float.NaN,
+            diagnosticReferenceBottom = Float.NaN, diagnosticViewOffset;
+    private String diagnosticReferenceSource = "none";
     private String layoutClockSource = "live";
     private final float[] bandBounds = new float[2];
     private final float[] navigationBounds = new float[2];
+    private final float[] navMorphBounds = new float[4];
     private boolean bandOk;
     private float anchorFix;
     /** Offset used only while one lead lyric is taller than the visible viewport. */
@@ -497,7 +525,18 @@ final class LyricView extends View {
         fixedCapsuleBand.clear();
         morphMiniBand.clear();
         morphCardBand.clear();
+        navMorphMiniBand.clear();
+        navMorphCardBand.clear();
+        morphOverNavigation = false;
+        navMorphEndpointKnown = false;
+        navFoldClipBottom = Float.NaN;
+        navFoldStyle = null;
+        navFallbackBand = false;
+        navPanelProgress.reset();
+        navMorphHandoff.reset();
+        navMorphWaiting = false;
         navigationClipBand.clear();
+        ordinaryLyricBand.clear();
         musicBandMorph = false;
         morphIndependentKnown = false;
         musicCardProgress = 0f;
@@ -572,7 +611,18 @@ final class LyricView extends View {
         fixedCapsuleBand.clear();
         morphMiniBand.clear();
         morphCardBand.clear();
+        navMorphMiniBand.clear();
+        navMorphCardBand.clear();
+        morphOverNavigation = false;
+        navMorphEndpointKnown = false;
+        navFoldClipBottom = Float.NaN;
+        navFoldStyle = null;
+        navFallbackBand = false;
+        navPanelProgress.reset();
+        navMorphHandoff.reset();
+        navMorphWaiting = false;
         navigationClipBand.clear();
+        ordinaryLyricBand.clear();
         musicBandMorph = false;
         morphIndependentKnown = false;
         musicCardProgress = 0f;
@@ -676,7 +726,7 @@ final class LyricView extends View {
         }
         // Leaving, the band is frozen where it was: following the clock as it grows would drag
         // the fading lines up through it.
-        if (LockLyrics.wantsShown() && updateBand()) {
+        if (LockLyrics.wantsShown() && updateBand(now, dt)) {
             changed = true;
             why |= 2;
         }
@@ -775,8 +825,9 @@ final class LyricView extends View {
         }
         int previousCount = singing.count;
         boolean groupChanged = singing.update(lines, ms, LockLyrics.sMaxLines, sf, idx);
-        if (groupChanged || focus < 0) {
-            singing.layout(base, height, lyricGap(GAP_DP));
+        boolean slotChanged = updateOverlapSlots(true);
+        if (groupChanged || slotChanged || focus < 0) {
+            singing.layout(base, height, lyricGap(GAP_DP), overlapSlots);
             if (focus >= 0) transition.rebase(singing, base, scroll, aim, nextAim);
         }
         if (singing.count > 0) {
@@ -806,14 +857,14 @@ final class LyricView extends View {
         if (centerChanged) {
             // During a finger-driven morph the anchor itself must follow the finger: rebasing
             // the scroll here would cancel that motion and make it chase on a spring instead.
-            if (!initialFocus && (!musicBandMorph || groupChanged))
+            if (!initialFocus && (!musicBandMorph || groupChanged || slotChanged))
                 LyricTransition.shift(centeredAnchor - anchorFix, scroll, aim, nextAim);
             anchorFix = centeredAnchor;
             changed = true;
             why |= 512;
         }
         int key = dots >= 0 ? -(dots + 1) : sf;
-        if (initialFocus || key != focusKey || groupChanged) {
+        if (initialFocus || key != focusKey || groupChanged || slotChanged) {
             // Whether this was a seek is a question about the playhead, not about how many lines
             // it crossed. Counting lines got it wrong in both directions and inconsistently
             // inside one drag: eight lines is seconds of a fast song and minutes of a slow one,
@@ -938,6 +989,9 @@ final class LyricView extends View {
         // StaticLayout wraps long main/background/translation text at the configured size.
         changed |= transition.update(singing, base, dotsFor, ABOVE_ALPHA, dt,
                 initialFocus || startingPage || still || gone);
+        // A fading row can become invisible on this very frame. Schedule one more step to
+        // release its slot even if the other lyric animations have already settled.
+        overlapSlotReflow = updateOverlapSlots(false);
         float target = dotsFor >= 0 ? dotsTop[dotsFor] : singing.position(focus, base);
         // Band-relative so it means the same on any screen; the fallback is for the frames
         // before the band has been measured.
@@ -1557,7 +1611,10 @@ final class LyricView extends View {
         ClockCollapse.Phase p = ClockCollapse.phase();
         if (p == ClockCollapse.Phase.ENTER || p == ClockCollapse.Phase.EXIT) return true;
         if (lines.isEmpty() || focus < 0 || show == 0f) return false;
+        if (overlapSlotReflow) return true;
         if (lineExits.moving()) return true;
+        if (navPanelProgress.moving()) return true;
+        if (navMorphHandoff.moving()) return true;
         if (finalHold.moving()) return true;
         if (overflowMoving) return true;
         if (transition.moving) return true;
@@ -1970,8 +2027,9 @@ final class LyricView extends View {
         height = b.height;
         charX = b.charX;
         dotsTop = b.dotsTop;
+        if (overlapSlots.length != n) overlapSlots = new boolean[n];
         singing.update(lines, ms, LockLyrics.sMaxLines, Math.max(0, focus), indexAt(ms));
-        singing.layout(base, height, lyricGap(GAP_DP));
+        singing.layout(base, height, lyricGap(GAP_DP), overlapSlots);
         blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
         if (preserve) {
             lineExits.finishForLayout();
@@ -2001,6 +2059,8 @@ final class LyricView extends View {
         java.util.Arrays.fill(scale, INACTIVE_SCALE);
         blur = new float[n];
         focus = -1;
+        java.util.Arrays.fill(overlapSlots, false);
+        overlapSlotReflow = false;
         overflowOffset = 0f;
         overflowIndex = -1;
         overflowMoving = false;
@@ -2092,7 +2152,7 @@ final class LyricView extends View {
     }
 
     /** Stable layout band plus a separately measured visible floor, in this view's coordinates. */
-    private boolean updateBand() {
+    private boolean updateBand(long frameTime, float dt) {
         // Two getLocationOnScreen walks a frame are not free, and this runs from the keyguard's
         // pre-draw: nothing to show, nothing to measure.
         if (lines.isEmpty() && show == 0f) return false;
@@ -2108,7 +2168,8 @@ final class LyricView extends View {
         if (isAttachedToWindow()) {
             getLocationOnScreen(loc);
             float me = loc[1];
-            float floor = bandFloor();
+            float measuredObstacle = com.os4.musiccover.island.MiniPlayerRuntime.lyricObstacleTopOnScreen();
+            float floor = bandFloor(measuredObstacle);
             // Insets are window-relative; translate to the unzoomed screen coordinates used
             // by the band. A missing inset still leaves the root's screen edge as the limit.
             float safeTop = 0f;
@@ -2124,27 +2185,179 @@ final class LyricView extends View {
                 }
                 safeTop = ClockCollapse.unzoomY(this, safeTop);
             }
-            float obstacle = LockLyrics.sClockIndependentMotion && capsule
-                    ? com.os4.musiccover.island.MiniPlayerRuntime.lyricObstacleTopOnScreen() : Float.NaN;
+            float obstacle = LockLyrics.sClockIndependentMotion && capsule ? measuredObstacle : Float.NaN;
+            boolean bandUnstable = capsule && LockLyrics.sClockIndependentMotion
+                    && com.os4.musiccover.island.MiniPlayerRuntime.lyricBandUnstable();
             boolean navigation = Main.capsuleLyricsOverNavigation()
                     || com.os4.musiccover.immersive.ImmersiveHost.requestedNavigationKey() != null;
-            if (!navigation) navigationClipBand.clear();
+            if (LockLyrics.still()) {
+                navMorphHandoff.reset();
+                navPanelProgress.reset();
+                navMorphWaiting = navFallbackBand = false;
+            } else navMorphHandoff.advance(dt);
+            diagnosticNavigation = navigation;
+            diagnosticObstacle = obstacle;
+            diagnosticViewOffset = me;
+            diagnosticUnstable = bandUnstable;
+            diagnosticReferenceTop = diagnosticReferenceBottom = Float.NaN;
+            diagnosticReferenceSource = "none";
+            if (navFoldStyle != LockLyrics.sStyle || navFoldWidth != getWidth() || navFoldHeight != getHeight()) {
+                navFoldClipBottom = Float.NaN;
+                navMorphEndpointKnown = false;
+                navMorphHandoff.reset();
+                navMorphWaiting = navFallbackBand = false;
+                navFoldStyle = LockLyrics.sStyle;
+                navFoldWidth = getWidth();
+                navFoldHeight = getHeight();
+            }
+            if (!navigation) {
+                navigationClipBand.clear();
+                navFoldClipBottom = Float.NaN;
+            }
             float morph = com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphProgress();
             if (!morphIndependentKnown || morphIndependent != LockLyrics.sClockIndependentMotion) {
                 morphMiniBand.clear();
                 morphCardBand.clear();
+                navMorphMiniBand.clear();
+                navMorphCardBand.clear();
                 morphIndependent = LockLyrics.sClockIndependentMotion;
                 morphIndependentKnown = true;
             }
-            boolean followMusic = capsule && !navigation
+            boolean realMusicMorph = capsule
                     && LockLyrics.sEnabled && !LockLyrics.sTapHidden && Float.isFinite(morph);
-            musicBandMorph = followMusic;
             float previousCardProgress = musicCardProgress;
-            musicCardProgress = followMusic ? Math.max(0f, Math.min(1f, morph))
-                    : capsule && !navigation && com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicSceneTransition()
-                            ? previousCardProgress
-                            : capsule && !navigation && !Main.capsuleKeepsMini() ? 1f : 0f;
-            if (followMusic) {
+            boolean bridgeNavigation = navigation && capsule && LockLyrics.sEnabled
+                    && !LockLyrics.sTapHidden && LockLyrics.capsulePageRequested()
+                    && bandOk && focus >= 0 && show > 0.02f && !LockLyrics.still()
+                    && !com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicSceneTransition();
+            float bridgedProgress = navPanelProgress.update(bridgeNavigation, realMusicMorph, morph,
+                    Main.capsuleKeepsMini(), previousCardProgress, frameTime, dt);
+            boolean followMusic = realMusicMorph || bridgeNavigation && navPanelProgress.moving();
+            if (!navigation && !followMusic) {
+                navMorphHandoff.reset();
+                navMorphWaiting = false;
+            }
+            if (followMusic && !musicBandMorph) {
+                morphOverNavigation = navigation;
+                navMorphMiniBand.clear();
+                navMorphCardBand.clear();
+                navMorphEndpointKnown = false;
+                navFallbackBand = false;
+            } else if (followMusic && navigation) {
+                morphOverNavigation = true;
+            } else if (!followMusic) {
+                morphOverNavigation = false;
+            }
+            musicBandMorph = followMusic;
+            musicCardProgress = LyricBandGeometry.musicCardProgress(capsule, Main.capsuleKeepsMini(),
+                    followMusic, bridgedProgress, !navigation && com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicSceneTransition(),
+                    previousCardProgress);
+            if (followMusic && morphOverNavigation) {
+                float cardFloor = ClockCollapse.unzoomY(this, LockLyrics.capsuleLayoutBottomOnScreen());
+                float miniEdge = realMusicMorph
+                        ? com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphMiniTop() : Float.NaN;
+                boolean ordinary = ordinaryLyricBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                        LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                boolean estimated = !ordinary && navigationClipBand.update(LockLyrics.contrastRequestId(),
+                        getWidth(), getHeight(), LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                float miniTop = ordinary ? ordinaryLyricBand.top() : estimated ? navigationClipBand.top() : Float.NaN;
+                float miniBottom = ordinary ? ordinaryLyricBand.bottom() : estimated ? navigationClipBand.bottom() : Float.NaN;
+                boolean miniScreen = !ordinary || ordinaryScreenBand;
+                if (!ordinary && !estimated) {
+                    boolean bottomMini = LockLyrics.sClockIndependentMotion && Float.isFinite(miniEdge)
+                            && miniEdge >= Main.screenHeight() * 0.5f && miniEdge < Main.screenHeight();
+                    if (bottomMini && LockLyrics.sStyle.writeBand(safeTop,
+                            ClockCollapse.unzoomY(this, miniEdge), density, textPx, navigationBounds)) {
+                        miniTop = navigationBounds[0];
+                        miniBottom = navigationBounds[1];
+                        miniScreen = true;
+                    } else if (!LockLyrics.sClockIndependentMotion && Float.isFinite(clock)
+                            && LockLyrics.sStyle.writeBand(clock, cardFloor, density, textPx, navigationBounds)) {
+                        miniTop = navigationBounds[0];
+                        miniBottom = navigationBounds[1];
+                        miniScreen = false;
+                    }
+                }
+                boolean miniAlready = navMorphMiniBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                        LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                boolean miniReady = navMorphMiniBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                        LockLyrics.sStyle, show > 0.003f, miniTop, miniBottom);
+                if (!miniAlready && miniReady) navMorphMiniScreen = miniScreen;
+                boolean settledCard = !fixedCapsuleScreenBand && fixedCapsuleBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                        LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                boolean canCard = settledCard || Float.isFinite(clock) && Float.isFinite(cardFloor)
+                        && LockLyrics.sStyle.writeBand(clock, cardFloor, density, textPx, bandBounds);
+                float cardTop = settledCard ? fixedCapsuleBand.top() : canCard ? bandBounds[0] : Float.NaN;
+                float cardBottom = settledCard ? fixedCapsuleBand.bottom() : canCard ? bandBounds[1] : Float.NaN;
+                boolean cardReady = navMorphCardBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                        LockLyrics.sStyle, show > 0.003f, cardTop, cardBottom);
+                if (miniReady && cardReady && !navMorphEndpointKnown) {
+                    float foldedClip = navFoldClipBottom;
+                    if (!Float.isFinite(foldedClip) && Float.isFinite(miniEdge)) {
+                        foldedClip = LyricBandGeometry.visibleBottom(navMorphCardBand.top(),
+                                navMorphCardBand.bottom(), cardFloor, ClockCollapse.unzoomY(this, miniEdge));
+                    }
+                    // Do not freeze a clock-band endpoint merely because the pill has not
+                    // been measured yet. A later morph frame can supply its real folded edge.
+                    if (Float.isFinite(foldedClip)) {
+                        navMorphUseMini = LyricBandGeometry.navigationReferenceFits(navMorphMiniBand.top(),
+                                navMorphMiniBand.bottom(), foldedClip, textPx);
+                        navMorphEndpointKnown = true;
+                    }
+                }
+                if (miniReady && cardReady && navMorphEndpointKnown) {
+                    boolean joining = bandOk && (navFallbackBand || navMorphWaiting);
+                    if (joining) navMorphHandoff.begin(realMusicMorph ? previousCardProgress : musicCardProgress,
+                            musicCardProgress);
+                    // The fallback already integrates the displayed progress from the previous
+                    // frame. Adding its handoff offset again would count that offset twice.
+                    if (navMorphHandoff.moving())
+                        musicCardProgress = navMorphHandoff.progress(realMusicMorph, musicCardProgress);
+                    navMorphWaiting = false;
+                    navFallbackBand = false;
+                    float navFloor = LyricBandGeometry.visibleBottom(navMorphCardBand.top(),
+                            navMorphCardBand.bottom(), cardFloor, floor);
+                    float miniClip = LockLyrics.sClockIndependentMotion
+                            ? (navMorphMiniScreen ? Math.max(safeTop, navMorphMiniBand.top()) : safeTop)
+                            : LyricBandGeometry.visibleTop(false, navMorphCardBand.top(), clock,
+                                    ClockCollapse.contentBottomFor(this), safeTop);
+                    float cardClip = LyricBandGeometry.visibleTop(LockLyrics.sClockIndependentMotion,
+                            navMorphCardBand.top(), clock,
+                            LockLyrics.sClockIndependentMotion ? Float.NaN : ClockCollapse.contentBottomFor(this), safeTop);
+                    LyricBandGeometry.navigationMorph(navMorphUseMini ? navMorphMiniBand.top() : navMorphCardBand.top(),
+                            navMorphUseMini ? navMorphMiniBand.bottom() : navMorphCardBand.bottom(),
+                            navMorphUseMini ? miniClip : cardClip,
+                            navMorphCardBand.top(), navMorphCardBand.bottom(), cardClip,
+                            navFloor, musicCardProgress, navMorphBounds);
+                    top = navMorphBounds[0] - me;
+                    bottom = navMorphBounds[1] - me;
+                    clipTop = navMorphBounds[2] - me;
+                    clipBottom = navMorphBounds[3] - me;
+                    if (joining) {
+                        navMorphHandoff.capture(bandTop, bandBottom, clipBandTop, clipBandBottom,
+                                top, bottom, clipTop, clipBottom);
+                    }
+                    layoutClockSource = "navigation-music-morph";
+                    ok = true;
+                } else if (bandOk) {
+                    if (realMusicMorph) {
+                        navMorphWaiting = true;
+                        musicCardProgress = previousCardProgress;
+                        ok = true;
+                    } else {
+                        // No morph and no folded endpoint yet. Blend toward the existing
+                        // measured steady layout below, without guessing the pill from the card.
+                        if (!navFallbackBand) {
+                            navFallbackBand = true;
+                            navFallbackFromProgress = previousCardProgress;
+                            navFallbackFrom[0] = bandTop;
+                            navFallbackFrom[1] = bandBottom;
+                            navFallbackFrom[2] = clipBandTop;
+                            navFallbackFrom[3] = clipBandBottom;
+                        }
+                    }
+                }
+            } else if (followMusic) {
                 float miniEdge = com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphMiniTop();
                 float miniFloor = ClockCollapse.unzoomY(this, miniEdge);
                 float cardFloor = ClockCollapse.unzoomY(this, LockLyrics.capsuleLayoutBottomOnScreen());
@@ -2191,8 +2404,7 @@ final class LyricView extends View {
                     LockLyrics.sClockIndependentMotion, capsule, LockLyrics.capsulePageRequested(),
                     LockLyrics.sEnabled && !LockLyrics.sTapHidden, Main.capsuleKeepsMini(),
                     navigation,
-                    capsule && LockLyrics.sClockIndependentMotion
-                            && com.os4.musiccover.island.MiniPlayerRuntime.lyricBandUnstable(),
+                    bandUnstable,
                     obstacle, Main.screenHeight());
             if (screenBand && !LockLyrics.sStyle.writeBand(safeTop,
                     ClockCollapse.unzoomY(this, obstacle), density, textPx, bandBounds)) {
@@ -2242,6 +2454,18 @@ final class LyricView extends View {
                 // its current edge, preserving the same safety gap even when it rises.
                 clipBottom = (screenBand ? Math.max(bandBounds[0], Math.min(bandBounds[1],
                         layoutFloor - LyricStyle.GAP_DP * density)) : visibleBottom) - me;
+                if (navigation && !followMusic && Main.capsuleKeepsMini())
+                    navFoldClipBottom = clipBottom + me;
+                if (!navigation && !followMusic && LockLyrics.sClockIndependentMotion && capsule
+                        && LockLyrics.capsulePageRequested() && LockLyrics.sEnabled
+                        && !LockLyrics.sTapHidden && Main.capsuleKeepsMini()) {
+                    // Remember what the ordinary page actually used, including a clock band
+                    // when a group owns the capsule frame. Do not invent a full-screen band.
+                    if (ordinaryScreenBand != screenBand) ordinaryLyricBand.clear();
+                    ordinaryScreenBand = screenBand;
+                    ordinaryLyricBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                            LockLyrics.sStyle, show > 0.003f, top + me, bottom + me);
+                }
                 if (navigation && LockLyrics.sClockIndependentMotion && capsule
                         && LockLyrics.capsulePageRequested() && LockLyrics.sEnabled
                         && !LockLyrics.sTapHidden && Main.capsuleKeepsMini()) {
@@ -2252,22 +2476,47 @@ final class LyricView extends View {
                     boolean hasObstacle = Float.isFinite(obstacle) && obstacle >= screen * 0.5f
                             && obstacle < screen;
                     if (hasObstacle) {
-                        boolean hasNormalBand = morphMiniBand.update(LockLyrics.contrastRequestId(),
+                        boolean actualOrdinary = ordinaryLyricBand.update(LockLyrics.contrastRequestId(),
                                 getWidth(), getHeight(), LockLyrics.sStyle, show > 0.003f,
                                 Float.NaN, Float.NaN);
-                        float normalTop = hasNormalBand ? morphMiniBand.top() : Float.NaN;
-                        if (!hasNormalBand) {
+                        boolean unstable = bandUnstable;
+                        float normalTop = actualOrdinary ? ordinaryLyricBand.top() : Float.NaN;
+                        float normalBottom = actualOrdinary ? ordinaryLyricBand.bottom() : Float.NaN;
+                        float normalClip = actualOrdinary && !ordinaryScreenBand ? safeTop : normalTop;
+                        diagnosticReferenceSource = actualOrdinary
+                                ? (ordinaryScreenBand ? "ordinary-screen" : "ordinary-clock")
+                                : unstable ? "unstable-no-reference" : "estimated-screen";
+                        if (!actualOrdinary && LyricBandGeometry.canUseNavigationReference(false, unstable)) {
+                            // When entered directly into navigation, estimate only if the
+                            // ordinary capsule would currently be eligible for its screen band.
                             boolean valid = LockLyrics.sStyle.writeBand(safeTop,
                                     ClockCollapse.unzoomY(this, obstacle), density, textPx, navigationBounds);
                             if (navigationClipBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
                                     LockLyrics.sStyle, show > 0.003f,
                                     valid ? navigationBounds[0] : Float.NaN,
-                                    valid ? navigationBounds[1] : Float.NaN)) normalTop = navigationClipBand.top();
+                                    valid ? navigationBounds[1] : Float.NaN)) {
+                                normalTop = navigationClipBand.top();
+                                normalBottom = navigationClipBand.bottom();
+                                normalClip = normalTop;
+                            }
                         }
-                        // If the live navigation card leaves less than one line of room, retain
-                        // the previous safe clip instead of making all lyrics disappear.
-                        clipTop = LyricBandGeometry.navigationClipTop(clipTop, normalTop - me,
-                                clipBottom, textPx);
+                        // The reading band determines the singing anchor as well as the clip.
+                        // Just moving clipTop leaves the navigation lyrics positioned using the
+                        // old clock band. Use the normal capsule's entire band while keeping the
+                        // navigation page's live bottom clip, which protects its actual card.
+                        float normalTopHere = normalTop - me, normalBottomHere = normalBottom - me;
+                        diagnosticReferenceTop = normalTopHere;
+                        diagnosticReferenceBottom = normalBottomHere;
+                        if (LyricBandGeometry.navigationReferenceFits(normalTopHere, normalBottomHere,
+                                clipBottom, textPx)) {
+                            top = normalTopHere;
+                            bottom = normalBottomHere;
+                            clipTop = LyricBandGeometry.navigationClipTop(clipTop, normalClip - me,
+                                    clipBottom, textPx);
+                            layoutClockSource = "navigation-capsule";
+                        } else {
+                            diagnosticReferenceSource += "-fallback";
+                        }
                     } else {
                         // No measured bottom obstacle: ordinary lyrics also use the old clip.
                         // Clear both references: when a pill reappears it may have moved, so
@@ -2276,10 +2525,35 @@ final class LyricView extends View {
                         // own reference again before the next music gesture.
                         navigationClipBand.clear();
                         morphMiniBand.clear();
+                        ordinaryLyricBand.clear();
+                        diagnosticReferenceSource = "no-obstacle";
                     }
+                }
+                if (navFallbackBand && followMusic && morphOverNavigation && !realMusicMorph) {
+                    float targetProgress = Main.capsuleKeepsMini() ? 0f : 1f;
+                    float span = targetProgress - navFallbackFromProgress;
+                    float amount = Math.abs(span) < 0.001f ? 1f
+                            : (musicCardProgress - navFallbackFromProgress) / span;
+                    top = LyricBandGeometry.morphEdge(navFallbackFrom[0], top, amount);
+                    bottom = LyricBandGeometry.morphEdge(navFallbackFrom[1], bottom, amount);
+                    clipTop = LyricBandGeometry.morphEdge(navFallbackFrom[2], clipTop, amount);
+                    clipBottom = Math.min(clipBottom,
+                            LyricBandGeometry.morphEdge(navFallbackFrom[3], clipBottom, amount));
+                    layoutClockSource = "navigation-panel-fallback";
                 }
                 ok = true;
             }
+        }
+        if (ok && navMorphHandoff.moving()) {
+            navMorphBounds[0] = top;
+            navMorphBounds[1] = bottom;
+            navMorphBounds[2] = clipTop;
+            navMorphBounds[3] = clipBottom;
+            navMorphHandoff.apply(navMorphBounds);
+            top = navMorphBounds[0];
+            bottom = navMorphBounds[1];
+            clipTop = navMorphBounds[2];
+            clipBottom = Math.min(clipBottom, navMorphBounds[3]);
         }
         boolean changed = ok != bandOk
                 || Math.abs(top - bandTop) >= 0.5f || Math.abs(bottom - bandBottom) >= 0.5f
@@ -2314,8 +2588,8 @@ final class LyricView extends View {
      * card when the band is held at the lock screen's edge. So the doze measures, and the lyrics
      * follow the card in and out exactly as they follow it while it is up.
      */
-    private float bandFloor() {
-        return ClockCollapse.unzoomY(this, LockLyrics.bandBottomOnScreen());
+    private float bandFloor(float measuredObstacle) {
+        return ClockCollapse.unzoomY(this, LockLyrics.bandBottomOnScreen(measuredObstacle));
     }
 
     /** Whether there is a block of rows to centre: a measured band, and a focus line inside it. */
@@ -2339,9 +2613,9 @@ final class LyricView extends View {
         }
         if (centring() && dotsFor < 0 && singing.first >= 0 && singing.last < lines.size()) {
             float bandHeight = bandBottom - bandTop;
-            return LyricBandGeometry.singingTop(0f, bandHeight, singing.height(base, height), musicCardProgress)
-                    - ANCHOR * bandHeight
-                    + singing.position(focus, base) - singing.position(singing.first, base);
+            return LyricBandGeometry.singingAnchorFix(bandHeight, singing.height(base, height),
+                    height[focus], singing.position(focus, base) - singing.position(singing.first, base),
+                    musicCardProgress, ANCHOR);
         }
         if (!centring()) return 0f;
         float bandH = bandBottom - bandTop;
@@ -2414,12 +2688,47 @@ final class LyricView extends View {
         }
     }
 
+    /** Find the non-selected rows between active voices that the renderer still draws. */
+    private boolean updateOverlapSlots(boolean apply) {
+        if (singing.count < 2 || overlapSlots.length != lines.size()) return false;
+        boolean changed = false;
+        for (int i = singing.first + 1; i < singing.last; i++) {
+            boolean retain = false;
+            if (!singing.contains(i)) {
+                LyricLineExit.Row exit = lineExits.row(i);
+                boolean unfinished = ms >= LyricFocus.startOf(lines.get(i))
+                        && ms < LyricFocus.endOf(lines.get(i));
+                boolean waiting = exit != null && exit.waitingForTop();
+                boolean departing = exit != null && exit.departing();
+                boolean finished = exit != null && exit.finished;
+                boolean visible = exit != null && exit.captured || focus >= 0 && rowOnScreen(i);
+                retain = LyricFocus.retainSlot(unfinished, waiting, departing, finished,
+                        visible, transition.alpha(i));
+            }
+            if (overlapSlots[i] != retain) {
+                changed = true;
+                if (apply) overlapSlots[i] = retain;
+            }
+        }
+        return changed;
+    }
+
     private boolean rowOnScreen(int index) {
-        if (transition.alpha(index) <= 0.003f) return false;
+        LyricLineExit.Row exit = lineExits.row(index);
+        if (exit != null && exit.finished) return false;
+        boolean departing = exit != null && exit.departing();
+        if (!departing && transition.alpha(index) <= 0.003f) {
+            boolean unfinished = ms >= LyricFocus.startOf(lines.get(index))
+                    && ms < LyricFocus.endOf(lines.get(index));
+            boolean waiting = exit != null && exit.waitingForTop();
+            boolean heldFinal = index == lines.size() - 1 && finalHold.completed();
+            if (!unfinished && !waiting && !heldFinal) return false;
+        }
         float center = (bandTop + bandBottom) / 2f;
-        float top = LyricTransition.scaledTop(anchorY() + transition.position(index) - scroll[index],
-                height[index], scale[index]);
-        float bottom = top + height[index] * scale[index];
+        float rowScale = departing ? exit.scale : scale[index];
+        float y = departing ? exit.y : anchorY() + transition.position(index) - scroll[index];
+        float top = LyricTransition.scaledTop(y, height[index], rowScale);
+        float bottom = top + height[index] * rowScale;
         float offset = presentationOffset(), group = presentationScale();
         return LyricBandGeometry.presentedY(top, center, offset, group) <= clipBandBottom
                 && LyricBandGeometry.presentedY(bottom, center, offset, group) >= clipBandTop;
@@ -2502,6 +2811,10 @@ final class LyricView extends View {
             canvas.scale(presentationScale, presentationScale, getWidth() / 2f, homeY());
         float center = (bandTop + bandBottom) / 2f;
         long drawAt = now();
+        // A layout rebase preserves each row's old screen position and every row has its own
+        // spring. The target slots can therefore be separate while their current poses cross.
+        // Constrain the actual drawn bounds as well, including frozen departing rows.
+        float previousBottom = -Float.MAX_VALUE;
         for (int i = 0; i < n; i++) {
             LyricLineExit.Row exit = lineExits.row(i);
             if (exit != null && exit.departing()) {
@@ -2511,12 +2824,16 @@ final class LyricView extends View {
                     float y = exit.y + floatOffset;
                     float sc = exit.scale * exit.scale(drawAt);
                     float top = LyricTransition.scaledTop(y, height[i], sc);
+                    float shift = LyricFocus.separationOffset(top, previousBottom);
+                    y += shift;
+                    top += shift;
                     float shownTop = LyricBandGeometry.presentedY(top, center, presentationOffset, presentationScale);
                     float shownBottom = LyricBandGeometry.presentedY(top + height[i] * sc, center,
                             presentationOffset, presentationScale);
                     float a = LyricLineExit.edgeAlpha(exit.alpha, shownTop, shownBottom,
                             clipBandTop, clipBandBottom, fade);
-                    if (a <= 0.003f) continue;
+                    if (a * exit.alpha(drawAt) <= 0.003f) continue;
+                    previousBottom = top + height[i] * sc;
                     int rowSave = canvas.save();
                     drawLine(canvas, i, exit.x, y, vis * a * exit.alpha(drawAt),
                             sc, exit.emphasis, exit.blur, exit.lit);
@@ -2530,10 +2847,26 @@ final class LyricView extends View {
             boolean heldFinal = i == n - 1 && finalHold.completed();
             float rowTransitionAlpha = unfinished || waitingForTop || heldFinal ? 1f : transition.alpha(i);
             if (rowTransitionAlpha <= 0.003f) continue;
+            float y = anchor + transition.position(i) - scroll[i];
+            float rowScale = scale[i] * (i == n - 1 ? finalHold.scale() : 1f);
+            float screenY = LyricTransition.scaledTop(y, height[i], rowScale);
+            float shift = LyricFocus.separationOffset(screenY, previousBottom);
+            boolean hasDots = !Float.isNaN(dotsTop[i])
+                    && !(singing.count > 0 && i >= singing.first && i <= singing.last);
+            if (hasDots && transition.alpha(i) > 0.003f && ms < switchAt(i) - DOT_EXIT_LEAD_MS) {
+                float dotsY = anchor + dotsTop[i] + transition.position(i) - base[i] - scroll[i];
+                float dotsBottom = dotsY + DOTS_SLOT_EM * textPx;
+                float shownTop = LyricBandGeometry.presentedY(dotsY, center, presentationOffset, presentationScale);
+                float shownBottom = LyricBandGeometry.presentedY(dotsBottom, center, presentationOffset, presentationScale);
+                if (shownBottom > clipBandTop && shownTop < clipBandBottom)
+                    shift = Math.max(shift, LyricFocus.separationOffset(dotsY, previousBottom));
+            }
+            y += shift;
+            screenY += shift;
             // The interlude slot above this line, if it has one: its dots move with the line, and
             // sit there dim from the start rather than leaving a hole until their turn.
-            if (!Float.isNaN(dotsTop[i]) && !(singing.count > 0 && i >= singing.first && i <= singing.last)) {
-                float dy = anchor + dotsTop[i] + transition.position(i) - base[i] - scroll[i];
+            if (hasDots) {
+                float dy = anchor + dotsTop[i] + transition.position(i) - base[i] - scroll[i] + shift;
                 float screenDots = dy;
                 float dh = DOTS_SLOT_EM * textPx;
                 float shownDots = LyricBandGeometry.presentedY(screenDots, center, presentationOffset, presentationScale);
@@ -2543,11 +2876,11 @@ final class LyricView extends View {
                         clamp01((clipBandBottom - shownDotsBottom) / fade));
                 float da = vis * dEdge * transition.alpha(i);
                 if (dotsFor >= 0 ? i < dotsFor : i <= focus) da *= ABOVE_ALPHA;
-                if (da > 0.003f) drawDots(canvas, i, side, dy, da);
+                if (da > 0.003f && ms < switchAt(i) - DOT_EXIT_LEAD_MS) {
+                    drawDots(canvas, i, side, dy, da);
+                    previousBottom = Math.max(previousBottom, dy + dh);
+                }
             }
-            float y = anchor + transition.position(i) - scroll[i];
-            float rowScale = scale[i] * (i == n - 1 ? finalHold.scale() : 1f);
-            float screenY = LyricTransition.scaledTop(y, height[i], rowScale);
             float screenBottom = screenY + height[i] * rowScale;
             float shownY = LyricBandGeometry.presentedY(screenY, center, presentationOffset, presentationScale);
             float shownBottom = LyricBandGeometry.presentedY(screenBottom, center, presentationOffset, presentationScale);
@@ -2564,6 +2897,7 @@ final class LyricView extends View {
                 lineExits.forgetWaitingPose(i);
                 continue;
             }
+            previousBottom = Math.max(previousBottom, screenBottom);
             lineExits.capture(i,
                     side,
                     y - floatOffset,
@@ -2571,7 +2905,7 @@ final class LyricView extends View {
             // Until now the completed line scrolls with the rest; only at the safe upper
             // boundary does its existing 300ms fade/shrink take ownership of the pose.
             if (lineExits.startAtTop(i, shownY, clipBandTop, fade, drawAt, musicBandMorph,
-                    transition.position(i) - scroll[i])) kick();
+                    transition.position(i) - scroll[i] + shift)) kick();
             drawLine(canvas, i, side, y, a, rowScale, emph[i], blur[i], lit[i]);
         }
         canvas.restoreToCount(save);
@@ -3575,7 +3909,20 @@ final class LyricView extends View {
                 + " groupEntry=" + capsulePresentation() + " gestureScale=" + r2(gestureFeedback.scale())
                 + " show=" + r2(show) + " alpha=" + r2(getAlpha())
                 + " transition=" + r2(getTransitionAlpha()) + " popAlpha=" + r2(popA.x)
-                + " parent=" + (getParent() != null);
+                + " parent=" + (getParent() != null) + geometryDiagnostic();
+    }
+
+    private String geometryDiagnostic() {
+        return " build=" + com.os4.musiccover.BuildConfig.VERSION_CODE
+                + " nav=" + diagnosticNavigation + " independent=" + LockLyrics.sClockIndependentMotion
+                + " keptMini=" + Main.capsuleKeepsMini() + " unstable=" + diagnosticUnstable
+                + " anchor=" + diagCoordinate(anchorY()) + " obstacle=" + diagCoordinate(diagnosticObstacle)
+                + " viewOffset=" + diagCoordinate(diagnosticViewOffset) + " normalRef=" + diagnosticReferenceSource
+                + " refBand=" + diagCoordinate(diagnosticReferenceTop) + ".." + diagCoordinate(diagnosticReferenceBottom);
+    }
+
+    private static String diagCoordinate(float v) {
+        return Float.isFinite(v) ? String.valueOf(Math.round(v)) : "none";
     }
 
     String describe() {
@@ -3606,7 +3953,7 @@ final class LyricView extends View {
                         + "(" + LockLyrics.bandSource() + ")" : "none")
                 + " layoutClock=" + layoutClockSource + " clipTop=" + Math.round(clipBandTop)
                 + " clipBottom=" + Math.round(clipBandBottom)
-                + " looping=" + looping + " parent=" + (getParent() instanceof ViewGroup)
+                + " looping=" + looping + " parent=" + (getParent() instanceof ViewGroup) + geometryDiagnostic()
                 // The last few frames that moved, oldest first: what the page did while the lock
                 // screen was leaving, and which reading was late with it. Only frames that move
                 // are in it, so a burst is one event. See trace().

@@ -4,32 +4,64 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NavigationLyricBackgroundTest {
-    @Test public void explicitMusicRequestSurvivesLyricHidingUntilItsMapCloses() {
+    @Test public void lyricOwnedCoverDoesNotReturnAfterLyricsWereClosedOverMap() {
         NavigationLyricBackground state = new NavigationLyricBackground();
         state.requestedOver("amap-nav");
-        // Lyric visibility is deliberately not background ownership: a body/two-finger hide
-        // must not cancel the requested background or be switched back on when it resumes.
         assertTrue(state.pending());
-        assertTrue(state.finish("amap-nav", true, true));
+        assertFalse(state.finish("amap-nav", true, true, false, false));
         assertFalse(state.pending());
-        assertFalse(state.finish("amap-nav", true, true));
+        assertFalse(state.finish("amap-nav", true, true, true, false));
+    }
+
+    @Test public void aVisibleLyricPageRestoresItsBackgroundAfterNavigationCloses() {
+        NavigationLyricBackground state = new NavigationLyricBackground();
+        state.requestedOver("amap-nav");
+        assertTrue(state.finish("amap-nav", true, true, true, false));
+        assertFalse(state.pending());
+    }
+
+    @Test public void anIndependentCoverRemainsWhenLyricsWereClosed() {
+        NavigationLyricBackground state = new NavigationLyricBackground();
+        state.requestedOver("amap-nav");
+        assertTrue(state.finish("amap-nav", true, true, false, true));
+        assertFalse(state.pending());
+    }
+
+    @Test public void hidingThenReopeningLyricsBeforeMapClosesUsesCurrentVisibility() {
+        NavigationLyricBackground state = new NavigationLyricBackground();
+        state.requestedOver("amap-nav");
+        assertTrue(state.protects("amap-nav"));
+        // The lyric is reopened before map close; no stale hide decision is retained.
+        state.requestedOver("amap-nav");
+        assertTrue(state.finish("amap-nav", true, true, true, false));
+        assertFalse(state.finish("amap-nav", true, true, true, false));
+    }
+
+    @Test public void disabledOrDestroyedLyricRequestDoesNotRestoreAnOwnedCover() {
+        NavigationLyricBackground state = new NavigationLyricBackground();
+        state.requestedOver("amap-nav");
+        assertTrue(state.protects("amap-nav"));
+        // Disable or a destroyed session leaves the map protected until its own close.
+        assertFalse(state.finish("amap-nav", true, false, false, false));
+        assertFalse(state.pending());
+        assertFalse(state.finish("amap-nav", true, true, false, false));
     }
 
     @Test public void unrelatedSceneCloseCannotRestoreOrConsumeTheMusicRequest() {
         NavigationLyricBackground state = new NavigationLyricBackground();
         state.requestedOver("amap-nav");
-        assertFalse(state.finish("countdown", true, true));
+        assertFalse(state.finish("countdown", true, true, true, false));
         assertTrue(state.belongsTo("amap-nav"));
-        assertTrue(state.finish("amap-nav", true, true));
+        assertTrue(state.finish("amap-nav", true, true, true, false));
     }
 
     @Test public void disabledCoverAndEndedSessionDoNotBringBackgroundBackLater() {
         NavigationLyricBackground state = new NavigationLyricBackground();
         state.requestedOver("amap-nav");
-        assertFalse(state.finish("amap-nav", false, true));
-        assertFalse(state.finish("amap-nav", true, true));
+        assertFalse(state.finish("amap-nav", false, true, true, false));
+        assertFalse(state.finish("amap-nav", true, true, true, false));
         state.requestedOver("amap-nav");
-        assertFalse(state.finish("amap-nav", true, false));
+        assertFalse(state.finish("amap-nav", true, false, true, false));
         assertFalse(state.pending());
     }
 
@@ -37,9 +69,9 @@ public class NavigationLyricBackgroundTest {
         NavigationLyricBackground state = new NavigationLyricBackground();
         state.requestedOver("amap-nav");
         state.cancel();
-        assertFalse(state.finish("amap-nav", true, true));
+        assertFalse(state.finish("amap-nav", true, true, true, false));
         state.requestedOver("amap-nav");
-        assertTrue(state.finish("amap-nav", true, true));
+        assertTrue(state.finish("amap-nav", true, true, true, false));
     }
 
     @Test public void hidingLyricsDoesNotExposeCoverWritesWhileMapIsStillRequested() {
@@ -48,7 +80,7 @@ public class NavigationLyricBackgroundTest {
         assertTrue(state.protects("amap-nav"));
         assertFalse(state.protects(null));
         assertFalse(state.protects("other"));
-        assertTrue(state.finish("amap-nav", true, true));
+        assertTrue(state.finish("amap-nav", true, true, true, false));
         assertFalse(state.protects("amap-nav"));
     }
 
@@ -62,6 +94,6 @@ public class NavigationLyricBackgroundTest {
 
     @Test public void navigationWithoutAnExplicitMusicPageKeepsItsExistingBackground() {
         NavigationLyricBackground state = new NavigationLyricBackground();
-        assertFalse(state.finish("amap-nav", true, true));
+        assertFalse(state.finish("amap-nav", true, true, true, false));
     }
 }

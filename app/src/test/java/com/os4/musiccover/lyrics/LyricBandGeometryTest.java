@@ -24,6 +24,22 @@ public class LyricBandGeometryTest {
         assertEquals(60f, LyricBandGeometry.singingTop(100f, 500f, 320f), .001f);
     }
 
+    @Test public void oversizedSimultaneousGroupKeepsFocusAtReadingPositionAcrossMorph() {
+        float band = 500f, anchor = .3f, rowHeight = 80f;
+        for (float progress : new float[]{0f, .3f, 1f}) {
+            float fix = LyricBandGeometry.singingAnchorFix(band, 5000f, rowHeight,
+                    4920f, progress, anchor);
+            float focusTop = anchor * band + fix;
+            assertEquals(LyricBandGeometry.singingTop(0, band, rowHeight, progress), focusTop, .001f);
+            assertTrue(focusTop >= 0f && focusTop + rowHeight <= band);
+            // Fitting groups retain their original centred group geometry.
+            float smallFix = LyricBandGeometry.singingAnchorFix(band, 300f, rowHeight,
+                    220f, progress, anchor);
+            assertEquals(LyricBandGeometry.singingTop(0, band, 300f, progress) + 220f,
+                    anchor * band + smallFix, .001f);
+        }
+    }
+
     private static float add(float previous, boolean drawn, float top, float height) {
         return LyricBandGeometry.include(previous, drawn, 120f, top, 600f, height, 1080f, 2300f);
     }
@@ -195,6 +211,38 @@ public class LyricBandGeometryTest {
         // An occluding card must not make the entire lyric viewport empty.
         assertEquals(80f, LyricBandGeometry.navigationClipTop(80f, 800f, 840f, 75f), 0f);
         assertEquals(80f, LyricBandGeometry.navigationClipTop(80f, 800f, Float.NaN, 75f), 0f);
+    }
+
+    @Test public void navigationCanUseOrdinaryReadingBandAndItsSingingAnchor() {
+        for (float fill : new float[] {0.4f, 0.7f, 0.85f, 1f}) {
+            float[] ordinary = new float[2];
+            assertTrue(LyricStyle.DEFAULT.with("fill", fill).writeBand(80f, 2150f, 3f, 75f, ordinary));
+            float liveNavigationFloor = ordinary[1];
+            assertTrue(LyricBandGeometry.navigationReferenceFits(ordinary[0], ordinary[1],
+                    liveNavigationFloor, 75f));
+            // Using these same band bounds gives the same 30% reading position as the ordinary page.
+            assertEquals(ordinary[0] + 0.3f * (ordinary[1] - ordinary[0]) - 40f,
+                    LyricBandGeometry.singingTop(ordinary[0], ordinary[1], 80f), 0.01f);
+        }
+    }
+
+    @Test public void navigationRetainsSafeFallbackWhenReferenceCannotFit() {
+        assertFalse(LyricBandGeometry.navigationReferenceFits(Float.NaN, 1000f, 1200f, 75f));
+        assertFalse(LyricBandGeometry.navigationReferenceFits(900f, 800f, 1200f, 75f));
+        assertFalse(LyricBandGeometry.navigationReferenceFits(800f, 1500f, 850f, 75f));
+        assertFalse(LyricBandGeometry.navigationReferenceFits(800f, 1500f, Float.NaN, 75f));
+        // It is not enough to fit one row somewhere: the actual 30% singing anchor must fit.
+        assertFalse(LyricBandGeometry.navigationReferenceFits(351f, 2156f, 500f, 75f));
+        assertTrue(LyricBandGeometry.navigationReferenceFits(351f, 2156f, 1203f, 75f));
+    }
+
+    @Test public void persistentGroupCannotImplyAFullScreenOrdinaryBand() {
+        // A group may keep the capsule frame busy indefinitely; use a real ordinary page
+        // measurement if one exists, and otherwise retain the safe existing navigation band.
+        assertTrue(LyricBandGeometry.canUseNavigationReference(true, true));
+        assertTrue(LyricBandGeometry.canUseNavigationReference(true, false));
+        assertTrue(LyricBandGeometry.canUseNavigationReference(false, false));
+        assertFalse(LyricBandGeometry.canUseNavigationReference(false, true));
     }
 
     @Test public void lostNavigationObstacleCanReturnAtANewNormalCapsuleHeight() {
@@ -403,5 +451,41 @@ public class LyricBandGeometryTest {
         assertEquals(350f, LyricBandGeometry.singingTop(100f, 1100f, 100f, 0f), .001f);
         assertEquals(550f, LyricBandGeometry.singingTop(100f, 1100f, 100f, 1f), 0f);
         assertEquals(450f, LyricBandGeometry.singingTop(100f, 1100f, 100f, .5f), .001f);
+    }
+
+    @Test public void navigationMusicMorphMatchesBothStableEndpointsAndTracksReversal() {
+        float[] out = new float[4];
+        float[] p = {0f, .25f, .5f, .75f, 1f, .75f, .5f, .25f, 0f};
+        float[] centers = new float[p.length];
+        for (int i = 0; i < p.length; i++) {
+            LyricBandGeometry.navigationMorph(351f, 2156f, 351f, 564f, 1203f, 144f,
+                    1307f, p[i], out);
+            centers[i] = LyricBandGeometry.singingTop(out[0], out[1], 75f, p[i]) + 37.5f;
+            assertEquals(1307f, out[3], 0f);
+            if (p[i] == 0f) {
+                assertEquals(351f, out[0], 0f);
+                assertEquals(2156f, out[1], 0f);
+                assertEquals(351f, out[2], 0f);
+            }
+            if (p[i] == 1f) {
+                assertEquals(564f, out[0], 0f);
+                assertEquals(1203f, out[1], 0f);
+                assertEquals(144f, out[2], 0f);
+            }
+        }
+        for (int i = 5; i < centers.length; i++) assertEquals(centers[8 - i], centers[i], .001f);
+    }
+
+    @Test public void settledNavigationCardKeepsCardAnchorAfterMorphObjectIsReleased() {
+        assertEquals(0f, LyricBandGeometry.musicCardProgress(true, true, false,
+                Float.NaN, false, 1f), 0f);
+        assertEquals(1f, LyricBandGeometry.musicCardProgress(true, false, false,
+                Float.NaN, false, 0f), 0f);
+        assertEquals(.65f, LyricBandGeometry.musicCardProgress(true, false, true,
+                .65f, false, 0f), 0f);
+        assertEquals(.65f, LyricBandGeometry.musicCardProgress(true, false, false,
+                Float.NaN, true, .65f), 0f);
+        assertEquals(0f, LyricBandGeometry.musicCardProgress(false, false, false,
+                Float.NaN, false, 1f), 0f);
     }
 }

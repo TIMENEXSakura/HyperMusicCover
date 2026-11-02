@@ -136,7 +136,7 @@ public final class LockLyrics {
         sCapsulePreparation = false;
         sCapsulePage = false;
         Main.setCapsuleArtworkOwner(false, null, null);
-        Main.cancelCapsuleNavigationBackground();
+        Main.capsuleLyricsRequestEnded();
         notifyAvailabilitySoon();
         Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         refresh();
@@ -196,6 +196,23 @@ public final class LockLyrics {
     public static volatile boolean sBluetoothSync = true;
     public static volatile int sBluetoothClassicMs = LyricBluetoothOffset.DEFAULT_CLASSIC_MS;
     public static volatile int sBluetoothLeMs = LyricBluetoothOffset.DEFAULT_LE_MS;
+    /** Allow heuristic recognition of duet metadata in nonstandard lyric files. */
+    public static volatile boolean sFlexibleDuet = true;
+
+    public static void setFlexibleDuet(boolean enabled) {
+        if (sFlexibleDuet == enabled) return;
+        sFlexibleDuet = enabled;
+        // Parsed lines depend on this setting, including entries for other tracks.
+        LyricSource.invalidateRequests();
+        CACHE.clear();
+        Main.main().removeCallbacks(SETTLED_LOOKUP);
+        unpark();
+        sGen++;
+        sInfoSeen = null;
+        sInfoTries = 0;
+        sSource = LyricSource.SRC_NONE;
+        if (sEnabled && !sDemo && !sKey.isEmpty()) lookup(sKey, sController, false);
+    }
 
     public static void setBluetoothSync(boolean enabled, int classicMs, int leMs) {
         sBluetoothSync = enabled;
@@ -1013,7 +1030,11 @@ public final class LockLyrics {
      * edge: a phone that has never measured a card does not move when the first one arrives.
      */
     static float bandBottomOnScreen() {
-        float capsule = com.os4.musiccover.island.MiniPlayerRuntime.lyricObstacleTopOnScreen();
+        return bandBottomOnScreen(com.os4.musiccover.island.MiniPlayerRuntime.lyricObstacleTopOnScreen());
+    }
+
+    /** Reuse the capsule measurement taken by the current lyric frame. */
+    static float bandBottomOnScreen(float capsule) {
         if (Float.isFinite(capsule)) {
             setBandSource(BAND_CAPSULE);
             return capsule;
@@ -1758,7 +1779,7 @@ public final class LockLyrics {
             sCapsulePage = false;
             Main.setCapsuleArtworkOwner(false, null, null);
             resetCapsuleLayoutOrigin();
-            Main.cancelCapsuleNavigationBackground();
+            Main.capsuleLyricsRequestEnded();
             Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         }
         // The switch is the master, so it takes the tap's answer with it. Switching the lyrics

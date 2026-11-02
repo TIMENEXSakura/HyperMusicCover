@@ -34,7 +34,8 @@
     <string name="lyrics_priority_done">完成</string>
     <string name="lyrics_priority_skipped">网络关闭，暂不使用</string>
     <string name="lyrics_max_lines">同时突出显示的段落数</string>
-    <string name="lyrics_max_lines_summary">保留尚未唱完的歌词，最多 4 段；下挂和声不占名额。超出上限时优先显示较新的段落。</string>
+    <string name="lyrics_max_lines_summary">保留尚未唱完的歌词；下挂和声不占名额。超出上限时优先显示较新的段落。</string>
+    <string name="lyrics_max_lines_unlimited">不限制</string>
     <string name="lyrics_font_size">主歌词字号</string>
     <string name="lyrics_bg_font_size">和声歌词字号</string>
     <string name="lyrics_main_color">主歌词颜色</string>
@@ -202,6 +203,8 @@
     <string name="lyrics_bt_le">低功耗蓝牙补偿</string>
     <string name="lyrics_bt_le_summary">LE Audio；默认 +100 ms，为估算值</string>
     <string name="lyrics_trans">显示翻译</string>
+    <string name="lyrics_flexible_duet">宽容识别对唱</string>
+    <string name="lyrics_flexible_duet_summary">尝试识别格式不规范的对唱歌词；关闭后仍支持标准对唱标记。</string>
     <string name="lyrics_enabled">启用锁屏歌词</string>
     <string name="lyrics_clock_independent">歌词动画不受时钟遮挡</string>
     <string name="lyrics_clock_independent_summary">胶囊歌词整组动画不随时钟移动而被裁切</string>

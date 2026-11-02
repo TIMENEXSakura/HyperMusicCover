@@ -25,7 +25,9 @@ final class LyricTransition {
 
     static float motionWeight(int count, float groupHeight, float available) {
         float occupancy = Math.min(1f, groupHeight / Math.max(1f, available));
-        return 1f + 0.12f * (Math.max(1, count) - 1) + 0.18f * occupancy;
+        // Additional simultaneous voices should not make an unlimited group asymptotically
+        // stop scrolling or scaling. This caps motion weight, not the number of voices.
+        return 1f + 0.12f * (Math.min(4, Math.max(1, count)) - 1) + 0.18f * occupancy;
     }
 
     static boolean recentSeek(long now, long jumpedAt, long window) {

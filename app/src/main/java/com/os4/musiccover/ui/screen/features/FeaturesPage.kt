@@ -566,15 +566,17 @@ private fun LyricsGroup(
             Column {
                 BasicComponent(title = stringResource(R.string.lyrics_two_finger_tap), enabled = enabled)
                 LyricSourceSettings(enabled, module, onChange)
+                val unlimitedLabel = stringResource(R.string.lyrics_max_lines_unlimited)
                 ValueSlider(
                     title = stringResource(R.string.lyrics_max_lines),
                     summary = stringResource(R.string.lyrics_max_lines_summary),
-                    value = module.lyricsMaxLines.toFloat(),
-                    valueRange = 1f..4f,
+                    value = if (module.lyricsMaxLines == 0) 5f else module.lyricsMaxLines.toFloat(),
+                    valueRange = 1f..5f,
                     enabled = enabled,
-                    label = { it.roundToInt().toString() },
+                    label = { if (it.roundToInt() == 5) unlimitedLabel else it.roundToInt().toString() },
                     onValueChange = {
-                        val count = it.roundToInt().coerceIn(1, 4)
+                        val sliderValue = it.roundToInt().coerceIn(1, 5)
+                        val count = if (sliderValue == 5) 0 else sliderValue
                         onChange(module.copy(lyricsMaxLines = count))
                         ModuleBridge.setLyricsMaxLines(context, count)
                     },
@@ -689,6 +691,16 @@ private fun LyricsGroup(
                     onCheckedChange = {
                         onChange(module.copy(lyricsTrans = it))
                         ModuleBridge.setLyricsTrans(context, it)
+                    },
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.lyrics_flexible_duet),
+                    summary = stringResource(R.string.lyrics_flexible_duet_summary),
+                    checked = module.lyricFlexibleDuet,
+                    enabled = enabled,
+                    onCheckedChange = {
+                        onChange(module.copy(lyricFlexibleDuet = it))
+                        ModuleBridge.setLyricFlexibleDuet(context, it)
                     },
                 )
                 SwitchPreference(

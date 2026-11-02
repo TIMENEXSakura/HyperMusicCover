@@ -32,6 +32,7 @@ object SettingsBackup {
     private const val KEY_LYRICS_KEEP_ON = "lyricsKeepOn"
     private const val KEY_LYRICS_HDR = "lyricsHdr"
     private const val KEY_LYRIC_CLOCK_INDEPENDENT = "lyricClockIndependent"
+    private const val KEY_LYRIC_FLEXIBLE_DUET = "lyricFlexibleDuet"
     private const val KEY_LYRIC_BT_SYNC = "lyricBluetoothSync"
     private const val KEY_LYRICS_TRANS = "lyricsTranslation"
     private const val KEY_AOD_BIG_CLOCK = "aodBigClock"
@@ -70,6 +71,7 @@ object SettingsBackup {
             json.put(KEY_LYRICS_KEEP_ON, module.lyricsKeepOn)
             json.put(KEY_LYRICS_HDR, module.lyricsHdr)
             json.put(KEY_LYRIC_CLOCK_INDEPENDENT, module.lyricClockIndependent)
+            json.put(KEY_LYRIC_FLEXIBLE_DUET, module.lyricFlexibleDuet)
             json.put(KEY_LYRIC_BT_SYNC, JSONObject()
                 .put("enabled", module.lyricBtSync)
                 .put("classic", module.lyricBtClassic)
@@ -162,6 +164,9 @@ object SettingsBackup {
             }
             if (obj.has(KEY_LYRIC_CLOCK_INDEPENDENT)) {
                 ModuleBridge.setLyricClockIndependent(context, obj.getBoolean(KEY_LYRIC_CLOCK_INDEPENDENT))
+            }
+            if (obj.has(KEY_LYRIC_FLEXIBLE_DUET)) {
+                ModuleBridge.setLyricFlexibleDuet(context, obj.getBoolean(KEY_LYRIC_FLEXIBLE_DUET))
             }
             if (obj.has(KEY_LYRICS_KEEP_ON)) {
                 ModuleBridge.setLyricsKeepOn(context, obj.getBoolean(KEY_LYRICS_KEEP_ON))
