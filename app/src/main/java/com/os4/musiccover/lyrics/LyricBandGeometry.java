@@ -176,6 +176,15 @@ public final class LyricBandGeometry {
         return Math.max(layoutTop, drawnClock + Math.max(0f, layoutTop - layoutClock));
     }
 
+    /** The navigation overlay must not show lyrics above the ordinary capsule's limit. */
+    static float navigationClipTop(float existingTop, float normalCapsuleTop,
+                                   float clipBottom, float textHeight) {
+        if (!Float.isFinite(normalCapsuleTop) || !Float.isFinite(clipBottom)
+                || !Float.isFinite(textHeight) || textHeight <= 0f
+                || normalCapsuleTop + textHeight > clipBottom) return existingTop;
+        return Float.isFinite(existingTop) ? Math.max(existingTop, normalCapsuleTop) : normalCapsuleTop;
+    }
+
 
     /** Match the outer canvas translation/scale when testing a row against a fixed clip. */
     static float presentedY(float y, float center, float offset, float scale) {

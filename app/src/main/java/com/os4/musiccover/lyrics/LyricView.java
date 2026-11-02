@@ -374,6 +374,7 @@ final class LyricView extends View {
     private final LyricBandGeometry.FixedBand fixedCapsuleBand = new LyricBandGeometry.FixedBand();
     private final LyricBandGeometry.FixedBand morphMiniBand = new LyricBandGeometry.FixedBand();
     private final LyricBandGeometry.FixedBand morphCardBand = new LyricBandGeometry.FixedBand();
+    private final LyricBandGeometry.FixedBand navigationClipBand = new LyricBandGeometry.FixedBand();
     private boolean fixedCapsuleScreenBand;
     private boolean musicBandMorph;
     private boolean morphIndependentKnown, morphIndependent;
@@ -390,6 +391,7 @@ final class LyricView extends View {
     private float clipBandTop, clipBandBottom;
     private String layoutClockSource = "live";
     private final float[] bandBounds = new float[2];
+    private final float[] navigationBounds = new float[2];
     private boolean bandOk;
     private float anchorFix;
     /** Offset used only while one lead lyric is taller than the visible viewport. */
@@ -495,6 +497,7 @@ final class LyricView extends View {
         fixedCapsuleBand.clear();
         morphMiniBand.clear();
         morphCardBand.clear();
+        navigationClipBand.clear();
         musicBandMorph = false;
         morphIndependentKnown = false;
         musicCardProgress = 0f;
@@ -569,6 +572,7 @@ final class LyricView extends View {
         fixedCapsuleBand.clear();
         morphMiniBand.clear();
         morphCardBand.clear();
+        navigationClipBand.clear();
         musicBandMorph = false;
         morphIndependentKnown = false;
         musicCardProgress = 0f;
@@ -2124,6 +2128,7 @@ final class LyricView extends View {
                     ? com.os4.musiccover.island.MiniPlayerRuntime.lyricObstacleTopOnScreen() : Float.NaN;
             boolean navigation = Main.capsuleLyricsOverNavigation()
                     || com.os4.musiccover.immersive.ImmersiveHost.requestedNavigationKey() != null;
+            if (!navigation) navigationClipBand.clear();
             float morph = com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphProgress();
             if (!morphIndependentKnown || morphIndependent != LockLyrics.sClockIndependentMotion) {
                 morphMiniBand.clear();
@@ -2237,6 +2242,42 @@ final class LyricView extends View {
                 // its current edge, preserving the same safety gap even when it rises.
                 clipBottom = (screenBand ? Math.max(bandBounds[0], Math.min(bandBounds[1],
                         layoutFloor - LyricStyle.GAP_DP * density)) : visibleBottom) - me;
+                if (navigation && LockLyrics.sClockIndependentMotion && capsule
+                        && LockLyrics.capsulePageRequested() && LockLyrics.sEnabled
+                        && !LockLyrics.sTapHidden && Main.capsuleKeepsMini()) {
+                    // The normal folded page clips at its configured screen band, not the
+                    // bare status-bar inset. Use the same measured obstacle and style, without
+                    // changing navigation's reading anchor or its live bottom obstruction.
+                    float screen = Main.screenHeight();
+                    boolean hasObstacle = Float.isFinite(obstacle) && obstacle >= screen * 0.5f
+                            && obstacle < screen;
+                    if (hasObstacle) {
+                        boolean hasNormalBand = morphMiniBand.update(LockLyrics.contrastRequestId(),
+                                getWidth(), getHeight(), LockLyrics.sStyle, show > 0.003f,
+                                Float.NaN, Float.NaN);
+                        float normalTop = hasNormalBand ? morphMiniBand.top() : Float.NaN;
+                        if (!hasNormalBand) {
+                            boolean valid = LockLyrics.sStyle.writeBand(safeTop,
+                                    ClockCollapse.unzoomY(this, obstacle), density, textPx, navigationBounds);
+                            if (navigationClipBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
+                                    LockLyrics.sStyle, show > 0.003f,
+                                    valid ? navigationBounds[0] : Float.NaN,
+                                    valid ? navigationBounds[1] : Float.NaN)) normalTop = navigationClipBand.top();
+                        }
+                        // If the live navigation card leaves less than one line of room, retain
+                        // the previous safe clip instead of making all lyrics disappear.
+                        clipTop = LyricBandGeometry.navigationClipTop(clipTop, normalTop - me,
+                                clipBottom, textPx);
+                    } else {
+                        // No measured bottom obstacle: ordinary lyrics also use the old clip.
+                        // Clear both references: when a pill reappears it may have moved, so
+                        // retaining its previous normal-page band would restore a stale ceiling.
+                        // Navigation never follows the music morph, and normal pages seed their
+                        // own reference again before the next music gesture.
+                        navigationClipBand.clear();
+                        morphMiniBand.clear();
+                    }
+                }
                 ok = true;
             }
         }

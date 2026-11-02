@@ -175,6 +175,44 @@ public class LyricBandGeometryTest {
         assertEquals(layoutTop, LyricBandGeometry.visibleTop(false, layoutTop, 600f, Float.NaN, 72f), 0f);
     }
 
+    @Test public void navigationClipUsesTheNormalCapsuleLimitAtEveryConfiguredHeight() {
+        for (float fill : new float[]{0.4f, 0.5f, 0.7f, 1f}) {
+            LyricStyle style = LyricStyle.DEFAULT.with("fill", fill);
+            float[] ordinary = new float[2], navigation = new float[2];
+            assertTrue(style.writeBand(80f, 2150f, 3f, 75f, ordinary));
+            assertTrue(style.writeBand(650f, 1700f, 3f, 75f, navigation));
+            float priorNavigationTop = LyricBandGeometry.visibleTop(true, navigation[0],
+                    650f, Float.NaN, 80f);
+            assertEquals(ordinary[0], LyricBandGeometry.navigationClipTop(priorNavigationTop,
+                    ordinary[0], 1600f, 75f), 0f);
+        }
+    }
+
+    @Test public void navigationClipNeverRaisesAnExistingStricterBoundary() {
+        assertEquals(800f, LyricBandGeometry.navigationClipTop(800f, 600f, 1600f, 75f), 0f);
+        assertEquals(800f, LyricBandGeometry.navigationClipTop(800f, Float.NaN, 1600f, 75f), 0f);
+        assertEquals(600f, LyricBandGeometry.navigationClipTop(Float.NaN, 600f, 1600f, 75f), 0f);
+        // An occluding card must not make the entire lyric viewport empty.
+        assertEquals(80f, LyricBandGeometry.navigationClipTop(80f, 800f, 840f, 75f), 0f);
+        assertEquals(80f, LyricBandGeometry.navigationClipTop(80f, 800f, Float.NaN, 75f), 0f);
+    }
+
+    @Test public void lostNavigationObstacleCanReturnAtANewNormalCapsuleHeight() {
+        LyricStyle style = LyricStyle.DEFAULT.with("fill", 0.5f);
+        float[] first = new float[2], moved = new float[2];
+        assertTrue(style.writeBand(80f, 2100f, 3f, 75f, first));
+        assertTrue(style.writeBand(80f, 1850f, 3f, 75f, moved));
+        LyricBandGeometry.FixedBand normal = new LyricBandGeometry.FixedBand();
+        assertTrue(normal.update(1L, 1080, 2400, style, true, first[0], first[1]));
+        // A missing capsule invalidates the old measurement. When it reappears at another
+        // height, both navigation and the ordinary page must use the new band's upper edge.
+        normal.clear();
+        assertTrue(normal.update(1L, 1080, 2400, style, true, moved[0], moved[1]));
+        assertEquals(moved[0], LyricBandGeometry.navigationClipTop(80f, normal.top(),
+                1600f, 75f), 0f);
+        assertNotEquals(first[0], normal.top(), 0f);
+    }
+
     @Test public void focusWaitsForAVisibleValidBandInsteadOfTakingAZeroAnchor() {
         assertFalse(LyricBandGeometry.readyToPlace(false, 0f, 1f));
         assertFalse(LyricBandGeometry.readyToPlace(true, 0f, 0f));
