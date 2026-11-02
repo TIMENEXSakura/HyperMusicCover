@@ -1,6 +1,7 @@
 package com.os4.musiccover.island
 import com.os4.musiccover.CoverMorphMotion
 import com.os4.musiccover.Main
+import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
 import android.graphics.Matrix
 import android.graphics.Outline
@@ -162,10 +163,10 @@ internal class MiniCardMorph(
     } finally { android.os.Trace.endSection() } }
 
     private fun observe(on: Boolean) {
-        observed?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(preDraw)
+        observed?.let { Gen.unpreDraw(it, preDraw) }
         observed = null
         if (!on) return
-        header.viewTreeObserver.addOnPreDrawListener(preDraw)
+        Gen.preDraw(header, preDraw)
         observed = header
     }
 
@@ -217,7 +218,7 @@ internal class MiniCardMorph(
             return false
         }
         observe(true)
-        Choreographer.getInstance().postFrameCallback(this)
+        Gen.frame(this)
         Xp.log("MCMini: container morph to=${if (toNative) "native" else "mini"} " +
             "paired=${pieces.count { it.paired }}")
         return true
@@ -386,12 +387,12 @@ internal class MiniCardMorph(
         if (dragging) {
             // The finger writes the progress; this only keeps the far end live under it. A
             // leader posing it this frame has done that already.
-            if (SystemClock.uptimeMillis() - ledAt < LED_FRESH_MS) Choreographer.getInstance().postFrameCallback(this)
+            if (SystemClock.uptimeMillis() - ledAt < LED_FRESH_MS) Gen.frame(this)
             else if (!apply()) {
                 lastCancel = geometryWhy()
                 finish(false)
             }
-            else Choreographer.getInstance().postFrameCallback(this)
+            else Gen.frame(this)
             return
         }
         // Stepped by the real gap, as CoverMorphLayer does: holding a slow frame read worse.
@@ -409,7 +410,7 @@ internal class MiniCardMorph(
         val late = SystemClock.uptimeMillis() - startedAt > SETTLE_LIMIT_MS
         if (motion.atRest() && nudge.atRest() && nudgeX.atRest()
             && (late || listener.canSettle(this, toNative))) finish(true)
-        else Choreographer.getInstance().postFrameCallback(this)
+        else Gen.frame(this)
     } finally { android.os.Trace.endSection() } }
 
     /**
@@ -431,7 +432,9 @@ internal class MiniCardMorph(
     private fun apply(): Boolean {
         val miniRest = traced("MC m.rest") { restBox?.invoke() ?: mini.restBoxOnScreen() } ?: return false
         miniEndDrawn = miniRest
-        val nativeRest = traced("MC m.native") { headerRestBox() } ?: return false
+        // Both the destination and its clip use the same stack height for this frame.
+        val nativeHeight = drawnHeight()
+        val nativeRest = traced("MC m.native") { headerRestBox(nativeHeight) } ?: return false
         if (miniRest.w <= 0f || nativeRest.w <= 0f) return false
         val c = motion.value.coerceIn(0f, 1f)
         val framed = containerFrame(miniRest, nativeRest, motion.value)
@@ -447,7 +450,7 @@ internal class MiniCardMorph(
         if (header.visibility != View.VISIBLE) header.visibility = View.VISIBLE
         traced("MC m.place") { placeHeader(box, s) }
         clipW = header.width.toFloat()
-        clipH = min(drawnHeight(), box.h / s)
+        clipH = min(nativeHeight, box.h / s)
         clipR = radius / s
         if (header.outlineProvider !== clipOutline) header.outlineProvider = clipOutline
         if (!header.clipToOutline) header.clipToOutline = true
@@ -580,7 +583,7 @@ internal class MiniCardMorph(
     private fun finish(completed: Boolean) {
         if (!running) return
         running = false
-        Choreographer.getInstance().removeFrameCallback(this)
+        Gen.unframe(this)
         observe(false)
         placedBox = null
         restore()
@@ -622,6 +625,9 @@ internal class MiniCardMorph(
      * and the blur stood there as a hard-edged block (filmed 2026-09-30, "竖状裁切").
      */
     private fun blurCard(radius: Float) {
+        // A media card has no separate notification content to blur. Avoid allocating a
+        // RenderEffect each frame when there is no view that can receive it.
+        if (cardContent.isEmpty()) return
         val r = if (radius < 0.5f) 0f else radius
         if (cardBlurred >= 0f && abs(r - cardBlurred) < 0.25f && (r == 0f) == (cardBlurred == 0f)) return
         cardBlurred = r
@@ -688,7 +694,7 @@ internal class MiniCardMorph(
         return abs(start.y - end.y).takeIf { it >= 1f }
     }
 
-    private fun headerRestBox(): CoverMorphMotion.Box? {
+    private fun headerRestBox(height: Float = drawnHeight()): CoverMorphMotion.Box? {
         if (!header.isAttachedToWindow || header.width <= 0 || header.height <= 0) return null
         val origin = headerOrigin() ?: return null
         oemMatrix.set(header.matrix)
@@ -703,7 +709,7 @@ internal class MiniCardMorph(
         val w = corner[0] - x0
         val dy = nativeDy?.invoke() ?: 0f
         return CoverMorphMotion.Box(origin[0] + x0, origin[1] + y0 + dy,
-            w, drawnHeight() * (w / header.width))
+            w, height * (w / header.width))
     }
 
     /**

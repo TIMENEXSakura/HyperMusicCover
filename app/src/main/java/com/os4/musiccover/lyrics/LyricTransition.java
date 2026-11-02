@@ -62,13 +62,23 @@ final class LyricTransition {
         if (positions.length != base.length) reset(base);
         moving = false;
         boolean changed = false;
+        // One easing coefficient per direction and frame, not an exponential per lyric row.
+        float fadeIn = Float.NaN, fadeOut = Float.NaN;
         for (int index = 0; index < base.length; index++) {
             float targetAlpha = !focus.visible(index) ? 0f
                     : (dots >= 0 ? index < dots : index < focus.last && !focus.contains(index))
                     ? aboveAlpha : 1f;
             float targetPosition = focus.position(index, base);
-            float nextAlpha = snap ? targetAlpha : ease(alpha[index], targetAlpha, dt,
-                    targetAlpha < alpha[index] ? 0.22f : 0.10f, 0.003f);
+            float nextAlpha;
+            if (snap || alpha[index] == targetAlpha) {
+                nextAlpha = targetAlpha;
+            } else {
+                boolean decreasing = targetAlpha < alpha[index];
+                if (decreasing && Float.isNaN(fadeOut)) fadeOut = factor(dt, 0.22f);
+                if (!decreasing && Float.isNaN(fadeIn)) fadeIn = factor(dt, 0.10f);
+                nextAlpha = ease(alpha[index], targetAlpha,
+                        decreasing ? fadeOut : fadeIn, 0.003f);
+            }
             float nextPosition = targetPosition;
             changed |= nextAlpha != alpha[index] || nextPosition != positions[index];
             alpha[index] = nextAlpha;
@@ -86,8 +96,12 @@ final class LyricTransition {
         return alpha[index];
     }
 
-    private static float ease(float value, float target, float dt, float tau, float epsilon) {
-        float next = value + (target - value) * (1f - (float) Math.exp(-Math.max(0f, dt) / tau));
+    private static float factor(float dt, float tau) {
+        return 1f - (float) Math.exp(-Math.max(0f, dt) / tau);
+    }
+
+    private static float ease(float value, float target, float factor, float epsilon) {
+        float next = value + (target - value) * factor;
         return Math.abs(next - target) < epsilon ? target : next;
     }
 }

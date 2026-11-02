@@ -80,6 +80,9 @@ public final class ModuleState {
                     + "\nlyrichidden=" + (LockLyrics.sTapHidden ? 1 : 0)
                     + "\nlyrichdr=" + (LockLyrics.sHdr ? 1 : 0)
                     + "\nlyricclockindependent=" + (LockLyrics.sClockIndependentMotion ? 1 : 0)
+                    + "\nlyricbtsync=" + (LockLyrics.sBluetoothSync ? 1 : 0)
+                    + "\nlyricbtclassic=" + LockLyrics.sBluetoothClassicMs
+                    + "\nlyricbtle=" + LockLyrics.sBluetoothLeMs
                     // Written as 1 or 0 like the rest, but read back as the default when absent:
                     // the key did not exist before this setting did, and the lyrics are supposed
                     // to look the way they always have on a file that predates it.
@@ -93,6 +96,7 @@ public final class ModuleState {
                     + "\nlyricmaxlines=" + LockLyrics.sMaxLines
                     + "\nlyricsize=" + LockLyrics.sStyle.sizeSp
                     + "\nlyricbgsize=" + LockLyrics.sStyle.bgSizeSp
+                    + "\nlyricfill=" + LockLyrics.sStyle.fill
                     + "\nlyricappearance=" + LockLyrics.sAppearance.toJson()
                     + "\nlyricsourcecustom=" + (LyricSourcePolicy.current.custom ? 1 : 0)
                     + "\nlyricnetwork=" + (LyricSourcePolicy.current.allowNetwork ? 1 : 0)
@@ -222,6 +226,9 @@ public final class ModuleState {
                         else if ("lyrichidden".equals(k)) LockLyrics.sTapHidden = "1".equals(v);
                         else if ("lyrichdr".equals(k)) LockLyrics.sHdr = "1".equals(v);
                         else if ("lyricclockindependent".equals(k)) LockLyrics.sClockIndependentMotion = "1".equals(v);
+                        else if ("lyricbtsync".equals(k)) LockLyrics.sBluetoothSync = "1".equals(v);
+                        else if ("lyricbtclassic".equals(k)) LockLyrics.sBluetoothClassicMs = Math.max(-500, Math.min(500, Integer.parseInt(v)));
+                        else if ("lyricbtle".equals(k)) LockLyrics.sBluetoothLeMs = Math.max(-500, Math.min(500, Integer.parseInt(v)));
                         else if ("lyrictrans".equals(k)) LockLyrics.sTrans = "1".equals(v);
                         else if ("aodsmall".equals(k)) Main.sAodSmall = "1".equals(v);
                         else if ("lyricroma".equals(k)) LockLyrics.sRoma = "1".equals(v);
@@ -230,6 +237,7 @@ public final class ModuleState {
                         else if ("lyricmaxlines".equals(k)) LockLyrics.setMaxLines(Integer.parseInt(v));
                         else if ("lyricsize".equals(k)) LockLyrics.setStyle("size", Float.parseFloat(v));
                         else if ("lyricbgsize".equals(k)) LockLyrics.setStyle("bgsize", Float.parseFloat(v));
+                        else if ("lyricfill".equals(k)) LockLyrics.setStyle("fill", Float.parseFloat(v));
                         else if ("lyricappearance".equals(k)) LockLyrics.setAppearance(v);
                         else if ("lyricsourcecustom".equals(k)) {
                             LyricSourcePolicy.Config old = LyricSourcePolicy.current;

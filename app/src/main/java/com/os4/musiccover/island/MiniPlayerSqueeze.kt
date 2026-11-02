@@ -1,4 +1,5 @@
 package com.os4.musiccover.island
+import com.os4.musiccover.Gen
 import com.os4.musiccover.CoverMorphMotion
 import android.content.Context
 import android.graphics.Color
@@ -861,7 +862,7 @@ internal class MiniSqueeze(private val gapPx: Float, private val onFrame: () -> 
         pillBack = 0f
         pillFlat.fill(0f)
         rowWidth = 0f
-        Choreographer.getInstance().removeFrameCallback(this)
+        Gen.unframe(this)
         posted = false
         lastFrame = 0L
     }
@@ -874,7 +875,7 @@ internal class MiniSqueeze(private val gapPx: Float, private val onFrame: () -> 
         if (posted) return
         posted = true
         lastFrame = 0L
-        Choreographer.getInstance().postFrameCallback(this)
+        Gen.frame(this)
     }
 
     override fun doFrame(frameTimeNanos: Long) { android.os.Trace.beginSection("MC squeeze"); try {
@@ -894,7 +895,7 @@ internal class MiniSqueeze(private val gapPx: Float, private val onFrame: () -> 
         onFrame()
         if (!allAtRest() && !posted) {
             posted = true
-            Choreographer.getInstance().postFrameCallback(this)
+            Gen.frame(this)
         }
     } finally { android.os.Trace.endSection() } }
 

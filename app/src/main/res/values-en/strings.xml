@@ -189,6 +189,12 @@
     <string name="lyrics_source_lrclib">LrcLib</string>
     <string name="lyrics_provider_got_it">Got it</string>
     <string name="lyrics_provider_got_it_wait">Got it (%1$d)</string>
+    <string name="lyrics_bt_sync">Bluetooth lyric timing</string>
+    <string name="lyrics_bt_sync_summary">Estimates audio latency by Bluetooth type; actual delay varies by device. Positive values advance lyrics; negative values delay them.</string>
+    <string name="lyrics_bt_classic">Classic Bluetooth offset</string>
+    <string name="lyrics_bt_classic_summary">A2DP audio; default +400 ms is an estimate</string>
+    <string name="lyrics_bt_le">Bluetooth LE offset</string>
+    <string name="lyrics_bt_le_summary">LE Audio; default +100 ms is an estimate</string>
     <string name="lyrics_trans">Show translations</string>
     <string name="lyrics_enabled">Enable lock screen lyrics</string>
     <string name="lyrics_clock_independent">Animate lyrics independently of the clock</string>
@@ -277,6 +283,8 @@
     <string name="mini_widen">Widen when lock screen quick functions are off</string>
     <string name="mini_widen_summary">The island fills the space left by disabled lock screen quick functions</string>
     <string name="mini_normals_in_stack">Keep ordinary notifications off islands</string>
+    <string name="mini_haptic_feedback">Capsule tap feedback</string>
+    <string name="mini_haptic_feedback_summary">A light tap for capsule actions, two taps when lyrics are unavailable; follows the system haptic setting</string>
     <string name="mini_nav_keep_on">Keep the screen on while navigating</string>
     <string name="mini_status_at_date">Status info after the date</string>
     <string name="mini_status_at_date_summary">Off: back at the bottom</string>
@@ -360,4 +368,6 @@
     <string name="lyricon_unavailable">No framework response; check that the framework is enabled</string>
     <string name="lyricon_failed">Connection failed; see diagnostics</string>
     <string name="lyricon_waiting">Waiting for framework feedback</string>
+    <string name="lyrics_height">Lyric display height</string>
+    <string name="lyrics_height_summary">Adjusts the lyric area height. With the clock independent and the bottom capsule collapsed, the percentage uses the available screen height.</string>
 </resources>

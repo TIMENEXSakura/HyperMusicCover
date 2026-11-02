@@ -1,5 +1,7 @@
 package com.os4.musiccover.island
 
+import com.os4.musiccover.Gen
+
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
@@ -122,14 +124,9 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         hintDisplayManager = manager
         hintDisplayId = target.displayId
         return runCatching {
-            if (Build.VERSION.SDK_INT >= 36) {
-                manager.registerDisplayListener(context.mainExecutor,
-                    DisplayManager.EVENT_TYPE_DISPLAY_STATE or DisplayManager.EVENT_TYPE_DISPLAY_REMOVED,
-                    hintDisplayListener)
-            } else {
-                // On API 35 the original listener receives state changes as display changes.
-                manager.registerDisplayListener(hintDisplayListener, handler)
-            }
+            // Gen owns this listener so retirement takes it off SystemUI's display manager.
+            // The legacy callback reports state changes on every supported Android version.
+            Gen.displayListener(manager, hintDisplayListener, handler)
             // Catch a transition that occurred between the initial check and registration.
             manager.getDisplay(hintDisplayId)?.state == Display.STATE_ON
         }.getOrDefault(false)
@@ -139,7 +136,7 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         val manager = hintDisplayManager
         hintDisplayManager = null
         hintDisplayId = Display.INVALID_DISPLAY
-        if (manager != null) runCatching { manager.unregisterDisplayListener(hintDisplayListener) }
+        if (manager != null) runCatching { Gen.undisplayListener(manager, hintDisplayListener) }
     }
 
     private fun requestHintFrameRate() {
@@ -253,11 +250,11 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         val w = wordBounds.width()
         val h = wordBounds.height()
         questionGlyph.rewind()
-        questionGlyph.moveTo(left + w * 0.22f, top + h * 0.25f)
-        questionGlyph.cubicTo(left + w * 0.22f, top - h * 0.04f,
-            left + w * 0.86f, top - h * 0.04f, left + w * 0.82f, top + h * 0.30f)
-        questionGlyph.cubicTo(left + w * 0.80f, top + h * 0.45f,
-            left + w * 0.50f, top + h * 0.43f, left + w * 0.50f, top + h * 0.66f)
+        questionGlyph.moveTo(left + w * 0.25f, top + h * 0.24f)
+        questionGlyph.cubicTo(left + w * 0.25f, top - h * 0.02f,
+            left + w * 0.75f, top - h * 0.02f, left + w * 0.75f, top + h * 0.25f)
+        questionGlyph.cubicTo(left + w * 0.75f, top + h * 0.42f,
+            left + w * 0.50f, top + h * 0.42f, left + w * 0.50f, top + h * 0.63f)
         questionMeasure.setPath(questionGlyph, false)
     }
 
@@ -314,7 +311,7 @@ internal class PressFeedbackButton(context: Context) : ImageButton(context) {
         val w = wordBounds.width() - ix * 2f
         val h = wordBounds.height() - iy * 2f
         if (first > 0f) canvas.drawLine(left, top, left + w * first, top + h * first, feedbackPaint)
-        if (second > 0f) canvas.drawLine(left, bottom, left + w * second, bottom - h * second,
+        if (second > 0f) canvas.drawLine(left + w, top, left + w * (1f - second), top + h * second,
             feedbackPaint)
     }
 

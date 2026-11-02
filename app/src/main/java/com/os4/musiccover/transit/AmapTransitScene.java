@@ -11,6 +11,7 @@ import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.island.MiniPlayerRuntime;
 import com.os4.musiccover.PageSpring;
 import com.os4.musiccover.ProbeGuard;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import android.content.Context;
 import android.content.Intent;
@@ -99,7 +100,7 @@ public final class AmapTransitScene implements ImmersiveScene {
         return 30L * 60_000L;
     }
 
-    private final Handler mMain = new Handler(Looper.getMainLooper());
+    private final Handler mMain = Gen.handler();
 
     private AmapTransitCard.Trip mTrip;
     private AmapTransitCard.Card mCard;
@@ -647,8 +648,8 @@ public final class AmapTransitScene implements ImmersiveScene {
         }
 
         private static final ExecutorService IO =
-                Executors.newSingleThreadExecutor(r -> new Thread(r, "mc-transit-art"));
-        private static final Handler MAIN = new Handler(Looper.getMainLooper());
+                Gen.executor("mc-transit-art", Thread.NORM_PRIORITY, false);
+        private static final Handler MAIN = Gen.handler();
 
         /** Fetches [pick] and hands it to [done] on the main thread; nothing if nothing came. */
         static void request(Context ctx, Pick pick, Done done) {

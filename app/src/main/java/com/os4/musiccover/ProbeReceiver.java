@@ -101,7 +101,8 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
         if ("pushart".equals(op)) {
             boolean on = i.getBooleanExtra("on", true);
             if (i.hasExtra("bias")) Main.sBias = Main.clamp01(i.getFloatExtra("bias", Main.sBias));
-            Main.sTrackKey = on ? Main.trackKey(Main.pickController(c)) : "";
+            MediaController mc = on ? AlbumArt.select(c, Main.sArtworkSession.snapshot()).controller : null;
+            Main.sTrackKey = on ? Main.trackKey(mc) : "";
             Main.setCoverEnabled(on, i.getBooleanExtra("anim", true), false);
         } else if ("coverstyle".equals(op)) {
             String key = i.getStringExtra("key");
@@ -152,6 +153,11 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             ModuleState.saveState();
         } else if ("lyricclockindependent".equals(op)) {
             LockLyrics.setClockIndependentMotion(i.getBooleanExtra("on", !LockLyrics.sClockIndependentMotion));
+        } else if ("lyricbtsync".equals(op)) {
+            LockLyrics.setBluetoothSync(i.getBooleanExtra("on", LockLyrics.sBluetoothSync),
+                    i.getIntExtra("classic", LockLyrics.sBluetoothClassicMs),
+                    i.getIntExtra("le", LockLyrics.sBluetoothLeMs));
+            ModuleState.saveStateSoon();
         } else if ("lyrictrans".equals(op)) {
             LockLyrics.sTrans = i.getBooleanExtra("on", !LockLyrics.sTrans);
             Xp.log(Main.TAG + "lyrics translations: " + LockLyrics.sTrans);
@@ -427,6 +433,9 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             out.putBoolean("lyrickeep", LockLyrics.sKeepOn);
             out.putBoolean("lyrichdr", LockLyrics.sHdr);
             out.putBoolean("lyricclockindependent", LockLyrics.sClockIndependentMotion);
+            out.putBoolean("lyricbtsync", LockLyrics.sBluetoothSync);
+            out.putInt("lyricbtclassic", LockLyrics.sBluetoothClassicMs);
+            out.putInt("lyricbtle", LockLyrics.sBluetoothLeMs);
             out.putBoolean("lyrictrans", LockLyrics.sTrans);
             out.putBoolean("lyricroma", LockLyrics.sRoma);
             out.putInt("lyricalign", LockLyrics.sAlign);
@@ -603,6 +612,18 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
     private boolean debugOp(Context c, Intent i, String op) throws Exception {
         if ("info".equals(op)) {
             Diagnostics.dumpInfo();
+        } else if ("gen".equals(op)) {
+            // What this generation of the module holds in this process, and whether it still
+            // answers at all. The log line is for adb without an ordered sender.
+            String report = Gen.report() + " " + HotReload.status();
+            Xp.log(Main.TAG + "gen " + report);
+            setResultData(report);
+        } else if ("retire_dryrun".equals(op)) {
+            // Step 6's rehearsal: take every SystemUI feature down, sweep the ledger, and put
+            // the same generation back up. Hooks are not touched - see SystemUiRetire.
+            String report = SystemUiRetire.dryRun(c);
+            Xp.log(Main.TAG + "retire_dryrun " + report);
+            setResultData(report);
         } else if ("anim".equals(op)) {
             Diagnostics.dumpAnimConfigs();
         } else if ("hold".equals(op) || "release".equals(op)) {
@@ -817,7 +838,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             final MediaController lw = Main.sWatched;
             final java.io.File lf =
                     new java.io.File(c.getFilesDir(), "mc_local.txt");
-            new Thread(new Runnable() {
+            Gen.thread("MCLocalProbe", new Runnable() {
                 @Override
                 public void run() {
                     // Its own thread: anything thrown here would take SystemUI down.
@@ -841,7 +862,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                         Xp.w(Main.TAG + "local write failed: " + t);
                     }
                 }
-            }, "MCLocalProbe").start();
+            });
             setResultData("looking -> " + lf.getAbsolutePath());
         } else if ("metadump".equals(op)) {
             String d = LyricSource.dumpMetadata(Main.sWatched);
@@ -866,7 +887,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             final String qAlbum = i.getStringExtra("album");
             final long qDur = i.getLongExtra("dur", 0L);
             final java.io.File out = new java.io.File(c.getFilesDir(), "mc_ncm.txt");
-            new Thread(new Runnable() {
+            Gen.thread("MCNcmProbe", new Runnable() {
                 @Override
                 public void run() {
                     try {
@@ -898,7 +919,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                         Xp.w(Main.TAG + "ncm write failed: " + t);
                     }
                 }
-            }, "MCNcmProbe").start();
+            });
             setResultData("searching -> " + out.getAbsolutePath());
         } else if ("tweaks".equals(op)) {
             // Which of the HyperOS restrictions actually came off in this process.
@@ -1124,7 +1145,9 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             if ("fetch".equals(i.getStringExtra("do"))) {
                 final PendingResult receipt = goAsync();
                 async = true;
-                new Thread(() -> {
+                // Finished either way: a receipt never finished holds the app's ordered
+                // broadcast until it times out.
+                Gen.thread("mc-pickup-cloud", () -> {
                     String said;
                     boolean ok = false;
                     try {
@@ -1141,7 +1164,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                     receipt.setResultData(said);
                     receipt.setResultCode(Main.OP_ACK);
                     receipt.finish();
-                }, "mc-pickup-cloud").start();
+                }, receipt::finish);
             } else {
                 setResultData(PickupCloud.INSTANCE.describe());
             }

@@ -5,6 +5,12 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricBandGeometryTest {
+    @Test public void singingGroupStaysAboveMiddleRegardlessOfItsHeight() {
+        assertEquals(350f, LyricBandGeometry.singingTop(100f, 1100f, 100f), .001f);
+        assertEquals(250f, LyricBandGeometry.singingTop(100f, 1100f, 300f), .001f);
+        assertEquals(60f, LyricBandGeometry.singingTop(100f, 500f, 320f), .001f);
+    }
+
     private static float add(float previous, boolean drawn, float top, float height) {
         return LyricBandGeometry.include(previous, drawn, 120f, top, 600f, height, 1080f, 2300f);
     }
@@ -109,8 +115,8 @@ public class LyricBandGeometryTest {
             assertTrue(LyricStyle.DEFAULT.writeBand(targetClock, 1500f, 3f, 75f, opening));
             assertArrayEquals(settled, opening, 0f);
             assertEquals(anchor, (opening[0] + opening[1]) / 2f, 0f);
-            float clipTop = LyricBandGeometry.visibleTop(true, opening[0], targetClock, drawnClock);
-            assertEquals(settled[0], clipTop, 0f);
+            float clipTop = LyricBandGeometry.visibleTop(true, opening[0], targetClock, drawnClock, 72f);
+            assertEquals(72f, clipTop, 0f);
             // The independently rising card still consumes only the bottom of this band.
             assertEquals(clip(settled, 1500f, 1800f), clip(opening, 1500f, 1800f), 0f);
         }
@@ -136,12 +142,24 @@ public class LyricBandGeometryTest {
             float[] bounds = new float[2];
             assertTrue(style.writeBand(600f, 1500f, 3f, size, bounds));
             float gap = bounds[0] - 600f;
-            assertEquals(bounds[0], LyricBandGeometry.visibleTop(true, bounds[0], 600f, 950f), 0f);
+            assertEquals(72f, LyricBandGeometry.visibleTop(true, bounds[0], 600f, 950f, 72f), 0f);
             // Turning the new independent-motion switch off restores the old clock occlusion.
-            assertEquals(950f + gap, LyricBandGeometry.visibleTop(false, bounds[0], 600f, 950f), 0.001f);
-            assertEquals(bounds[0], LyricBandGeometry.visibleTop(false, bounds[0], 600f, 600f), 0f);
-            assertEquals(bounds[0], LyricBandGeometry.visibleTop(false, bounds[0], 600f, Float.NaN), 0f);
+            assertEquals(950f + gap, LyricBandGeometry.visibleTop(false, bounds[0], 600f, 950f, 72f), 0.001f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(false, bounds[0], 600f, 600f, 72f), 0f);
+            assertEquals(bounds[0], LyricBandGeometry.visibleTop(false, bounds[0], 600f, Float.NaN, 72f), 0f);
         }
+    }
+
+    @Test public void independentScrollUsesSafeScreenTopWithoutMovingTheReadingBand() {
+        float layoutTop = 650f;
+        assertEquals(72f, LyricBandGeometry.visibleTop(true, layoutTop, 600f, 950f, 72f), 0f);
+        assertEquals(72f, LyricBandGeometry.visibleTop(true, layoutTop, 600f, Float.NaN, 72f), 0f);
+        assertEquals(0f, LyricBandGeometry.visibleTop(true, layoutTop, 600f, 950f, Float.NaN), 0f);
+        // The safe screen edge can be negative after mapping into a zoomed ancestor's frame.
+        assertEquals(-20f, LyricBandGeometry.visibleTop(true, layoutTop, 600f, 950f, -20f), 0f);
+        assertEquals(layoutTop, LyricBandGeometry.visibleTop(true, layoutTop, 600f, 950f, 700f), 0f);
+        assertEquals(1000f, LyricBandGeometry.visibleTop(false, layoutTop, 600f, 950f, 72f), 0f);
+        assertEquals(layoutTop, LyricBandGeometry.visibleTop(false, layoutTop, 600f, Float.NaN, 72f), 0f);
     }
 
     @Test public void focusWaitsForAVisibleValidBandInsteadOfTakingAZeroAnchor() {
@@ -173,6 +191,12 @@ public class LyricBandGeometryTest {
         assertEquals(destination, next[0], 0f);
         // A visible group's rebase is still continuous and does not become an initial snap.
         assertFalse(LyricBandGeometry.initialPlacement(7, false));
+    }
+
+    @Test public void unfinishedLineDoesNotFadeAtTopEdge() {
+        assertEquals(1f, LyricBandGeometry.rowAlphaWhilePlaying(590f, 630f, 600f, 1400f, 40f, true), 0f);
+        assertEquals(0f, LyricBandGeometry.rowAlphaWhilePlaying(590f, 630f, 600f, 1400f, 40f, false), 0f);
+        assertEquals(0f, LyricBandGeometry.rowAlphaWhilePlaying(550f, 590f, 600f, 1400f, 40f, true), 0f);
     }
 
     @Test public void clockPhaseChangeKeepsTheLastTargetUntilTheOnPoseIsWritten() {
@@ -215,18 +239,17 @@ public class LyricBandGeometryTest {
         assertEquals(bottom, LyricBandGeometry.presentedY(bottom, 1000f, 0f, 1f), 0f);
     }
 
-    @Test public void entryAndDepartingRowsFadeAtTheirDrawnEdgesRatherThanHardClipping() {
-        // This applies equally to a dot slot, a live row and a cached departing-row pose.
+    @Test public void departingRowUsesItsVisiblePoseAgainstTheMovingClip() {
         float top = 1300f, bottom = 1320f;
         float before = LyricLineExit.edgeAlpha(1f, top, bottom, 600f, 1400f, 40f);
         assertEquals(1f, before, 0f);
-        float shiftedTop = LyricBandGeometry.presentedY(top, 1000f, 54f, 0.97f);
-        float shiftedBottom = LyricBandGeometry.presentedY(bottom, 1000f, 54f, 0.97f);
+        float shiftedTop = LyricBandGeometry.presentedY(top, 1000f, 74f, 0.97f);
+        float shiftedBottom = LyricBandGeometry.presentedY(bottom, 1000f, 74f, 0.97f);
         float edge = LyricLineExit.edgeAlpha(1f, shiftedTop, shiftedBottom, 600f, 1400f, 40f);
         assertTrue(edge > 0f && edge < before);
         assertEquals(0.4f, LyricLineExit.edgeAlpha(0.4f, shiftedTop, shiftedBottom,
                 600f, 1400f, 40f), 0f);
-        assertEquals(1054f, LyricBandGeometry.presentedY(1000f, 1000f, 54f, 0.97f), 0f);
+        assertEquals(1074f, LyricBandGeometry.presentedY(1000f, 1000f, 74f, 0.97f), 0f);
         // Screen-space checks never overwrite the saved untransformed pose.
         assertEquals(1300f, top, 0f);
         assertEquals(1320f, bottom, 0f);
@@ -283,5 +306,51 @@ public class LyricBandGeometryTest {
         assertTrue(Float.isNaN(LyricBandGeometry.include(Float.NaN, true,
                 100f, 2100f, 100f, 100f, 0f, 2300f)));
         assertEquals(0f, add(Float.NaN, true, -30f, 100f), 0f);
+    }
+    @Test public void fullBandRequiresARealFoldedBottomCapsuleAndNoNavigationOrTransition() {
+        assertTrue(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, true, false, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(false, true, true, true, true, false, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, false, true, true, true, false, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, false, true, true, false, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, false, true, false, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, false, false, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, true, true, false, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, true, false, true, 2100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, true, false, false, Float.NaN, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, true, false, false, 1100f, 2400f));
+        assertFalse(LyricBandGeometry.useScreenCapsuleBand(true, true, true, true, true, false, false, 2400f, 2400f));
+    }
+
+    @Test public void fullBandHeightUsesAvailableSafeScreenSpace() {
+        float[] full = new float[2], half = new float[2];
+        assertTrue(LyricStyle.DEFAULT.writeBand(100f, 2100f, 3f, 75f, full));
+        assertTrue(LyricStyle.DEFAULT.with("fill", .5f).writeBand(100f, 2100f, 3f, 75f, half));
+        assertEquals((full[1] - full[0]) * .5f, half[1] - half[0], .01f);
+        assertTrue(full[0] >= 100f);
+        assertTrue(full[1] < 2100f);
+        assertTrue(half[0] > full[0]);
+        assertTrue(half[1] < full[1]);
+    }
+    @Test public void musicDragMovesReadingBandContinuouslyBothWays() {
+        // Capsule reading band 100..2100, media-card band 600..1800.
+        float[] p = {0f, .25f, .5f, .75f, 1f, .75f, .5f, .25f, 0f};
+        float[] centers = new float[p.length];
+        for (int i = 0; i < p.length; i++) {
+            float top = LyricBandGeometry.morphEdge(100f, 600f, p[i]);
+            float bottom = LyricBandGeometry.morphEdge(2100f, 1800f, p[i]);
+            centers[i] = LyricBandGeometry.singingTop(top, bottom, 100f, p[i]) + 50f;
+        }
+        assertEquals(700f, centers[0], .001f);
+        assertEquals(1200f, centers[4], .001f);
+        for (int i = 1; i <= 4; i++) assertTrue(centers[i] > centers[i - 1]);
+        for (int i = 5; i < centers.length; i++) assertEquals(centers[8 - i], centers[i], .001f);
+        assertEquals(100f, LyricBandGeometry.morphEdge(100f, 600f, -.2f), 0f);
+        assertEquals(600f, LyricBandGeometry.morphEdge(100f, 600f, 1.2f), 0f);
+    }
+
+    @Test public void expandedAnchorCentersWhileFoldedAnchorStaysAboveMiddle() {
+        assertEquals(350f, LyricBandGeometry.singingTop(100f, 1100f, 100f, 0f), .001f);
+        assertEquals(550f, LyricBandGeometry.singingTop(100f, 1100f, 100f, 1f), 0f);
+        assertEquals(450f, LyricBandGeometry.singingTop(100f, 1100f, 100f, .5f), .001f);
     }
 }

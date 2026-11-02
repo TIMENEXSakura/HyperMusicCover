@@ -4,6 +4,15 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricAvailabilityTest {
+    @Test public void capsulePreparationAndPageNeverHoldPreviousSongOrItsBlur() {
+        assertTrue(LyricAvailability.allowPreviousTrackHold(false, false));
+        assertFalse(LyricAvailability.allowPreviousTrackHold(false, true));
+        assertFalse(LyricAvailability.allowPreviousTrackHold(true, false));
+        assertFalse(LyricAvailability.allowPreviousTrackHold(true, true));
+        assertFalse(LyricAvailability.allowDisplay(true));
+        assertTrue(LyricAvailability.allowDisplay(false));
+    }
+
     @Test public void previousSongCannotAnnounceSuccessForCurrentSongStillLoading() {
         assertEquals(LyricAvailability.PENDING,
                 LyricAvailability.resolve("new", "old", true, true, false, false, "old"));

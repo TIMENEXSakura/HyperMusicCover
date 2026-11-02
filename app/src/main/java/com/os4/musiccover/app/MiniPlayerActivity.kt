@@ -188,6 +188,11 @@ private fun MiniPlayerPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
                         // full-screen doze now. See MiniPlayerConfig.HIDE_AOD_SHORTCUTS.
                         // A switch was here and is gone: a long line scrolls once and rests cut.
                         // See MiniPlayerView.scrollOnce.
+                        SwitchPreference(title = stringResource(R.string.mini_haptic_feedback),
+                            summary = stringResource(R.string.mini_haptic_feedback_summary),
+                            checked = config.optBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK, false),
+                            enabled = ready,
+                            onCheckedChange = { push(MiniPlayerConfig.HAPTIC_FEEDBACK, it) })
                         SwitchPreference(title = stringResource(R.string.mini_nav_keep_on),
                             summary = stringResource(R.string.mini_nav_keep_on_summary),
                             checked = config.optBoolean(MiniPlayerConfig.NAV_KEEP_ON),

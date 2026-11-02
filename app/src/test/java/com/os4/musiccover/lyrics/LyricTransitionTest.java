@@ -142,4 +142,41 @@ public class LyricTransitionTest {
         assertTrue(LyricTransition.motionWeight(4, 660, 600) > four);
         assertTrue(LyricTransition.motionWeight(4, 660, 0) < 2);
     }
+    @Test public void sharedFrameCoefficientsMatchPerRowEasingAcrossFocusChanges() {
+        int count = 180;
+        float[] base = new float[count], heights = new float[count], expected = new float[count];
+        java.util.List<LyricLine> lines = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            base[i] = i * 90f;
+            heights[i] = 70f;
+            expected[i] = 1f;
+            // Overlap consecutive lines to exercise the compacted group's fades.
+            lines.add(new LyricLine("line", null, i * 110, i * 110 + 320,
+                    false, null, null, null));
+        }
+        LyricTransition transition = new LyricTransition();
+        transition.reset(base);
+        LyricFocus focus = new LyricFocus();
+        for (int frame = 0; frame < 260; frame++) {
+            int ms = frame * 75;
+            int fallback = Math.min(count - 1, ms / 110);
+            focus.update(lines, ms, 4, fallback);
+            focus.layout(base, heights, 20f);
+            int dots = frame % 19 == 0 ? fallback : -1;
+            boolean snap = frame % 71 == 0;
+            float dt = frame % 29 == 0 ? 0f : frame % 23 == 0 ? 0.05f : 1f / 120f;
+            transition.update(focus, base, dots, 0.6f, dt, snap);
+            for (int i = 0; i < count; i++) {
+                float target = !focus.visible(i) ? 0f
+                        : (dots >= 0 ? i < dots : i < focus.last && !focus.contains(i)) ? 0.6f : 1f;
+                float tau = target < expected[i] ? 0.22f : 0.10f;
+                float next = snap ? target : expected[i] + (target - expected[i])
+                        * (1f - (float) Math.exp(-Math.max(0f, dt) / tau));
+                if (!snap && Math.abs(next - target) < 0.003f) next = target;
+                expected[i] = next;
+                assertEquals("frame " + frame + ", row " + i, next, transition.alpha(i), 0f);
+            }
+        }
+    }
+
 }

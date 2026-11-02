@@ -6,6 +6,13 @@ public enum LyricAvailability {
 
     public enum Feedback { PENDING, ENABLED, DISABLED, UNAVAILABLE }
 
+    /** A capsule request must not carry the previous track's lyric or blur into a lookup. */
+    static boolean allowPreviousTrackHold(boolean capsulePage, boolean capsulePreparation) {
+        return !capsulePage && !capsulePreparation;
+    }
+
+    static boolean allowDisplay(boolean capsulePreparation) { return !capsulePreparation; }
+
     /** Confirmed absence is a question on either tap; cancelling a lookup is only a close. */
     public Feedback feedbackFor(boolean opening) {
         if (this == UNAVAILABLE) return Feedback.UNAVAILABLE;

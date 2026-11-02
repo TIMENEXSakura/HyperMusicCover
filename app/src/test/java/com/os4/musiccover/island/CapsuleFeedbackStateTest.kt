@@ -112,16 +112,14 @@ class CapsuleFeedbackStateTest {
         assertEquals(LyricFeedbackState.Frame(), state.at(0))
     }
 
-    @Test fun unavailableWritesTheWordBeforeTheQuestionAndHoldsBothForThreeHundredMilliseconds() {
+    @Test fun unavailableStartsQuestionImmediatelyAndHoldsForThreeHundredMilliseconds() {
         val state = LyricFeedbackState()
         state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
-        val wordAt = LyricFeedbackState.WORD_DRAW_MS
-        assertEquals(0.5f, state.at(wordAt / 2).reveal)
-        assertEquals(0f, state.frame.question)
-        assertEquals(1f, state.at(wordAt).reveal)
-        assertEquals(0f, state.frame.question)
-        assertEquals(0.5f, state.at(wordAt + LyricFeedbackState.QUESTION_DRAW_MS / 2).question)
-        val completed = wordAt + LyricFeedbackState.QUESTION_DRAW_MS
+        val half = state.at(LyricFeedbackState.QUESTION_DRAW_MS / 2)
+        assertEquals(0.5f, half.reveal)
+        assertEquals(0.5f, half.question)
+        assertTrue(state.at(1).question > 0f)
+        val completed = LyricFeedbackState.QUESTION_DRAW_MS
         for (ms in completed..completed + LyricFeedbackState.WORD_HOLD_MS) {
             val frame = state.at(ms)
             assertEquals(1f, frame.word)
@@ -143,21 +141,21 @@ class CapsuleFeedbackStateTest {
         val partial = state.at(140)
         state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
         assertEquals(partial, state.at(0))
-        assertEquals(0f, state.at(LyricFeedbackState.WORD_DRAW_MS).question)
-        assertEquals(1f, state.at(LyricFeedbackState.WORD_DRAW_MS + LyricFeedbackState.QUESTION_DRAW_MS).question)
+        assertTrue(state.at(1).question > 0f)
+        assertEquals(1f, state.at(LyricFeedbackState.QUESTION_DRAW_MS).question)
     }
 
     @Test fun missingQuestionCanBeInterruptedByCloseOrAvailableWithoutResurrectingOldGeometry() {
         val state = LyricFeedbackState()
         state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
-        val partial = state.at(LyricFeedbackState.WORD_DRAW_MS + 140L)
+        val partial = state.at(90L)
         state.begin(false)
         assertEquals(partial, state.at(0))
         assertTrue(state.at(60L).question < partial.question)
         assertEquals(0f, state.at(LyricFeedbackState.CLOSE_WORD_MS).question)
         assertEquals(1f, state.at(500L).cross)
         state.begin(LyricFeedbackState.Mode.UNAVAILABLE)
-        state.at(LyricFeedbackState.WORD_DRAW_MS + 140L)
+        state.at(90L)
         state.begin(true)
         assertEquals(0f, state.at(LyricFeedbackState.WORD_DRAW_MS).question)
         assertEquals(0f, state.frame.cross)

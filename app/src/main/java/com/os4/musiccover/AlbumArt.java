@@ -50,10 +50,19 @@ public final class AlbumArt {
      * coming, -2 is one that never will, and this is the only place that sees the difference.
      */
     static Bitmap albumArt(Context ctx, boolean allowCard, int[] sessionBits) {
+        return albumArt(ctx, allowCard, sessionBits, Main.sArtworkSession.snapshot());
+    }
+
+    /** The snapshot belongs to the push that asked; it must still own the result. */
+    static Bitmap albumArt(Context ctx, boolean allowCard, int[] sessionBits,
+            ArtworkSessionState.Snapshot<MediaController, android.media.session.MediaSession.Token> owner) {
         if (sessionBits != null) sessionBits[0] = -1;
-        MediaController c = Main.pickController(ctx);
+        if (!Main.sArtworkSession.isCurrent(owner)) return null;
+        Selection selected = select(ctx, owner);
+        MediaController c = selected.controller;
+        MediaMetadata md = selected.metadata;
+        if (!Main.sArtworkSession.isCurrent(owner)) return null;
         if (c != null) {
-            MediaMetadata md = c.getMetadata();
             if (md != null) {
                 Bitmap b = md.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
                 if (b == null) b = md.getBitmap(MediaMetadata.METADATA_KEY_ART);
@@ -65,7 +74,7 @@ public final class AlbumArt {
                     Xp.log(Main.TAG + "album art from " + c.getPackageName()
                             + " " + b.getWidth() + "x" + b.getHeight() + " \""
                             + md.getString(MediaMetadata.METADATA_KEY_TITLE) + "\"");
-                    return b;
+                    return Main.sArtworkSession.isCurrent(owner) ? b : null;
                 }
                 String uri = artworkUri(md);
                 if (sessionBits != null && uri != null) {
@@ -75,7 +84,7 @@ public final class AlbumArt {
                         Xp.log(Main.TAG + "album art from " + c.getPackageName()
                                 + "'s own artwork URI " + got.getWidth() + "x" + got.getHeight()
                                 + " \"" + md.getString(MediaMetadata.METADATA_KEY_TITLE) + "\"");
-                        return got;
+                        return Main.sArtworkSession.isCurrent(owner) ? got : null;
                     }
                     ArtUri.warm(uri);
                     // Held back only while the read is young and the card is not yet allowed -
@@ -93,8 +102,70 @@ public final class AlbumArt {
                 Xp.log(Main.TAG + c.getPackageName() + " carries no art bitmap (uri=" + uri + ")");
             }
         }
-        if (!allowCard) return null;
-        return cardThumbnail();
+        if (!allowCard || !Main.sArtworkSession.isCurrent(owner)) return null;
+        // Only a card bound to this exact capsule player can be used as its fallback.
+        if (!canUseCard(owner)) return null;
+        return cardThumbnail(owner);
+    }
+
+    static final class Selection {
+        final MediaController controller;
+        final MediaMetadata metadata;
+        Selection(MediaController controller, MediaMetadata metadata) {
+            this.controller = controller;
+            this.metadata = metadata;
+        }
+    }
+
+    /** One metadata read per candidate; a capsule owner cannot fall back to another player. */
+    static Selection select(Context ctx,
+            ArtworkSessionState.Snapshot<MediaController, android.media.session.MediaSession.Token> owner) {
+        MediaController controller = null;
+        MediaMetadata metadata = null;
+        if (owner.capsule) {
+            controller = owner.owner;
+            if (controller != null) metadata = metadataOf(controller);
+        } else {
+            // Main has already selected the playing source; the OEM card can still show
+            // a different, paused player for a while after playback moves elsewhere.
+            if (ArtworkSessionState.preferFallback(owner)) {
+                controller = owner.fallback;
+                metadata = metadataOf(controller);
+            } else if (owner.cardToken != null) {
+                try { controller = new MediaController(ctx, owner.cardToken); } catch (Throwable ignored) { }
+                if (controller != null) metadata = metadataOf(controller);
+            } else if (owner.fallback != null) {
+                controller = owner.fallback;
+                metadata = metadataOf(controller);
+            }
+        }
+        return new Selection(controller, metadata);
+    }
+
+    private static MediaMetadata metadataOf(MediaController controller) {
+        try { return controller.getMetadata(); }
+        catch (Throwable t) {
+            Xp.log(Main.TAG + "artwork metadata unavailable: " + t);
+            return null;
+        }
+    }
+
+    /** Token alone is insufficient: a card can still show the same player's previous track. */
+    private static boolean canUseCard(
+            ArtworkSessionState.Snapshot<MediaController, android.media.session.MediaSession.Token> owner) {
+        if (!Main.sArtworkSession.isCurrent(owner)) return false;
+        // During the card's removal grace the published owner is held, but its old view is
+        // not evidence of the live card. Wait for the actual token and key to return.
+        if (!owner.capsule) return ArtworkSessionState.ordinaryCardMatches(owner, MediaCard.sCardToken);
+        if (MediaCard.sCardToken == null) return false;
+        ArtworkSessionState.Snapshot<MediaController, android.media.session.MediaSession.Token> current =
+                Main.sArtworkSession.snapshot();
+        return owner.ownerToken != null && owner.ownerToken.equals(current.cardToken)
+                && owner.ownerToken.equals(MediaCard.sCardToken)
+                && ArtworkSessionState.hasTrackTitle(owner.ownerKey)
+                && ArtworkSessionState.hasTrackTitle(current.cardKey)
+                && Main.sameTrack(owner.ownerKey, current.cardKey)
+                && Main.sameTrack(owner.ownerKey, MediaCard.sCardKey);
     }
 
     /**
@@ -113,6 +184,14 @@ public final class AlbumArt {
      * worker, and the view tree belongs to the UI thread.
      */
     public static Bitmap cardThumbnail() {
+        return cardThumbnail(Main.sArtworkSession.snapshot());
+    }
+
+    private static Bitmap cardThumbnail(
+            final ArtworkSessionState.Snapshot<MediaController, android.media.session.MediaSession.Token> owner) {
+        final ArtworkSessionState.Snapshot<MediaController, android.media.session.MediaSession.Token> card =
+                Main.sArtworkSession.snapshot();
+        if (!Main.sArtworkSession.isCardCurrent(card) || !canUseCard(owner)) return null;
         final View v = Main.sContainer;
         if (v == null) return null;
         final Bitmap[] out = new Bitmap[1];
@@ -121,9 +200,12 @@ public final class AlbumArt {
             @Override
             public void run() {
                 try {
+                    if (!Main.sArtworkSession.isCardCurrent(card) || !canUseCard(owner)) return;
                     int id = v.getContext().getResources()
                             .getIdentifier("album_art_image", "id", "com.android.systemui");
-                    View art = id == 0 ? null : v.getRootView().findViewById(id);
+                    View card = Main.findSysuiView("mi_media_controls");
+                    View art = id == 0 || card == null ? null : card.findViewById(id);
+                    if (art == null && id != 0 && !owner.capsule) art = v.getRootView().findViewById(id);
                     if (art instanceof ImageView) {
                         Drawable d = ((ImageView) art).getDrawable();
                         if (d instanceof BitmapDrawable) out[0] = ((BitmapDrawable) d).getBitmap();
@@ -143,6 +225,7 @@ public final class AlbumArt {
             } catch (InterruptedException ignored) {
             }
         }
+        if (!Main.sArtworkSession.isCardCurrent(card) || !canUseCard(owner)) return null;
         if (out[0] != null) {
             Xp.log(Main.TAG + "album art from media card thumbnail "
                     + out[0].getWidth() + "x" + out[0].getHeight());

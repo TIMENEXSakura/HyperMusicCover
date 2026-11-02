@@ -1,4 +1,5 @@
 package com.os4.musiccover.immersive;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.PageSpring;
 import com.os4.musiccover.Xp;
@@ -164,16 +165,28 @@ public class LiveAlertScene implements ImmersiveScene {
         sv.setSurfaceLifecycle(SurfaceView.SURFACE_LIFECYCLE_FOLLOWS_ATTACHMENT);
         sv.setVisibility(View.INVISIBLE);
         sv.getHolder().setFormat(PixelFormat.TRANSLUCENT);
+        // The service can connect before this view has a window token. Retry at both
+        // attachment and surface creation: neither event is guaranteed to precede the other.
+        Gen.attachState(sv, new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View view) {
+                if (mSurface == view) sendBind();
+            }
+            @Override public void onViewDetachedFromWindow(View view) { }
+        });
         sv.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
+                if (mSurface != sv) return;
                 // A new surface starts opaque; a fade may be under way.
                 applyFade();
+                sendBind();
             }
 
             @Override
             public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+                if (mSurface != sv) return;
                 if (mBindSent) send(MSG_RESIZE, resizeData());
+                else sendBind();
             }
 
             @Override
@@ -181,9 +194,15 @@ public class LiveAlertScene implements ImmersiveScene {
             }
         });
         // Under the host's veil, which is the slot's last child.
-        slot.addView(sv, 0, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // Publish before addView: an already attached slot can attach the child synchronously.
         mSurface = sv;
+        try {
+            slot.addView(sv, 0, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        } catch (RuntimeException | Error failure) {
+            mSurface = null;
+            throw failure;
+        }
         bind();
     }
 
@@ -464,6 +483,8 @@ public class LiveAlertScene implements ImmersiveScene {
         mConn = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder service) {
+                // A late callback after release belongs to the retired view, not a new page.
+                if (mConn != this || mSurface == null) return;
                 mServer = new Messenger(service);
                 Xp.log(mTag + "connected");
                 sendBind();
@@ -471,6 +492,7 @@ public class LiveAlertScene implements ImmersiveScene {
 
             @Override
             public void onServiceDisconnected(ComponentName name) {
+                if (mConn != this) return;
                 mServer = null;
                 // The app's process died, and its page with it; what is left in the SurfaceView
                 // is the black layer behind it. Nothing comes back on its own: the app has to be
@@ -492,6 +514,9 @@ public class LiveAlertScene implements ImmersiveScene {
             Xp.log(mTag + "no host token yet");
             return;
         }
+        // Attachment may precede the first layout. Do not ask the remote app to build a
+        // zero-sized page; surfaceChanged will retry as soon as usable dimensions arrive.
+        if (width() <= 0 || height() <= 0) return;
         Bundle data = new Bundle();
         data.putBinder("hostToken", token);
         data.putBundle("extra", displayExtra());
@@ -500,7 +525,7 @@ public class LiveAlertScene implements ImmersiveScene {
     }
 
     /** The app's replies, on the main thread like the plugin's MsgReceiver. */
-    private final Messenger mReplyTo = new Messenger(new Handler(Looper.getMainLooper()) {
+    private final Messenger mReplyTo = new Messenger(Gen.watchHandler(new Handler(Looper.getMainLooper()) {
         @Override
         public void handleMessage(Message msg) {
             mReplies++;
@@ -530,7 +555,7 @@ public class LiveAlertScene implements ImmersiveScene {
             onPage();
             if (first) ImmersiveHost.contentChanged(LiveAlertScene.this);
         }
-    });
+    }));
 
     /** A page came back (21): the first, or a new one after the app re-rendered. */
     protected void onPage() {

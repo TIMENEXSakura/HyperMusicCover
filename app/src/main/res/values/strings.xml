@@ -195,6 +195,12 @@
     <string name="lyrics_source_lrclib">LrcLib</string>
     <string name="lyrics_provider_got_it">知道了</string>
     <string name="lyrics_provider_got_it_wait">知道了 (%1$d)</string>
+    <string name="lyrics_bt_sync">蓝牙歌词同步补偿</string>
+    <string name="lyrics_bt_sync_summary">根据蓝牙类型估算音频延迟；实际延迟因设备而异。正值提前歌词，负值延后歌词。</string>
+    <string name="lyrics_bt_classic">经典蓝牙补偿</string>
+    <string name="lyrics_bt_classic_summary">A2DP 音频；默认 +400 ms，为估算值</string>
+    <string name="lyrics_bt_le">低功耗蓝牙补偿</string>
+    <string name="lyrics_bt_le_summary">LE Audio；默认 +100 ms，为估算值</string>
     <string name="lyrics_trans">显示翻译</string>
     <string name="lyrics_enabled">启用锁屏歌词</string>
     <string name="lyrics_clock_independent">歌词动画不受时钟遮挡</string>
@@ -287,6 +293,8 @@
     <string name="mini_widen">锁屏快捷功能关闭时加宽</string>
     <string name="mini_widen_summary">锁屏快捷功能关闭后，锁屏岛占用空出的位置</string>
     <string name="mini_normals_in_stack">普通通知不上岛</string>
+    <string name="mini_haptic_feedback">胶囊点击触感</string>
+    <string name="mini_haptic_feedback_summary">点击胶囊时轻振，无歌词时振动两次；同时遵循系统触感设置</string>
     <string name="mini_nav_keep_on">导航时屏幕常亮</string>
     <string name="mini_status_at_date">状态信息在日期后</string>
     <string name="mini_status_at_date_summary">关闭后显示在底部</string>
@@ -373,4 +381,6 @@
     <string name="lyricon_unavailable">未收到词幕框架响应；请检查框架是否启用</string>
     <string name="lyricon_failed">连接失败，请查看诊断日志</string>
     <string name="lyricon_waiting">等待词幕框架反馈</string>
+    <string name="lyrics_height">歌词显示高度</string>
+    <string name="lyrics_height_summary">调整歌词区域高度。时钟独立运动且底部胶囊收起时，按屏幕可用高度计算比例。</string>
 </resources>

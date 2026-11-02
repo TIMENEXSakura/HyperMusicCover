@@ -1,13 +1,25 @@
 package com.os4.musiccover.island
 
-import com.os4.musiccover.*
-
 import org.json.JSONObject
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MiniPlayerConfigTest {
+    @Test fun capsuleHapticsDefaultOffAndOptInSurvivesSettingsChanges() {
+        assertFalse(JSONObject(MiniPlayerConfig.defaultJson()).getBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK))
+        assertFalse(JSONObject(MiniPlayerConfig.normalizedJson("{\"enabled\":true}"))
+            .getBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK))
+        val enabled = JSONObject(MiniPlayerConfig.defaultJson()).put(MiniPlayerConfig.HAPTIC_FEEDBACK, true)
+            .put(MiniPlayerConfig.NAV_KEEP_ON, true)
+        val restored = JSONObject(MiniPlayerConfig.normalizedJson(enabled.toString()))
+        assertTrue(restored.getBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK))
+        assertTrue(restored.getBoolean(MiniPlayerConfig.NAV_KEEP_ON))
+        restored.put(MiniPlayerConfig.HAPTIC_FEEDBACK, false)
+        assertFalse(JSONObject(MiniPlayerConfig.normalizedJson(restored.toString()))
+            .getBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK))
+    }
+
     @Test fun ordinaryNotificationsStayInTheSystemListByDefaultAndAfterUpgrade() {
         assertTrue(JSONObject(MiniPlayerConfig.defaultJson())
             .getBoolean(MiniPlayerConfig.NORMALS_IN_STACK))

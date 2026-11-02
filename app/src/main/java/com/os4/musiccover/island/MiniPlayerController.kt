@@ -15,6 +15,7 @@ import com.os4.musiccover.lyrics.LockLyrics
 import com.os4.musiccover.lyrics.LyricBandGeometry
 import com.os4.musiccover.lyrics.LyricAvailability
 import com.os4.musiccover.lyrics.LyricFeedbackRequest
+import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
 import com.os4.musiccover.immersive.ImmersiveHost
 import android.content.Context
@@ -63,7 +64,7 @@ internal class MiniPlayerController(
     private val loader: ClassLoader,
 ) {
     private val context = host.context
-    private val handler = Handler(Looper.getMainLooper())
+    private val handler = Gen.handler()
     private val sessions = context.getSystemService(MediaSessionManager::class.java)
     private val audio = context.getSystemService(AudioManager::class.java)
     private var player: MiniPlayerView? = null
@@ -85,10 +86,14 @@ internal class MiniPlayerController(
     private var destroyed = false
     private var configuredHeightDp = MiniPlayerConfig.DEFAULT_HEIGHT_DP
     private var config = JSONObject(MiniPlayerConfig.defaultJson())
+    private val capsuleHaptics = CapsuleHaptics(host) {
+        config.optBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK, false)
+    }
     private var forceHeaderRefresh = true
     private var lastPresentationLog = ""
     private var lastActive = false
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        capsuleHaptics.cancel()
         configStale = true
         scheduleRefresh()
     }
@@ -195,9 +200,9 @@ internal class MiniPlayerController(
             val c = controller ?: return@post
             if (destroyed) return@post
             val own = runCatching { MediaController(context, c.sessionToken) }.getOrNull() ?: return@post
-            runCatching { c.unregisterCallback(mediaListener) }
+            runCatching { Gen.unsessionCallback(c, mediaListener) }
             controller = own
-            runCatching { own.registerCallback(mediaListener, handler) }
+            runCatching { Gen.sessionCallback(own, mediaListener, handler) }
             // Not followLive: the gap a player between two tracks is given runs on (#26).
             liveFor = null
             liveState = own.playbackState
@@ -490,7 +495,7 @@ internal class MiniPlayerController(
 
     // ------------------------------------------------------------ the islands
 
-    /** The row's islands in order: MUSIC_ISLAND, then notification keys. Set by refreshUnsafe. */
+    /** The row's islands in order: the focus ones that outrank the music, MUSIC_ISLAND, the rest. Set by refreshUnsafe. */
     private var islandKeys: List<String> = emptyList()
 
     /** The islands wear the ordinary notification's colours and soft glass, always (2026-10-09). */
@@ -750,6 +755,7 @@ internal class MiniPlayerController(
             smallIsland = it
             // Right after the lock screen's layer, which puts it just under the pill.
             host.addView(it, lockScreenLayerIndex(), ViewGroup.LayoutParams(frame, discFrame(d)))
+            Gen.ownView(host, it)
         }
         val frameHeight = discFrame(d)
         if (!smallWide && (view.layoutParams.width != frame || view.layoutParams.height != frameHeight))
@@ -856,7 +862,7 @@ internal class MiniPlayerController(
             if (pulseKey == null) return
             smallPulse()
             followShortcuts()
-            if (pulseKey != null) Choreographer.getInstance().postFrameCallback(this)
+            if (pulseKey != null) Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -864,8 +870,8 @@ internal class MiniPlayerController(
         if (key == null) return
         pulseKey = key
         pulseAt = android.os.SystemClock.uptimeMillis()
-        Choreographer.getInstance().removeFrameCallback(pulseFrame)
-        Choreographer.getInstance().postFrameCallback(pulseFrame)
+        Gen.unframe(pulseFrame)
+        Gen.frame(pulseFrame)
         MiniPlayerRuntime.noteTouch("pulse small=${key.takeLast(6)}")
     }
 
@@ -998,7 +1004,7 @@ internal class MiniPlayerController(
             smallNudgeXs.step(dt)
             smallNudgeYs.step(dt)
             if (smallNudgeXs.atRest() && smallNudgeYs.atRest()) smallNudging = false
-            else Choreographer.getInstance().postFrameCallback(this)
+            else Gen.frame(this)
             nudgedSmall()
         } finally { android.os.Trace.endSection() } }
     }
@@ -1014,7 +1020,7 @@ internal class MiniPlayerController(
     /** A finger on a small island still springing home: it stays where it is, under the finger. */
     fun holdSmallNudge() {
         smallNudging = false
-        Choreographer.getInstance().removeFrameCallback(smallNudgeFrame)
+        Gen.unframe(smallNudgeFrame)
     }
 
     val smallNudgeNow: Pair<Float, Float> get() = smallNudgeX() to smallNudgeY()
@@ -1029,7 +1035,7 @@ internal class MiniPlayerController(
         if (!smallNudging) {
             smallNudging = true
             smallNudgeLast = 0L
-            Choreographer.getInstance().postFrameCallback(smallNudgeFrame)
+            Gen.frame(smallNudgeFrame)
         }
     }
 
@@ -1150,7 +1156,7 @@ internal class MiniPlayerController(
             val now = android.os.SystemClock.uptimeMillis()
             s.step(dt, now)
             applySwap(s)
-            if (s.atRest(now)) endSwap() else Choreographer.getInstance().postFrameCallback(this)
+            if (s.atRest(now)) endSwap() else Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -1325,7 +1331,7 @@ internal class MiniPlayerController(
         if (mode != SMALL_KEPT) {
             // The switch has the small island now: whatever it was growing into, it stops.
             smallGrowing = false
-            Choreographer.getInstance().removeFrameCallback(smallGrowFrame)
+            Gen.unframe(smallGrowFrame)
             smallGrow.value = 1f
             smallGrow.target = 1f
             smallGrow.velocity = 0f
@@ -1333,7 +1339,7 @@ internal class MiniPlayerController(
             widenSmallIsland(rest)
         }
         applySwap(s)
-        Choreographer.getInstance().postFrameCallback(swapFrame)
+        Gen.frame(swapFrame)
     }
 
     /** A box moving from [a] to [b] on [spring], in pixels a second: its centre's x and its width. */
@@ -1487,7 +1493,7 @@ internal class MiniPlayerController(
     private fun endSwap(keepGhosts: Boolean = false) {
         val s = swap ?: return
         swap = null
-        Choreographer.getInstance().removeFrameCallback(swapFrame)
+        Gen.unframe(swapFrame)
         player?.let {
             // A card morph that has taken the pill since keeps its frame: handed back to rest
             // under it, the pill stood bare in its place with the morph still running - its
@@ -1540,6 +1546,7 @@ internal class MiniPlayerController(
         val view = ghostPill ?: MiniPlayerView(context).also {
             ghostPill = it
             host.addView(it, ghostIndex(), ViewGroup.LayoutParams(1, 1))
+            Gen.ownView(host, it)
         }
         val w = from.w.roundToInt().coerceAtLeast(1)
         val h = from.h.roundToInt().coerceAtLeast(1)
@@ -1624,6 +1631,7 @@ internal class MiniPlayerController(
         val disc = ghostDisc ?: ShortcutDisc(context).also {
             ghostDisc = it
             host.addView(it, ghostIndex(), ViewGroup.LayoutParams(frame, frameHeight))
+            Gen.ownView(host, it)
         }
         if (disc.layoutParams.width != frame || disc.layoutParams.height != frameHeight) {
             disc.layoutParams = disc.layoutParams.apply { this.width = frame; height = frameHeight }
@@ -1754,7 +1762,7 @@ internal class MiniPlayerController(
             // Under the media card's morph the morph draws the pill; under a switch the switch does.
             if (group == null && swap == null) applyRow()
             if (rowLeft.atRest() && rowWidth.atRest()) endRow()
-            else Choreographer.getInstance().postFrameCallback(this)
+            else Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -1781,7 +1789,7 @@ internal class MiniPlayerController(
             rowAnimating = true
             rowLast = 0L
             applyRow()
-            Choreographer.getInstance().postFrameCallback(rowFrame)
+            Gen.frame(rowFrame)
         }
     }
 
@@ -1849,7 +1857,7 @@ internal class MiniPlayerController(
             val applied = applyAppear()
             if (!applied && leaving()) MiniPlayerRuntime.noteGone("back cut at ${"%.2f".format(appear.value)}: ${quietWhy()}")
             if (!applied || appear.atRest()) endAppear()
-            else Choreographer.getInstance().postFrameCallback(this)
+            else Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -1902,8 +1910,8 @@ internal class MiniPlayerController(
         rowKnown = false
         // The first frame drawn is already the start of the rise, not the whole pill for one frame.
         if (!applyAppear()) view.setContentAlpha(0f)
-        Choreographer.getInstance().removeFrameCallback(appearFrame)
-        Choreographer.getInstance().postFrameCallback(appearFrame)
+        Gen.unframe(appearFrame)
+        Gen.frame(appearFrame)
     }
 
     /**
@@ -1940,8 +1948,8 @@ internal class MiniPlayerController(
             appearing = true
             appearLast = 0L
             rowKnown = false
-            Choreographer.getInstance().removeFrameCallback(appearFrame)
-            Choreographer.getInstance().postFrameCallback(appearFrame)
+            Gen.unframe(appearFrame)
+            Gen.frame(appearFrame)
         }
         appear.target = 0f
         backFrames = 0
@@ -2051,7 +2059,7 @@ internal class MiniPlayerController(
             "frames=$backFrames drawn=$backDrawn minW=${if (backMinW.isNaN()) "-" else backMinW.toInt().toString()} " +
             "at=${"%.2f".format(appear.value)} row=${quietWhy()} pill=${player?.let { "${it.visibility}/t${"%.2f".format(it.transitionAlpha)}/a${"%.2f".format(it.alpha)}" }}")
         appearing = false
-        Choreographer.getInstance().removeFrameCallback(appearFrame)
+        Gen.unframe(appearFrame)
         squeezeShortcuts(0f)
         val view = player ?: return
         view.clearAppearStagger()
@@ -2099,7 +2107,7 @@ internal class MiniPlayerController(
     private fun endRow() {
         if (!rowAnimating) return
         rowAnimating = false
-        Choreographer.getInstance().removeFrameCallback(rowFrame)
+        Gen.unframe(rowFrame)
         rowLeft.value = rowLeft.target; rowLeft.velocity = 0f
         rowWidth.value = rowWidth.target; rowWidth.velocity = 0f
         // The media card's morph owns the pill's frame: not the row's to hand back. Nor is a
@@ -2326,6 +2334,7 @@ internal class MiniPlayerController(
         val view = spare ?: traced("MC sv.new") { MiniPlayerView(context) }
         if (spare == null) {
             traced("MC sv.add") { host.addView(view, lockScreenLayerIndex(), ViewGroup.LayoutParams(w, h)) }
+            Gen.ownView(host, view)
         } else view.layoutParams.takeIf { it.width != w || it.height != h }?.let {
             it.width = w
             it.height = h
@@ -2730,7 +2739,7 @@ internal class MiniPlayerController(
      */
     private fun pileGroup(key: String, progress: Float, from: CoverMorphMotion.Box?) = traced("MC pileLookup") {
         pileKey = key
-        Choreographer.getInstance().removeFrameCallback(pileSettle)
+        Gen.unframe(pileSettle)
         if (from != null) pileFrom = from
         pileAt = progress
         val bucket = (progress * 10f).toInt()
@@ -2793,11 +2802,11 @@ internal class MiniPlayerController(
 
     private fun observePiles(on: Boolean) {
         if (on && pileObserved?.isAttachedToWindow == true) return
-        pileObserved?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(pilePreDraw)
+        pileObserved?.let { Gen.unpreDraw(it, pilePreDraw) }
         pileObserved = null
         if (!on) return
         val stack = notificationStack() ?: return
-        stack.viewTreeObserver.addOnPreDrawListener(pilePreDraw)
+        Gen.preDraw(stack, pilePreDraw)
         pileObserved = stack
     }
 
@@ -2885,7 +2894,7 @@ internal class MiniPlayerController(
             // Stepped and placed before the frame is drawn (pilePreDraw): this only asks for the frame.
             observePiles(true)
             pileObserved?.invalidate()
-            Choreographer.getInstance().postFrameCallback(this)
+            Gen.frame(this)
         }
     }
 
@@ -2914,15 +2923,15 @@ internal class MiniPlayerController(
         if (toRow && piles.values.any { !it.out.atRest() || it.out.value != 1f }) {
             pileMoving = true
             pileSettleSince = android.os.SystemClock.uptimeMillis()
-            Choreographer.getInstance().removeFrameCallback(pileSettle)
-            Choreographer.getInstance().postFrameCallback(pileSettle)
+            Gen.unframe(pileSettle)
+            Gen.frame(pileSettle)
             return
         }
         finishPile(toRow)
     }
 
     private fun finishPile(toRow: Boolean) {
-        Choreographer.getInstance().removeFrameCallback(pileSettle)
+        Gen.unframe(pileSettle)
         observePiles(false)
         pileMoving = false
         pileFoundAt = 0L
@@ -3021,7 +3030,7 @@ internal class MiniPlayerController(
                 smallGrowing = false
                 if (smallGrow.target == 0f) smallIsland?.visibility = View.GONE
                 else restoreSmallIslandShape()
-            } else Choreographer.getInstance().postFrameCallback(this)
+            } else Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -3040,7 +3049,7 @@ internal class MiniPlayerController(
         if (!shown && (!visible || (smallGrowing && smallGrow.target == 0f))) return
         if (!animate || (swap?.smallMode ?: SMALL_KEPT) != SMALL_KEPT) {
             smallGrowing = false
-            Choreographer.getInstance().removeFrameCallback(smallGrowFrame)
+            Gen.unframe(smallGrowFrame)
             smallGrow.value = if (shown) 1f else 0f
             smallGrow.target = smallGrow.value
             small.visibility = if (shown) View.VISIBLE else View.GONE
@@ -3057,7 +3066,7 @@ internal class MiniPlayerController(
             smallGrowing = true
             smallGrowLast = 0L
             applySmallGrow()
-            Choreographer.getInstance().postFrameCallback(smallGrowFrame)
+            Gen.frame(smallGrowFrame)
         }
     }
 
@@ -3069,7 +3078,7 @@ internal class MiniPlayerController(
         if (!smallGrowing) {
             smallGrowing = true
             smallGrowLast = 0L
-            Choreographer.getInstance().postFrameCallback(smallGrowFrame)
+            Gen.frame(smallGrowFrame)
         }
         applySmallGrow()
     }
@@ -3304,16 +3313,58 @@ internal class MiniPlayerController(
 
     /**
      * The super island's compareState for this row: whether [origin] takes the place [cur]
-     * holds, the big island's when [big]. The music ranks above every notification in both
-     * places - the user's call (2026-09-25); the super island's own gives it islandProperty 2,
-     * which loses the big place to any focus notification.
+     * holds, the big island's when [big]. The music is ranked as the super island ranks it
+     * (MiuiIslandMediaControllerImpl: islandProperty 2, islandPriority 2), so a focus
+     * notification of property 1 - 高德's navigation - takes the big place from it and it the
+     * small place back (the user, 2026-10-24; it ranked above everything from 2026-09-25).
+     * Against the ordinary notifications, which the super island has no island for, the music
+     * still wins both places.
      */
     private fun takesPlace(cur: String, origin: String, big: Boolean): Boolean {
-        if (origin == MUSIC_ISLAND) return true
-        if (cur == MUSIC_ISLAND) return false
-        val c = LockIslands.rankOf(cur) ?: return true
-        val o = LockIslands.rankOf(origin) ?: return false
+        if (origin == MUSIC_ISLAND && !isFocusIsland(cur)) return true
+        if (cur == MUSIC_ISLAND && !isFocusIsland(origin)) return false
+        val c = rankOf(cur) ?: return true
+        val o = rankOf(origin) ?: return false
         return LockIslands.takesPlace(c, o, big)
+    }
+
+    private fun rankOf(key: String): LockIslands.Rank? =
+        if (key == MUSIC_ISLAND) LockIslands.Rank(2, 2, musicSince) else LockIslands.rankOf(key)
+
+    /** A focus notification's island: not the music, the stack island or an app's group. */
+    private fun isFocusIsland(key: String): Boolean =
+        key != MUSIC_ISLAND && key != STACK_ISLAND && !LockIslands.isAppGroup(key) &&
+            LockIslands.noteFor(key)?.focus == true
+
+    /** When the music's session was first seen, on the notifications' clock (Note.since). */
+    private var musicSince = 0L
+
+    /**
+     * The islands this lock screen's row has had, and since when each known one has been
+     * missing from it. A focus island not among them is new, and may take the pill (refreshUnsafe);
+     * one missing for less than PICK_GRACE_MS keeps the pill it had. The time unlocked is not
+     * counted ([knownLocked]): locked again, the row is the one that was left.
+     */
+    private val islandKnown = HashSet<String>()
+    private val islandMissing = HashMap<String, Long>()
+    private var knownLocked = false
+    private val graceCheck = Runnable { refresh() }
+
+    private fun noteKnown(present: List<String>, now: Long) {
+        for (k in present) {
+            islandKnown += k
+            islandMissing -= k
+        }
+        val it = islandKnown.iterator()
+        while (it.hasNext()) {
+            val k = it.next()
+            if (k in present) continue
+            val since = islandMissing.getOrPut(k) { now }
+            if (now - since > KNOWN_FORGET_MS) {
+                it.remove()
+                islandMissing -= k
+            }
+        }
     }
 
     /** Who is in the big place and the small one once an expanded switch is over. */
@@ -3702,8 +3753,8 @@ internal class MiniPlayerController(
     private fun unpinCard(keep: Boolean = false) {
         val v = pinned?.get()
         pinned = null
-        Choreographer.getInstance().removeFrameCallback(pinFrame)
-        pinObserved?.get()?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(pinPreDraw)
+        Gen.unframe(pinFrame)
+        pinObserved?.get()?.let { Gen.unpreDraw(it, pinPreDraw) }
         pinObserved = null
         if (!keep) v?.setAnimationMatrix(null)
         pinnedDy = 0f
@@ -3747,8 +3798,8 @@ internal class MiniPlayerController(
     private var pinObserved: WeakReference<View>? = null
 
     private fun observePin(v: View) {
-        pinObserved?.get()?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(pinPreDraw)
-        v.viewTreeObserver.addOnPreDrawListener(pinPreDraw)
+        pinObserved?.get()?.let { Gen.unpreDraw(it, pinPreDraw) }
+        Gen.preDraw(v, pinPreDraw)
         pinObserved = WeakReference(v)
     }
 
@@ -3842,7 +3893,7 @@ internal class MiniPlayerController(
             pinnedDy = dy
             pinMatrix.setTranslate(0f, dy)
             v.setAnimationMatrix(pinMatrix)
-            Choreographer.getInstance().postFrameCallback(this)
+            Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -4164,8 +4215,8 @@ internal class MiniPlayerController(
         refresh()
         trace("switch ask ${key.takeLast(6)} pill=$fromPill out=${x.expanded?.takeLast(6)} " + smallState())
         MiniPlayerRuntime.noteTouch("switch ask ${key.takeLast(6)} pill=$fromPill out=${x.expanded?.takeLast(6)}")
-        Choreographer.getInstance().removeFrameCallback(switchWait)
-        Choreographer.getInstance().postFrameCallback(switchWait)
+        Gen.unframe(switchWait)
+        Gen.frame(switchWait)
     }
 
     /** Frame by frame until the card asked for is laid out: it has only just been let out. */
@@ -4197,7 +4248,7 @@ internal class MiniPlayerController(
                 })
                 return
             }
-            Choreographer.getInstance().postFrameCallback(this)
+            Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -4613,6 +4664,7 @@ internal class MiniPlayerController(
     private fun cancelLyricFeedback() {
         val pending = pendingLyricFeedback ?: return
         pendingLyricFeedback = null
+        LockLyrics.cancelCapsulePreparation()
         if (pending.request.sameBinding(pending.view, pending.view.feedbackBindingVersion()))
             pending.view.clearLyricFeedback()
     }
@@ -4636,7 +4688,7 @@ internal class MiniPlayerController(
         val current = bound && Main.screenOnCached() && host.isAttachedToWindow &&
             pending.request.owns(LockLyrics.feedbackRequestId(), music?.sessionToken,
                 feedbackSongKey(music), key, pending.view, pending.view.feedbackBindingVersion(),
-                LockLyrics.capsulePageRequested() && !LockLyrics.sTapHidden && LockLyrics.sEnabled)
+                (!LockLyrics.capsulePageRequested() || LockLyrics.sTapHidden) && LockLyrics.sEnabled)
         if (!current) { cancelLyricFeedback(); return }
         val feedback = LockLyrics.feedbackAvailability(key, music?.sessionToken).feedbackFor(true)
         when (feedback) {
@@ -4644,12 +4696,23 @@ internal class MiniPlayerController(
                 pending.waitingShown = true
                 pending.view.showLyricPending()
             }
-            LyricAvailability.Feedback.ENABLED, LyricAvailability.Feedback.DISABLED -> {
+            LyricAvailability.Feedback.ENABLED -> {
                 pendingLyricFeedback = null
-                pending.view.showLyricStatus(feedback == LyricAvailability.Feedback.ENABLED)
+                // The lookup has settled for this exact tap. Only now open the page and
+                // its background, so an empty answer never flashes the cover or blur.
+                if (Main.miniPlayerToggleLyrics(music) == true) {
+                    capsuleHaptics.click()
+                    pending.view.showLyricStatus(true)
+                } else {
+                    LockLyrics.cancelCapsulePreparation()
+                    pending.view.showStatus("内容尚未就绪")
+                }
             }
+            LyricAvailability.Feedback.DISABLED -> { cancelLyricFeedback() }
             LyricAvailability.Feedback.UNAVAILABLE -> {
                 pendingLyricFeedback = null
+                LockLyrics.cancelCapsulePreparation()
+                capsuleHaptics.unavailable()
                 pending.view.showLyricUnavailable()
             }
         }
@@ -4674,14 +4737,20 @@ internal class MiniPlayerController(
     /** Resolve special actions before the generic notification expansion path. Swipes are separate. */
     private fun tapIsland(key: String, tapped: CapsuleFeedback? = null) {
         pendingSceneFeedback = null
+        // A second tap while looking is a cancellation, not another open request.
+        val cancelPendingLyric = key == MUSIC_ISLAND && pendingLyricFeedback != null
         cancelLyricFeedback()
+        if (cancelPendingLyric) {
+            capsuleHaptics.click()
+            return
+        }
         val view: CapsuleFeedback? = tapped ?: if (key == smallKey) smallIsland else player
         val note = LockIslands.noteFor(key)
         val scene = note?.takeUnless { it.redacted }?.let {
             runCatching {
                 com.os4.musiccover.immersive.ImmersiveHost.sceneFor(it.pkg, it.focus, key)
             }.getOrNull()
-        }
+        } ?: if (note?.redacted != true) LockIslands.openSceneFor(key) else null
         val action = CapsuleTapPolicy.resolve(key == MUSIC_ISLAND, note?.redacted == true,
             scene?.isNavigation() == true,
             note?.let { it.timer != null || it.category == android.app.Notification.CATEGORY_ALARM } == true,
@@ -4690,18 +4759,26 @@ internal class MiniPlayerController(
         when (action) {
             CapsuleTapPolicy.Action.MUSIC -> {
                 val music = controller ?: Main.miniPlayerSession()
-                Main.miniPlayerToggleLyrics(music)?.let { enabled ->
-                    if (!enabled) {
-                        val feedback = LockLyrics.feedbackAvailability(LockLyrics.feedbackTrackKey(),
-                            music?.sessionToken).feedbackFor(false)
-                        if (feedback == LyricAvailability.Feedback.UNAVAILABLE) view?.showLyricUnavailable()
-                        else view?.showLyricStatus(false)
-                    }
-                    else if (view != null && music != null) {
-                        pendingLyricFeedback = PendingLyricFeedback(LyricFeedbackRequest(
-                            LockLyrics.feedbackRequestId(), music.sessionToken, feedbackSongKey(music),
-                            LockLyrics.feedbackTrackKey(), view, view.feedbackBindingVersion()), view)
-                        updateLyricFeedback()
+                val opening = !LockLyrics.capsulePageRequested() || LockLyrics.sTapHidden
+                if (opening) {
+                    if (view == null || music == null || !Main.miniPlayerPrepareLyrics(music)) return
+                    pendingLyricFeedback = PendingLyricFeedback(LyricFeedbackRequest(
+                        LockLyrics.feedbackRequestId(), music.sessionToken, feedbackSongKey(music),
+                        LockLyrics.feedbackTrackKey(), view, view.feedbackBindingVersion()), view)
+                    updateLyricFeedback()
+                } else {
+                    Main.miniPlayerToggleLyrics(music)?.let { enabled ->
+                        if (!enabled) {
+                            val feedback = LockLyrics.feedbackAvailability(LockLyrics.feedbackTrackKey(),
+                                music?.sessionToken).feedbackFor(false)
+                            if (feedback == LyricAvailability.Feedback.UNAVAILABLE) {
+                                capsuleHaptics.unavailable()
+                                view?.showLyricUnavailable()
+                            } else {
+                                capsuleHaptics.click()
+                                view?.showLyricStatus(false)
+                            }
+                        }
                     }
                 }
             }
@@ -4710,6 +4787,7 @@ internal class MiniPlayerController(
                     Xp.w("MCIsland: scene action failed: $it")
                 }.getOrNull()
                 val navigation = scene?.isNavigation() == true
+                if (entered != null) capsuleHaptics.click()
                 // Opening a remote page is asynchronous. Do not announce success merely
                 // because the capsule accepted the click; the host must actually present it.
                 val presented = entered == true && LockIslands.sceneIsPresented(key)
@@ -4737,6 +4815,7 @@ internal class MiniPlayerController(
                     if (invoked) {
                         // Invocation does not prove the destination has appeared; the OEM may
                         // still be asking the user to unlock. Keep its authentication handling.
+                        capsuleHaptics.click()
                         MiniPlayerRuntime.noteTouch("clock entry: notification clicker invoked")
                         return
                     }
@@ -4747,6 +4826,7 @@ internal class MiniPlayerController(
                         MiniPlayerRuntime.noteTouch("clock entry: content intent failed ${it.javaClass.simpleName}")
                     }.isSuccess
                     if (sent) {
+                        capsuleHaptics.click()
                         MiniPlayerRuntime.noteTouch("clock entry: content intent sent")
                         return
                     }
@@ -4754,9 +4834,13 @@ internal class MiniPlayerController(
                 // The existing single-card path exposes this notification's actual controls;
                 // it does not spread the notification list or end a running timer.
                 MiniPlayerRuntime.noteTouch("clock entry: no usable direct entry; requesting native card")
+                capsuleHaptics.click()
                 expandNote(key)
             }
-            CapsuleTapPolicy.Action.NOTIFICATION -> expandNote(key)
+            CapsuleTapPolicy.Action.NOTIFICATION -> {
+                capsuleHaptics.click()
+                expandNote(key)
+            }
         }
     }
 
@@ -4967,6 +5051,10 @@ internal class MiniPlayerController(
         /** Pulled open by a finger still on the island: it scrolls the stack (followFinger). */
         var finger: SpreadFinger? = null
         var collapseFinger: SpreadCollapseFinger? = null
+        /** Retain the open list across screen-off and doze. */
+        var slept = false
+        var wokeAt = 0L
+        var lastFrameAt = 0L
         val releaseSpring: MiniPlayerSpreadSpring? get() = motion.spring
     }
 
@@ -4997,6 +5085,32 @@ internal class MiniPlayerController(
     }
 
     private var spread: Spread? = null
+
+    /**
+     * The list was open when the phone was unlocked: it opens again on the next lock screen, once
+     * the row is up with the stack island in it ([reopenKeptList]). Folded, it is not kept.
+     */
+    private var listKept = false
+    private var listKeptShownAt = 0L
+
+    private fun reopenKeptList(shown: Boolean) {
+        if (!listKept) return
+        val now = android.os.SystemClock.uptimeMillis()
+        val awake = !MiniPlayerScene.aodActive && Main.screenOnCached()
+        if (!shown || !awake || spread != null || player?.visibility != View.VISIBLE) {
+            listKeptShownAt = 0L
+            return
+        }
+        if (STACK_ISLAND in islandKeys && LockIslands.foldsNatively()) {
+            listKept = false
+            listKeptShownAt = 0L
+            handler.post { if (spread == null) openSpread("kept over the unlock") }
+            return
+        }
+        // Up without the stack island - its notifications went meanwhile: nothing to open.
+        if (listKeptShownAt == 0L) listKeptShownAt = now
+        else if (now - listKeptShownAt > LIST_KEPT_WAIT_MS) listKept = false
+    }
 
     fun spreadCollapseAt(x: Float, y: Float): Boolean {
         val s = spread ?: return false
@@ -5205,23 +5319,29 @@ internal class MiniPlayerController(
         LockIslands.setSpread(true)
         spreadTrace("spread asked ($why): " + describeSpread())
         MiniPlayerRuntime.noteTouch("spread ($why) items=${items.size} stack=${s.stackSeat}")
-        Choreographer.getInstance().removeFrameCallback(spreadFrame)
-        Choreographer.getInstance().postFrameCallback(spreadFrame)
+        Gen.unframe(spreadFrame)
+        Gen.frame(spreadFrame)
     } finally { android.os.Trace.endSection() } }
 
     private val spreadFrame = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) { android.os.Trace.beginSection("MC spread"); try {
             val s = spread ?: return
             if (destroyed || !Main.keyguardLocked() || MiniPlayerScene.keyguardGoingAway) {
+                // Open, it opens again on the next lock screen (the user, 2026-10-24).
+                listKept = s.phase == SPREAD_OPEN && s.progress >= 0.5f
                 endSpread(folded = s.progress < 0.5f, why = "lock screen gone")
                 return
             }
+            // No frames for a while: the screen was off.
+            val frameAt = android.os.SystemClock.uptimeMillis()
+            if (s.lastFrameAt != 0L && frameAt - s.lastFrameAt > SPREAD_SLEEP_GAP_MS) s.slept = true
+            s.lastFrameAt = frameAt
             when (s.phase) {
                 SPREAD_WAIT -> waitSpread(s)
                 SPREAD_OPEN -> watchOpen(s)
                 else -> moveSpread(s)
             }
-            if (spread === s) Choreographer.getInstance().postFrameCallback(this)
+            if (spread === s) Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -5427,15 +5547,13 @@ internal class MiniPlayerController(
         val held = leadHeld
         if (held != null && held.first === row) return
         if (held != null) {
-            held.first.viewTreeObserver.takeIf { it.isAlive }?.removeOnPreDrawListener(held.second)
+            Gen.unpreDraw(held.first, held.second)
             restoreFoldAlpha(held.first)
         }
         leadHeld = null
         if (row == null) return
-        // Own only the final rendered alpha. Leave SystemUI's fold animator its own state
-        // so it can keep settling independently, ready for the final handoff.
         val l = ViewTreeObserver.OnPreDrawListener { holdFoldAlpha(row); true }
-        row.viewTreeObserver.addOnPreDrawListener(l)
+        Gen.preDraw(row, l)
         leadHeld = row to l
         holdFoldAlpha(row)
     }
@@ -5654,6 +5772,8 @@ internal class MiniPlayerController(
         s.phase = SPREAD_OPEN
         s.cardsY = y
         s.still = 0
+        // A wake while it is open wakes to the list, not to the folded stack (watchOpen).
+        NumState.wakeAsList(true)
         // The list's place read again, from the stack as it is now: asked from a sample still
         // short of the rows that came in, it was short of the list (the stack's pile). The cards
         // are the stack's own from here, so the rest of the way is its scroll alone.
@@ -5677,6 +5797,27 @@ internal class MiniPlayerController(
      * else moving it - a notification coming or going - is the list's own: its rest follows.
      */
     private fun watchOpen(s: Spread) {
+        // The list is kept over the doze (the user, 2026-10-24): the full-screen AOD scrolls the
+        // stack to its count and the wake sends it to its default, and either folded it read as
+        // the stack folding by itself - every card went home whenever the screen had gone off.
+        // Asleep it is left be; woken, the stack goes back to the list if it is not there.
+        val now = android.os.SystemClock.uptimeMillis()
+        if (MiniPlayerScene.aodActive || !Main.screenOnCached()) {
+            s.slept = true
+            s.wokeAt = 0L
+            return
+        }
+        if (s.slept) {
+            s.slept = false
+            s.wokeAt = now
+            if (NumState.inNumber == true) NumState.goTo("LIST", why = "list kept over the doze")
+            spreadTrace("spread woke: " + describeSpread())
+        }
+        if (s.wokeAt != 0L) {
+            if (now - s.wokeAt < SPREAD_WAKE_MS && !listPulled() &&
+                (NumState.inNumber == true || NumState.busy())) return
+            s.wokeAt = 0L
+        }
         val y = NumState.position() ?: return
         val islandsY = NumState.scrollTo("NUMBER") ?: return
         s.lastY = y
@@ -5717,7 +5858,7 @@ internal class MiniPlayerController(
     private fun endSpread(folded: Boolean, why: String) {
         val s = spread ?: return
         spread = null
-        Choreographer.getInstance().removeFrameCallback(spreadFrame)
+        Gen.unframe(spreadFrame)
         holdLeadThroughFold(null)
         for (item in s.items) {
             item.morph?.cancel()
@@ -5753,6 +5894,8 @@ internal class MiniPlayerController(
         snapSmallOnce = smallTaken || cameHome == null
         spreadTrace("spread end ($why) folded=$folded")
         MiniPlayerRuntime.noteTouch("spread end ($why) folded=$folded")
+        if (folded) listKept = false
+        NumState.wakeAsList(false)
         LockIslands.setSpread(false, folded)
         // Folded home but the stack left at its pile (a let-go it read as the pile): folded too.
         if (folded) NumState.foldIfPiled("spread folded")
@@ -5843,7 +5986,7 @@ internal class MiniPlayerController(
         rowWaitKey = key
         rowWaitSince = android.os.SystemClock.uptimeMillis()
         appListAsked = false
-        Choreographer.getInstance().postFrameCallback(rowWait)
+        Gen.frame(rowWait)
     } finally { android.os.Trace.endSection() } }
 
     /** Frame by frame until the released notification's row is in the stack and laid out. */
@@ -5886,7 +6029,7 @@ internal class MiniPlayerController(
                 abandonNoteMorph(key)
                 return
             }
-            Choreographer.getInstance().postFrameCallback(this)
+            Gen.frame(this)
         } finally { android.os.Trace.endSection() } }
     }
 
@@ -6038,6 +6181,7 @@ internal class MiniPlayerController(
             flight = it
             // Under the pill in the host; a morph lifts it above everything with translationZ.
             host.addView(it, lockScreenLayerIndex(), ViewGroup.LayoutParams(1, 1))
+            Gen.ownView(host, it)
         }
         val w = pill.layoutParams.width.coerceAtLeast(1)
         val h = pill.layoutParams.height.coerceAtLeast(1)
@@ -6128,7 +6272,7 @@ internal class MiniPlayerController(
             // The flight is the small island from here: one hands over to the other in place.
             smallIsland?.visibility = View.GONE
             smallGrowing = false
-            Choreographer.getInstance().removeFrameCallback(smallGrowFrame)
+            Gen.unframe(smallGrowFrame)
         }
         if (drag != null) drag.span = noteSpan
         // The island's own nudge is the morph's from here, as the pill's is handed to the card's.
@@ -6178,6 +6322,8 @@ internal class MiniPlayerController(
         override fun artBridged() = key == MUSIC_ISLAND && artBridged
 
         override fun onFrame(morph: MiniCardMorph, progress: Float) {
+            if (key == MUSIC_ISLAND && this@MiniPlayerController.morph === morph && !morphScene)
+                LockLyrics.onMusicMorphFrame()
             if ((key == STACK_ISLAND || LockIslands.isAppGroup(key)) &&
                 this@MiniPlayerController.morph === morph) pileGroup(key, progress, morph.miniEndBox())
             val f = flight ?: return
@@ -6264,6 +6410,7 @@ internal class MiniPlayerController(
                 } else selectedIsland = key
                 refresh()
             }
+            if (key == MUSIC_ISLAND) LockLyrics.onMusicMorphFrame()
         }
     }
 
@@ -6415,7 +6562,7 @@ internal class MiniPlayerController(
         rowWaitKey = key
         rowWaitSince = android.os.SystemClock.uptimeMillis()
         appListAsked = false
-        Choreographer.getInstance().postFrameCallback(rowWait)
+        Gen.frame(rowWait)
         return true
     }
 
@@ -7019,6 +7166,7 @@ internal class MiniPlayerController(
             if (!discInPlace(disc, parent)) {
                 (disc.parent as? ViewGroup)?.removeView(disc)
                 parent.addView(disc, layerSlot(parent), ViewGroup.LayoutParams(frame, frame))
+                Gen.ownView(parent, disc)
             }
             if (disc.layoutParams.width != frame || disc.layoutParams.height != frame)
                 resizeSmallIsland(disc, frame, frame)
@@ -7318,14 +7466,26 @@ internal class MiniPlayerController(
         return row ?: left.parent as? View
     }
 
+    /**
+     * The shortcut row's layout listeners, kept so destroy() can take them off. The row is the
+     * OEM's and outlives every controller; anonymous lambdas left on it called a destroyed
+     * controller and piled up one pair per rebuild.
+     */
+    private val leftLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        schedulePosition()
+    }
+    private val rightLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        schedulePosition()
+    }
+
     init {
         host.clipChildren = false
         host.clipToPadding = false
-        prefs.registerOnSharedPreferenceChangeListener(prefListener)
-        host.viewTreeObserver.addOnPreDrawListener(preDraw)
-        left.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> schedulePosition() }
-        right.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> schedulePosition() }
-        runCatching { sessions?.addOnActiveSessionsChangedListener(sessionListener, null, handler) }
+        Gen.prefListener(prefs, prefListener)
+        Gen.preDraw(host, preDraw)
+        Gen.layoutChange(left, leftLayoutListener)
+        Gen.layoutChange(right, rightLayoutListener)
+        runCatching { sessions?.let { Gen.activeSessionsListener(it, sessionListener, handler) } }
         LockIslands.addListener(islandListener)
         // Posted: run here, it came before the properties declared below this block were
         // made, and failed on the first of them (focusLotties) every time SystemUI started.
@@ -7333,23 +7493,25 @@ internal class MiniPlayerController(
     }
 
     fun destroy() {
+        capsuleHaptics.cancel()
         MiniPlayerRuntime.cancelLyricGesture()
         destroyed = true
         capsuleLyricGeometry = false
         pendingSceneFeedback = null
-        prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
-        runCatching { host.viewTreeObserver.removeOnPreDrawListener(preDraw) }
-        runCatching { sessions?.removeOnActiveSessionsChangedListener(sessionListener) }
-        runCatching { controller?.unregisterCallback(mediaListener) }
+        Gen.unprefListener(prefs, prefListener)
+        runCatching { Gen.unpreDraw(host, preDraw) }
+        runCatching { Gen.unlayoutChange(left, leftLayoutListener) }
+        runCatching { Gen.unlayoutChange(right, rightLayoutListener) }
+        runCatching { sessions?.let { Gen.unactiveSessionsListener(it, sessionListener) } }
+        runCatching { controller?.let { Gen.unsessionCallback(it, mediaListener) } }
         followLive(null)
         morph?.cancel()
         if (piles.isNotEmpty() || pileMoving) finishPile(true)
         // Each of these ends itself once its own state has, but some wait on a frame of a tree
-        // this runtime no longer watches: gone with it, not left asking for vsyncs.
-        Choreographer.getInstance().let { c ->
-            listOf(pulseFrame, smallNudgeFrame, swapFrame, rowFrame, appearFrame, smallGrowFrame,
-                pileSettle, spreadFrame, switchWait, rowWait).forEach(c::removeFrameCallback)
-        }
+        // this runtime no longer watches: gone with it, not left asking for vsyncs. Through Gen,
+        // because what is queued on the Choreographer is its wrapper, not the callback itself.
+        listOf(pulseFrame, smallNudgeFrame, swapFrame, rowFrame, appearFrame, smallGrowFrame,
+            pileSettle, spreadFrame, switchWait, rowWait).forEach { Gen.unframe(it) }
         // The waits for a row would otherwise go on to open it, on a controller already gone;
         // and a card still pinned is the stack's again, drawn where the stack has it.
         rowWaitKey = null
@@ -7512,6 +7674,22 @@ internal class MiniPlayerController(
     fun visibleHeightDp(): Float = configuredHeightDp
 
     fun transitionActive(): Boolean = morph != null
+    /** Expanded stacks and pill exchanges are not a settled folded-capsule lyric anchor. */
+    fun lyricBandUnstable(): Boolean = frameTaken()
+
+    /** Only the music's own morph drives the lyric band; notification morphs are unrelated. */
+    fun lyricMusicMorphProgress(): Float {
+        if (destroyed || morphScene || (noteMorphKey != null && noteMorphKey != MUSIC_ISLAND)) return Float.NaN
+        return morph?.progress ?: Float.NaN
+    }
+
+    fun lyricMusicSceneTransition(): Boolean = morph != null && morphScene
+
+    /** Measured resting pill edge, even when its card currently covers it. */
+    fun lyricMusicMorphMiniTop(): Float {
+        if (lyricMusicMorphProgress().isNaN()) return Float.NaN
+        return morph?.miniEndBox()?.y ?: player?.restBoxOnScreen()?.y ?: Float.NaN
+    }
     /**
      * Only the media card's own morph lets the OEM show it. [morph] is a notification's too: while
      * one opened or went home, the stack's setVisibility(VISIBLE) on the header went through, and
@@ -7531,7 +7709,10 @@ internal class MiniPlayerController(
 
         override fun artBridged() = artBridged
 
-        override fun onFrame(morph: MiniCardMorph, progress: Float) = groupFrame(morph)
+        override fun onFrame(morph: MiniCardMorph, progress: Float) {
+            if (this@MiniPlayerController.morph === morph && !morphScene) LockLyrics.onMusicMorphFrame()
+            groupFrame(morph)
+        }
 
         override fun onSettled(morph: MiniCardMorph, toNative: Boolean, completed: Boolean) {
             if (this@MiniPlayerController.morph !== morph) return
@@ -7550,6 +7731,7 @@ internal class MiniPlayerController(
             refresh()
             position()
             updateVisibility()
+            LockLyrics.onMusicMorphFrame()
         }
     }
 
@@ -7751,7 +7933,7 @@ internal class MiniPlayerController(
     private fun canShow(): Boolean =
         // The music on its way in or out of its card or the cover is not the row's to gate: the
         // row takes taps meanwhile, to turn the switch round (2026-09-25).
-        if (islandKeys.firstOrNull() == MUSIC_ISLAND && exchange == null && noteMorphKey != MUSIC_ISLAND)
+        if (selectedIsland == MUSIC_ISLAND && exchange == null && noteMorphKey != MUSIC_ISLAND)
             Main.miniPlayerCanShow() else Main.miniPlayerIslandsCanShow()
 
     /** A morph moving on its springs under this point - the switch's, or a scene's. */
@@ -8086,6 +8268,7 @@ internal class MiniPlayerController(
     }
 
     private fun refreshUnsafe() { android.os.Trace.beginSection("MC refresh"); try {
+        if (!Main.screenOnCached()) capsuleHaptics.cancel()
         lottiesFollowDoze()
         if (configStale) {
             configStale = false
@@ -8115,10 +8298,11 @@ internal class MiniPlayerController(
             if (chosen == null && previous != null && !isUsable(previous)) {
                 MiniPlayerRuntime.endSession(previous.sessionToken, "playback inactive")
             }
-            runCatching { previous?.unregisterCallback(mediaListener) }
+            runCatching { previous?.let { Gen.unsessionCallback(it, mediaListener) } }
             controller = chosen
-            runCatching { chosen?.registerCallback(mediaListener, handler) }
+            runCatching { chosen?.let { Gen.sessionCallback(it, mediaListener, handler) } }
             followLive(chosen)
+            musicSince = System.currentTimeMillis()
             cachedCover = null
             // Another player: its artwork, not the last one's.
             thumbShown = null
@@ -8145,8 +8329,13 @@ internal class MiniPlayerController(
         val others = notes.isNotEmpty() || returning.isNotEmpty() || exchange != null ||
             noteMorphKey.let { it != null && it != MUSIC_ISLAND }
         val musicInRow = music != null && (!carded || !others || musicMoving)
-        // The row: the music first, then the notifications in LockIslands' order.
-        islandKeys = (if (musicInRow) listOf(MUSIC_ISLAND) else emptyList()) + notes.map { it.key }
+        // The row in the super island's order: the focus islands that take the big place from
+        // the music (高德's navigation, islandProperty 1 against the music's 2) ahead of it, then
+        // the music, then the rest in LockIslands' order. The music used to be first whatever
+        // else there was, and the navigation had to be swiped to every time (the user, 2026-10-24).
+        val (ahead, behind) = notes.partition { isFocusIsland(it.key) && takesPlace(MUSIC_ISLAND, it.key, big = true) }
+        islandKeys = ahead.map { it.key } + (if (musicInRow) listOf(MUSIC_ISLAND) else emptyList()) +
+            behind.map { it.key }
         // Two can be on their way back at once: a tap mid-switch brings one down as another lands.
         val now = android.os.SystemClock.uptimeMillis()
         returning.entries.removeAll { (key, since) ->
@@ -8157,6 +8346,24 @@ internal class MiniPlayerController(
         noteMorphKey?.let { key -> islandKeys = keptInPlace(islandKeys, key) }
         // Every island of a switch holds its place in the row till it is over.
         exchange?.let { x -> for (key in x.keys()) islandKeys = keptInPlace(islandKeys, key) }
+        // The time unlocked does not count against an island: the row comes back as it was left.
+        val locked = Main.keyguardLocked()
+        if (locked && !knownLocked) for (k in islandMissing.keys) islandMissing[k] = now
+        knownLocked = locked
+        // The island in the pill missing from one run - 高德 re-posts its island every second, and
+        // a row being re-inflated is left out of that run - keeps the pill for PICK_GRACE_MS.
+        // It fell to the row's first island at once, and the navigation picked went back to the
+        // music a moment later (the user, 2026-10-24).
+        val graced = selectedIsland?.takeIf { k ->
+            locked && k != MUSIC_ISLAND && k !in islandKeys && k in islandKnown &&
+                !LockIslands.isReleased(k) && LockIslands.noteFor(k) != null &&
+                now - (islandMissing[k] ?: now) < PICK_GRACE_MS
+        }
+        if (graced != null) {
+            islandKeys = keptInPlace(islandKeys, graced)
+            handler.removeCallbacks(graceCheck)
+            handler.postDelayed(graceCheck, PICK_GRACE_MS + 50L)
+        }
         // Islands out as their cards keep their places too, for when they come back.
         var order = islandKeys
         // A new island in the row comes up beside the first, swiped alone or not.
@@ -8167,6 +8374,9 @@ internal class MiniPlayerController(
             }
         }
         islandOrder = order
+        // Islands new to this lock screen's row, before they are counted as known below.
+        val fresh = if (locked) order.filter { it !in islandKnown } else emptyList()
+        if (locked) noteKnown(order - listOfNotNull(graced), now)
         noteMorphKey?.let { key ->
             // The pill itself morphing: it keeps what it is showing. Under a flight it goes on
             // being the row's (the island beside the flight can take it).
@@ -8188,7 +8398,33 @@ internal class MiniPlayerController(
             return
         }
         val lost = selectedIsland != null && selectedIsland !in islandKeys
-        val selected = selectedIsland?.takeIf { it in islandKeys } ?: islandKeys.first()
+        var selected = selectedIsland?.takeIf { it in islandKeys } ?: islandKeys.first()
+        // A focus island new to the row takes the big place from the one there when it outranks
+        // it, as the super island's handleReplacedState gives it: the navigation started comes up
+        // in the pill and the music goes into the small place. An ordinary notification never
+        // does - each message would take the pill. Busy with another motion, it is tried again
+        // on the next refresh.
+        val taker = if (lost || selectedIsland == null) null else fresh.firstOrNull {
+            it != selected && it in islandKeys && isFocusIsland(it) && takesPlace(selected, it, big = true)
+        }
+        if (taker != null) {
+            val busy = swap != null || morph != null || exchange != null || flight != null ||
+                group != null || rowWaitKey != null || islandDragging
+            if (busy) islandKnown.remove(taker)
+            else {
+                val oldBig = selected
+                val oldSmall = smallKey
+                selected = taker
+                preferredSmall = null
+                aloneFirst = null
+                MiniPlayerRuntime.noteTouch("island ${taker.takeLast(6)} takes the pill from ${oldBig.takeLast(6)}")
+                if (player?.visibility == View.VISIBLE) handler.post {
+                    if (swap == null && morph == null && selectedIsland == taker) {
+                        startSwap(oldBig, oldSmall, intoSmall = smallKey == oldBig)
+                    }
+                }
+            }
+        }
         selectedIsland = selected
         // The notification in the pill went (dismissed, answered elsewhere): the next island
         // grows into the pill from its end, as one coming out of the stack does.
@@ -8202,6 +8438,7 @@ internal class MiniPlayerController(
         val view = player ?: MiniPlayerView(context).also {
             player = it
             host.addView(it, lockScreenLayerIndex(), ViewGroup.LayoutParams(1, 1))
+            Gen.ownView(host, it)
         }
         if (music != null) trackMusic(music)
         // A notification let out and on its way home to the pill is not among the notes yet - nor
@@ -8333,6 +8570,7 @@ internal class MiniPlayerController(
         view.skippable = true
         showTimer(view, null)
         showFocusAnim(view, null, null)
+        view.onControlHaptic = { capsuleHaptics.click() }
         val metadata = metadataOf(current)
         val shown = traced("MC b.thumb") { thumbnailFor(musicCover(metadata), view) }
         view.setToggleShown(true)
@@ -8364,6 +8602,7 @@ internal class MiniPlayerController(
      * the shared priority policy before falling back to the OEM notification row.
      */
     private fun bindNote(view: MiniPlayerView, note: LockIslands.Note, config: JSONObject) {
+        view.onControlHaptic = { capsuleHaptics.click() }
         view.bindIdentity(note.key)
         // A focus notification shown in full is its template: its picture bare, as its row has
         // it, and its main button where the music's play button is.
@@ -9194,7 +9433,7 @@ internal class MiniPlayerController(
         // startSceneFlight puts it back first in the row a moment before its morph exists, and
         // for that refresh the cover still up read as "not presentable" - the row went and came
         // back within 2ms, a whole list rebuild each way, on every exit (probed 2026-09-25).
-        val presentable = if (islandKeys.firstOrNull() == MUSIC_ISLAND && noteMorphKey != MUSIC_ISLAND)
+        val presentable = if (selectedIsland == MUSIC_ISLAND && noteMorphKey != MUSIC_ISLAND)
             Main.miniPlayerPresentable() else Main.miniPlayerIslandsPresentable()
         val sceneVisible = keyguardOwned && presentable && !MiniPlayerScene.blocksMiniPlayer
         // Unlocking or a session ending mid-morph: straight to where it was going.
@@ -9276,7 +9515,9 @@ internal class MiniPlayerController(
                 "scene=${Main.coverSceneActive()}")
         }
         LockIslands.setActive(active)
-        if (!keyguardOwned) selectedIsland = null
+        reopenKeptList(active && sceneVisible)
+        // The island in the pill is kept across an unlock (the user, 2026-10-24): locked again,
+        // the row is as it was left, and an island gone meanwhile falls to the row's first.
         // While a flight is out and coming back, its end is the small island's place: the small
         // island is the flight, and whatever was there makes way. Once it is out for good the
         // place is the next island's.
@@ -9291,9 +9532,11 @@ internal class MiniPlayerController(
             animate = shown && !snapSmallOnce && group == null && exchange == null)
         snapSmallOnce = false
         if (!keyguardOwned) preferredSmall = null
+        // Cards still out across an unlock (LockIslands keeps the focus ones) go home where they
+        // came from; the rest of the record is this lock screen's.
         if (!Main.keyguardLocked()) {
-            releasedFromPill.clear()
-            releasedFromSmall.clear()
+            releasedFromPill.retainAll { it != MUSIC_ISLAND && LockIslands.isReleased(it) }
+            releasedFromSmall.retainAll { it != MUSIC_ISLAND && LockIslands.isReleased(it) }
         }
         if (view != null) {
             val target = if (shown) View.VISIBLE else View.GONE
@@ -9895,6 +10138,11 @@ private const val SPRING_BACK_MS = 320L
 /** How long a notification folded back in may take to come back from the stack. */
 private const val RETURN_WAIT_MS = 1500L
 
+/** The island in the pill missing from the reads this long keeps the pill (高德 re-posts every second). */
+private const val PICK_GRACE_MS = 2000L
+/** An island missing this long is new when it comes back, and may take the pill again. */
+private const val KNOWN_FORGET_MS = 3000L
+
 /** A row hidden on its way out of the stack shows again if it is still there after this. */
 private const val ROW_GONE_MS = 1200L
 
@@ -9929,6 +10177,12 @@ private const val MATERIAL_INK_MS = 500L
 
 /** A finger pulling the open list this far toward the fold takes the cards home with it. */
 private const val SPREAD_PULL_DP = 8f
+/** The spread's frames stopping this long means the screen was off. */
+private const val SPREAD_SLEEP_GAP_MS = 700L
+/** Woken, the stack has this long to be the list again before a fold counts as one. */
+private const val SPREAD_WAKE_MS = 1500L
+/** Locked again with the list kept, the row has this long to show the stack island to open. */
+private const val LIST_KEPT_WAIT_MS = 1500L
 
 /** Pulled home past this (from 1, the list), the let-go folds the row home: see spreadFolding. */
 private const val SPREAD_FOLD_BELOW = 0.95f

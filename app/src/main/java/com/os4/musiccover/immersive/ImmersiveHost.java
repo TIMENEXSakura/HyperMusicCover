@@ -5,6 +5,7 @@ import com.os4.musiccover.island.LockIslands;
 import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.island.MiniPlayerRuntime;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import com.os4.musiccover.transit.AmapNavScene;
 import com.os4.musiccover.transit.AmapTransitScene;
@@ -144,7 +145,7 @@ public final class ImmersiveHost {
     /** The slot's Z in the window root: under anything the row lowers (MiniPlayerRuntime's -1). */
     private static final float SLOT_Z = -10f;
 
-    private static final Handler sMain = new Handler(Looper.getMainLooper());
+    private static final Handler sMain = Gen.handler();
 
     /**
      * Under every keyguard view: the scenes' pages, and the veil over them. Always VISIBLE itself:
@@ -165,7 +166,7 @@ public final class ImmersiveHost {
     /** The open scene has given way to the cover, which came after it. See the class comment. */
     private static boolean sYield;
     /** The lock screen is held for a page: open, with a page. See Main.clockHeld(). */
-    private static boolean sHolding;
+    private static volatile boolean sHolding;
     /** The page is on screen. */
     private static boolean sShown;
 
@@ -865,6 +866,7 @@ public final class ImmersiveHost {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         ((ViewGroup) root).addView(slot, 0, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        Gen.ownView((ViewGroup) root, slot);
         // First to draw by Z too, not only by index: the row puts an island headed for the small
         // island's place at Z -1 to pass under the pill, which drew it before this slot - and the
         // page's SurfaceView, punching its hole through the window here, erased it. The small
@@ -876,7 +878,7 @@ public final class ImmersiveHost {
         sVeil = veil;
         sShown = false;
         sVto = root.getViewTreeObserver();
-        sVto.addOnPreDrawListener(PRE_DRAW);
+        Gen.preDraw(root, PRE_DRAW);
         Xp.log(TAG + "slot in the lock screen window");
         root.invalidate();
     }
@@ -887,7 +889,7 @@ public final class ImmersiveHost {
         sPrepared.clear();
         sLetGo.clear();
         for (ImmersiveScene s : prepared) s.release();
-        if (sVto != null && sVto.isAlive()) sVto.removeOnPreDrawListener(PRE_DRAW);
+        if (sVto != null && sVto.isAlive()) Gen.unpreDraw(sVto, PRE_DRAW);
         sVto = null;
         if (sSlot != null) {
             ViewGroup parent = (ViewGroup) sSlot.getParent();
@@ -902,6 +904,55 @@ public final class ImmersiveHost {
         sPadP = 0f;
         sPadFrameAt = 0L;
         beat(false);
+    }
+
+    /**
+     * Retirement: the page, the slot and every scene's preparation. The busy check already
+     * refuses while a page holds the clock, so this normally finds the slot empty; the fades,
+     * the let-go counts and the touch gesture are cleared anyway, because they can be armed
+     * without a page being up.
+     */
+    public static void retire() {
+        sMain.removeCallbacks(LEAVE_CHECK);
+        sMain.removeCallbacks(LET_GO_EXPIRED);
+        sMain.removeCallbacks(RELEASE_UNLOCKED);
+        sMain.removeCallbacks(LIFT_RELEASE);
+        // The display listener is Gen's and the sweep takes it; the latch must not stay on.
+        sDisplayWatched = false;
+        // So is the proximity listener, and sProximity is its latch.
+        sProximity = null;
+        sCovered = false;
+        sLiftView = null;
+        sLiftUp = false;
+        sLiftDrawnUp = false;
+        if (sDrawLock != null && sDrawLock.isHeld()) {
+            try {
+                sDrawLock.release();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (sFadeAnim != null) {
+            try {
+                sFadeAnim.cancel();
+            } catch (Throwable ignored) {
+            }
+            sFadeAnim = null;
+        }
+        sOpen = null;
+        sLeaving = null;
+        // Cancels the crossfade too: left running, it would fade the old page and apply() at
+        // its end, both this generation's code.
+        endSwap();
+        sYield = false;
+        sFadeInNext = false;
+        sShown = false;
+        sReleasePending = false;
+        sTapOwned = false;
+        sTapView = null;
+        sTapScene = null;
+        sTapPage = false;
+        dropSlot();
+        sLetGo.clear();
     }
 
     /**
@@ -1121,7 +1172,7 @@ public final class ImmersiveHost {
                 : Main.sAppCtx.getSystemService(android.hardware.SensorManager.class);
         if (sm == null) return;
         if (!on) {
-            sm.unregisterListener(sProximity);
+            Gen.unsensorListener(sm, sProximity);
             sProximity = null;
             sCovered = false;
             return;
@@ -1142,7 +1193,8 @@ public final class ImmersiveHost {
             public void onAccuracyChanged(android.hardware.Sensor sensor, int accuracy) {
             }
         };
-        sm.registerListener(sProximity, s, android.hardware.SensorManager.SENSOR_DELAY_NORMAL, sMain);
+        Gen.sensorListener(sm, sProximity, s,
+                android.hardware.SensorManager.SENSOR_DELAY_NORMAL, sMain);
     }
 
     private static boolean litNow() {
@@ -1243,9 +1295,10 @@ public final class ImmersiveHost {
     private static void startFade(final ImmersiveScene page, final float to, boolean late) {
         stopFade();
         final float from = sFade;
-        long ms = Main.fadeMsFor(Main.sClockResponse);
-        // The share of the full fade this one still has to go, so a turn half way is not slower.
-        ms = Math.max(1L, Math.round(ms * Math.abs(to - from)));
+        // The share still to travel keeps a reversal continuous. Navigation is brought up
+        // faster, without shortening a close or another scene's existing animation.
+        long ms = ImmersiveOpenTiming.duration(Main.fadeMsFor(Main.sClockResponse),
+                to - from, page.isNavigation(), to > from);
         ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
         a.setDuration(ms);
         // The cover crossfade's ease-out (WallpaperProbe): a spring is all front-loaded, and the
@@ -1257,10 +1310,11 @@ public final class ImmersiveHost {
                 return e * e;
             });
         } else if (to > from && sSwapOut != null) {
-            // Coming in over a page going out: not until that one has all but gone. Two pages of
-            // words crossfaded read as one jumble for the middle of it (2026-10-07).
+            // Navigation starts promptly while the outgoing page completes its own fade.
+            // Other scenes keep the longer dip that avoids overlapping their text.
+            final float delay = ImmersiveOpenTiming.swapDelay(SWAP_IN_DELAY, ms, page.isNavigation());
             a.setInterpolator(t -> {
-                float u = Math.max(0f, (t - SWAP_IN_DELAY) / (1f - SWAP_IN_DELAY));
+                float u = Math.max(0f, (t - delay) / (1f - delay));
                 return 1f - (1f - u) * (1f - u) * (1f - u);
             });
         } else {
@@ -1540,7 +1594,7 @@ public final class ImmersiveHost {
         if (sDisplayWatched) return;
         try {
             DisplayManager dm = ctx.getSystemService(DisplayManager.class);
-            dm.registerDisplayListener(new DisplayManager.DisplayListener() {
+            Gen.displayListener(dm, new DisplayManager.DisplayListener() {
                 @Override
                 public void onDisplayAdded(int id) {
                 }

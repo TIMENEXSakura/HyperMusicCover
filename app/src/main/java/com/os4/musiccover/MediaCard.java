@@ -1,4 +1,5 @@
 package com.os4.musiccover;
+import com.os4.musiccover.Gen;
 
 import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.lyrics.TrackName;
@@ -286,7 +287,7 @@ public final class MediaCard {
         final View card = sCardGuarded;
         if (card == null || sCardFramePosted) return;
         sCardFramePosted = true;
-        card.postOnAnimation(new Runnable() {
+        Gen.postOnAnimation(card, new Runnable() {
             @Override
             public void run() {
                 sCardFramePosted = false;
@@ -467,7 +468,7 @@ public final class MediaCard {
                 return true;
             } finally { android.os.Trace.endSection(); } }
         };
-        card.getViewTreeObserver().addOnPreDrawListener(sCardGuard);
+        Gen.preDraw(card, sCardGuard);
         sCardGuarded = card;
         Xp.log(Main.TAG + "media card guard installed");
     }
@@ -489,7 +490,7 @@ public final class MediaCard {
         CardPageButton.release();
         if (d == null || g == null) return;
         try {
-            d.getViewTreeObserver().removeOnPreDrawListener(g);
+            Gen.unpreDraw(d, g);
         } catch (Throwable ignored) {
         }
     }
@@ -592,6 +593,9 @@ public final class MediaCard {
             sCardToken = null;
             sCardKey = "";
         }
+        // Track changes briefly remove and add the card. Keep the last selection for the
+        // existing grace period so an in-flight push for the same song is not lost.
+        if (showing) Main.sArtworkSession.card(sCardToken, sCardKey);
         // Against the track the morph started on, not sTrackKey: a tap into cover mode clears
         // that, the card is rebound as the cover goes up, and every entry was cancelled a couple
         // of frames in - then begun again from the thumbnail by the entry's second call.
@@ -606,6 +610,9 @@ public final class MediaCard {
         else if (sCardPresent) Main.main().postDelayed(sCardRemoved, CARD_GONE_MS);
         if (!Main.sAuto) {
             sCardShowing = showing;
+            // Session selection must keep following the notification even when automatic
+            // cover entry is disabled. A transient removal retains the existing grace.
+            if (showing) Main.rebindSession();
             MiniPlayerRuntime.refresh();
             return;
         }
@@ -622,6 +629,7 @@ public final class MediaCard {
         @Override
         public void run() {
             sCardShowing = false;
+            Main.sArtworkSession.card(null, "");
             noteCard("gone stands, cover mode off");
             MiniPlayerRuntime.refresh();
             applyCardState();
@@ -633,6 +641,7 @@ public final class MediaCard {
         @Override
         public void run() {
             sCardPresent = false;
+            Main.sArtworkSession.card(null, "");
             MiniPlayerRuntime.mediaCardRemoved();
         }
     };
@@ -712,15 +721,166 @@ public final class MediaCard {
         // which is exactly what we want: pausing leaves the card up, so it leaves the cover up.
         try {
             Class<?> card = Xp.findClass(Main.CLS_MEDIA_CARD, cl);
-            Xp.hookAll(card, "access$setTopMediaData", chain -> {
-                Object result = chain.proceed();
+            Xp.hookAll("sysui.mediacard.top_data", card, "access$setTopMediaData", chain -> {
                 java.util.List<Object> args = chain.getArgs();
-                onCardChanged(args.size() > 1 ? args.get(1) : null);
+                if (!args.isEmpty()) listenTo(args.get(0), cl);
+                // The OEM listener runs inside this setter. Do not process the same update
+                // twice, but still catch callers whose path does not notify the listener.
+                sHeard = null;
+                sHeardValid = false;
+                Object result = chain.proceed();
+                Object data = args.size() > 1 ? args.get(1) : null;
+                boolean heard = sHeardValid && sHeard == data;
+                sHeard = null;
+                sHeardValid = false;
+                if (!heard) onCardChanged(data);
                 return result;
             });
             Xp.log(Main.TAG + "media card hooked");
         } catch (Throwable t) {
             Xp.w(Main.TAG + "media card hook failed: " + t);
+        }
+        try {
+            Class<?> card = Xp.findClass(Main.CLS_MEDIA_CARD, cl);
+            Xp.hookAllConstructors("sysui.mediacard.ctor", card, chain -> {
+                Object result = chain.proceed();
+                listenTo(chain.getThisObject(), cl);
+                return result;
+            });
+        } catch (Throwable t) {
+            Xp.w(Main.TAG + "media card listener hook failed: " + t);
+        }
+    }
+
+    /**
+     * The card change as the OEM's own listeners hear it, next to the setter hook above.
+     *
+     * The hook alone misses every change made by a caller that runs the setter's original past
+     * the hooks - an older KeiMi build does exactly that for its carousel, so swiping to another
+     * player's card changed the card and never reached us: the cover stayed on the first album.
+     * The setter still tells topMediaListeners, whoever calls it, so we are one of them too
+     * (KeiMi's own fix went the same way). Both paths fire on an ordinary change; the listener
+     * runs first, inside the setter, and the hook skips the data it has already heard.
+     */
+    private static volatile Object sListened;
+    /** The proxy added to sListened's topMediaListeners; the OEM holds it until we take it out. */
+    private static Object sListener;
+    private static Object sHeard;
+    private static boolean sHeardValid;
+
+    /**
+     * Retirement: the card listener out of the OEM's set, the guard and the listeners off the
+     * card, and the video surface released. The card itself is the OEM's and stays as it is.
+     */
+    static void retire() {
+        unlisten();
+        releaseCardGuard();
+        CardVideo.retire();
+        sHeard = null;
+        sHeardValid = false;
+    }
+
+    /**
+     * What a hot reload hands over: the OEM controller {@code topMediaListeners} our proxy was
+     * in, the token the card is bound to, and the track it is showing. Host object, framework
+     * object and primitives - the proxy itself is ours and cannot travel.
+     */
+    static Object[] save() {
+        return new Object[]{sListened, sCardToken, sCardKey, sCardKnown, sCardPresent,
+                sCardShowing};
+    }
+
+    /**
+     * The new generation's half. The card is not rebuilt by a hot reload, so the OEM's set gets
+     * the new proxy here rather than on the next bind; without this the cover follows nothing
+     * until the user changes track. Runs on the main thread, before the container attach path
+     * asks the card anything.
+     */
+    static void adopt(Object saved, ClassLoader cl) {
+        if (!(saved instanceof Object[])) return;
+        Object[] a = (Object[]) saved;
+        if (a.length > 1 && a[1] instanceof android.media.session.MediaSession.Token) {
+            sCardToken = (android.media.session.MediaSession.Token) a[1];
+        }
+        if (a.length > 2 && a[2] instanceof String) sCardKey = (String) a[2];
+        if (a.length > 3 && a[3] instanceof Boolean) sCardKnown = (Boolean) a[3];
+        if (a.length > 4 && a[4] instanceof Boolean) sCardPresent = (Boolean) a[4];
+        if (a.length > 5 && a[5] instanceof Boolean) sCardShowing = (Boolean) a[5];
+        Main.sArtworkSession.card(sCardToken, sCardKey);
+        if (cl != null && a.length > 0 && a[0] != null) {
+            try {
+                listenTo(a[0], cl);
+            } catch (Throwable t) {
+                Xp.w(Main.TAG + "media card listener not restored: " + t);
+            }
+        }
+        Xp.log(Main.TAG + "media card adopted: known=" + sCardKnown + " present=" + sCardPresent
+                + " showing=" + sCardShowing + " key=" + sCardKey
+                + " listener=" + (sListened != null));
+    }
+
+    /** Takes our proxy out of the controller we added it to. Silent: every step is best effort. */
+    private static void unlisten() {
+        Object controller = sListened;
+        Object listener = sListener;
+        sListened = null;
+        sListener = null;
+        if (controller == null || listener == null) return;
+        try {
+            @SuppressWarnings("unchecked")
+            java.util.Set<Object> set =
+                    (java.util.Set<Object>) Xp.getObjectField(controller, "topMediaListeners");
+            set.remove(listener);
+            Xp.log(Main.TAG + "media card listener removed");
+        } catch (Throwable t) {
+            Xp.w(Main.TAG + "media card listener could not be removed: " + t);
+        }
+    }
+
+    private static void listenTo(Object controller, ClassLoader cl) {
+        if (controller == null || sListened == controller) return;
+        // A new card controller: the previous one keeps every listener it was given, and ours
+        // holds this class loader. Removed rather than abandoned.
+        unlisten();
+        try {
+            @SuppressWarnings("unchecked")
+            java.util.Set<Object> set =
+                    (java.util.Set<Object>) Xp.getObjectField(controller, "topMediaListeners");
+            Class<?> iface = Xp.findClass(Main.CLS_MEDIA_CARD + "$MediaDataChangeListener", cl);
+            Object listener = java.lang.reflect.Proxy.newProxyInstance(cl, new Class<?>[]{iface},
+                    (proxy, method, a) -> {
+                        switch (method.getName()) {
+                            case "onMediaDataChanged":
+                                // A retirement that could not take this back out of the set
+                                // leaves it here; a retired generation does not answer it.
+                                if (!Gen.live()) return null;
+                                Object data = a != null && a.length > 0 ? a[0] : null;
+                                sHeard = data;
+                                sHeardValid = true;
+                                // Inside the OEM's own loop over its listeners: nothing of ours
+                                // may throw out into it.
+                                try {
+                                    onCardChanged(data);
+                                } catch (Throwable t) {
+                                    Xp.w(Main.TAG + "card listener failed: " + t);
+                                }
+                                return null;
+                            case "hashCode":
+                                return System.identityHashCode(proxy);
+                            case "equals":
+                                return a != null && a.length > 0 && proxy == a[0];
+                            case "toString":
+                                return "MusicCover card listener";
+                            default:
+                                return null;
+                        }
+                    });
+            set.add(listener);
+            sListener = listener;
+            sListened = controller;
+            Xp.log(Main.TAG + "media card listener registered");
+        } catch (Throwable t) {
+            Xp.w(Main.TAG + "media card listener not registered: " + t);
         }
     }
 }

@@ -1,4 +1,5 @@
 package com.os4.musiccover;
+import com.os4.musiccover.Gen;
 
 import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.immersive.ImmersiveHost;
@@ -72,8 +73,23 @@ public final class CoverPush {
      * Composing costs a full-screen bitmap and a multi-pass blur, so callers go through
      * pushArtAsync() rather than calling this on the main thread.
      */
+    /** Pair the push generation with the exact artwork owner it was started for. */
+    private static final class ArtPushRequest {
+        final int generation;
+        final ArtworkSessionState.Snapshot<android.media.session.MediaController,
+                android.media.session.MediaSession.Token> owner;
+        final boolean predicted;
+        ArtPushRequest(int generation, boolean predicted) {
+            this.generation = generation;
+            this.owner = Main.sArtworkSession.snapshot();
+            this.predicted = predicted;
+        }
+    }
+    private static volatile ArtPushRequest sArtPushRequest;
     private static boolean artPushCurrent(int generation) {
-        return generation == Main.sPushGen && !Main.capsuleLyricsOverNavigation();
+        ArtPushRequest request = sArtPushRequest;
+        return generation == Main.sPushGen && request != null && request.generation == generation
+                && Main.sArtworkSession.isCurrent(request.owner) && !Main.capsuleLyricsOverNavigation();
     }
 
     private static void pushArtToWallpaper(Context ctx, boolean on, Bitmap art, int generation) {
@@ -120,8 +136,10 @@ public final class CoverPush {
             out.putExtra("off", true);
             ProbeGuard.send(ctx, out);
             // The wallpaper process keeps what was up for 30s more (WallpaperProbe.composedLater).
-            if (sKeptUntil == Long.MAX_VALUE) {
-                sKeptUntil = android.os.SystemClock.uptimeMillis() + KEPT_AFTER_OFF_MS;
+            KeptArt kept = sKept;
+            if (kept != null && kept.until == Long.MAX_VALUE) {
+                sKept = new KeptArt(kept.key, kept.layout, kept.title,
+                        android.os.SystemClock.uptimeMillis() + KEPT_AFTER_OFF_MS, kept.owner);
             }
             if (!keep) Main.sTrackKey = "";
             // Nothing behind the clock any more, so nothing to take a colour from. The repaint
@@ -142,6 +160,7 @@ public final class CoverPush {
         int w = Main.sScreenW, h = Main.sScreenH;
         final int contrastMode = Main.sCoverCardStyle.mode;
         final String contrastKey = preKey(art, w, h, contrastMode == CoverCardStyle.CARD);
+        sLyricCoverTint.begin(contrastKey);
         LyricContrastBackground.beginCover(contrastKey, contrastMode);
         if (!Main.sVideoWallpaper && Main.sWpComposes) {
             // The source goes over instead of the composed picture, and the wallpaper process
@@ -158,7 +177,8 @@ public final class CoverPush {
                 // The picture the lock screen handed over ahead of this tap (precomposeAsync) is
                 // already on disk: the wallpaper process is pointed at it rather than given the
                 // same megabyte again. 20-68ms of a busy phone's entry went on that write.
-                shared = preSourceFor(art, w, h);
+                ArtPushRequest request = sArtPushRequest;
+                shared = preSourceFor(art, w, h, request == null ? null : request.owner);
                 if (shared == null) shared = writeSharedSource(src, w, h, Main.sBias);
                 // Named, so the wallpaper process keeps it under this key and the next tap can
                 // ask for it by name - and so a push for the picture the tap already put up
@@ -166,7 +186,6 @@ public final class CoverPush {
                 boolean card = Main.sCoverCardStyle.mode == CoverCardStyle.CARD;
                 String keptKey = preKey(art, w, h, card);
                 out.putExtra("prekey", keptKey);
-                noteKept(keptKey, layoutKey(w, h, card), Long.MAX_VALUE);
             } catch (Throwable t) {
                 Xp.w(Main.TAG + "source hand-over failed, sending the composed JPEG instead: " + t);
             } finally {
@@ -176,6 +195,11 @@ public final class CoverPush {
                 // Source preparation and file IO can outlive a tap into navigation, a close,
                 // or another entry. Validate at submission as well as before starting work.
                 if (!artPushCurrent(generation)) return;
+                ArtPushRequest request = sArtPushRequest;
+                if (request != null && !request.predicted)
+                    noteKept(preKey(art, w, h, Main.sCoverCardStyle.mode == CoverCardStyle.CARD),
+                            layoutKey(w, h, Main.sCoverCardStyle.mode == CoverCardStyle.CARD),
+                            Long.MAX_VALUE, request.owner);
                 out.putExtra("src", shared);
                 out.putExtra("tsent", android.os.SystemClock.uptimeMillis());
                 ProbeGuard.send(ctx, out);
@@ -209,6 +233,7 @@ public final class CoverPush {
                     }
                 }
                 AodColour.measureCover(sTintPic, w / (float) sTintPic.getWidth());
+                if (artPushCurrent(generation)) sLyricCoverTint.record(contrastKey, Main.sCoverTint);
                 LyricContrastBackground.measureCover(sTintPic, null, contrastKey, contrastMode);
                 if (Main.sCoverMode) AodColour.recolorClock();
                 // The shade builds its background from the square source and keeps nothing.
@@ -238,7 +263,7 @@ public final class CoverPush {
             final float fb = Main.sCoverCardStyle.mode == CoverCardStyle.CARD ? 0.5f : Main.sBias;
             frostTask = new java.util.concurrent.FutureTask<>(
                     () -> CoverCompose.frostedFor(srcArt, fw, fh, fb));
-            new Thread(frostTask, "mc-cover-frost").start();
+            Gen.thread("mc-cover-frost", frostTask);
         }
         Bitmap full;
         try {
@@ -268,6 +293,7 @@ public final class CoverPush {
             return;
         }
         AodColour.measureCover(full);
+        if (artPushCurrent(generation)) sLyricCoverTint.record(contrastKey, Main.sCoverTint);
         if (Main.sCoverMode) AodColour.recolorClock();
         final boolean video = frostTask != null;
         if (video) {
@@ -395,6 +421,7 @@ public final class CoverPush {
                         layer.addView(iv, new ViewGroup.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT));
+                        Gen.ownView(layer, iv);
                         Main.sCover = iv;
                     }
                     if (Main.sCoverCardStyle.mode == CoverCardStyle.CARD) {
@@ -424,7 +451,7 @@ public final class CoverPush {
                     // in waits for), so the view and the glass and cards that sample the window
                     // change together.
                     boolean swap = !isNew && artChanged && sCoverFadingOut == null
-                            && sCoverFadeWaitMs <= 0 && iv.getAlpha() > 0f
+                            && sCoverFadeWaitMs <= 0 && iv.getAlpha() > 0f && iv.isShown()
                             && oldShown != null && !oldShown.isRecycled();
                     if (swap) {
                         armCoverSwap(iv, oldShown, target, oldSharp, oldBlur, full, frosted);
@@ -498,7 +525,7 @@ public final class CoverPush {
                 final Bitmap frosted = Main.sCoverBlurBitmap;
                 if (sharp == null || sharp.isRecycled()) return;
                 if (blur && (frosted == null || frosted.isRecycled())) {
-                    new Thread(new Runnable() {
+                    Gen.thread("mc-cover-blur", new Runnable() {
                         @Override
                         public void run() {
                             try {
@@ -520,7 +547,7 @@ public final class CoverPush {
                                 Xp.w(Main.TAG + "generate frosted on demand failed: " + t);
                             }
                         }
-                    }, "mc-cover-blur").start();
+                    });
                     return;
                 }
                 Bitmap from = blur ? sharp : (frosted != null ? frosted : sharp);
@@ -648,7 +675,7 @@ public final class CoverPush {
                 return true;
             } finally { android.os.Trace.endSection(); } }
         };
-        cover.getViewTreeObserver().addOnPreDrawListener(sCoverGuard);
+        Gen.preDraw(cover, sCoverGuard);
         sCoverGuarded = cover;
         Xp.log(Main.TAG + "video cover guard installed");
     }
@@ -1036,6 +1063,33 @@ public final class CoverPush {
         if (b != null && b != keep1 && b != keep2 && !b.isRecycled()) b.recycle();
     }
 
+    /** Detach layers that are about to be recycled, including a transition hidden mid-flight. */
+    private static void settleOff(ImageView iv, Bitmap a, Bitmap b) {
+        // A later request can adopt one of the old pictures; it will not be recycled and must
+        // not be removed from its view by this timer.
+        Bitmap keep1 = Main.sCoverBitmap, keep2 = Main.sCoverBlurBitmap;
+        if (a == keep1 || a == keep2) a = null;
+        if (b == keep1 || b == keep2) b = null;
+        if (a == null && b == null) return;
+        android.graphics.drawable.Drawable drawable = iv.getDrawable();
+        if (!(drawable instanceof android.graphics.drawable.LayerDrawable)) return;
+        android.graphics.drawable.LayerDrawable layers = (android.graphics.drawable.LayerDrawable) drawable;
+        boolean holds = false;
+        for (int i = 0; i < layers.getNumberOfLayers(); i++) {
+            android.graphics.drawable.Drawable layer = layers.getDrawable(i);
+            if (layer instanceof android.graphics.drawable.BitmapDrawable) {
+                Bitmap bitmap = ((android.graphics.drawable.BitmapDrawable) layer).getBitmap();
+                if (bitmap != null && (bitmap == a || bitmap == b)) holds = true;
+            }
+        }
+        if (!holds) return;
+        android.graphics.drawable.Drawable last = layers.getDrawable(layers.getNumberOfLayers() - 1);
+        Bitmap end = last instanceof android.graphics.drawable.BitmapDrawable
+                ? ((android.graphics.drawable.BitmapDrawable) last).getBitmap() : null;
+        if (end != null && end != a && end != b && !end.isRecycled()) iv.setImageBitmap(end);
+        else iv.setImageDrawable(null);
+    }
+
     /**
      * Owes the view a crossfade from the cover it shows to the new one, started when the
      * wallpaper window has the new one as well (or the wait times out). The old bitmaps are the
@@ -1056,7 +1110,9 @@ public final class CoverPush {
                 applyVideoCoverCrossfade(iv, from, to, Main.sVideoCoverBlurred);
             }
             final long dur = Math.max(150, Math.min(500, coverFadeMs())) + 100L;
-            iv.postDelayed(() -> {
+            Gen.postDelayedOn(iv, () -> {
+                // A hidden TransitionDrawable may still hold its old bitmaps.
+                settleOff(iv, oldSharp, oldBlur);
                 recycleUnless(oldSharp, Main.sCoverBitmap, Main.sCoverBlurBitmap);
                 if (oldBlur != oldSharp) {
                     recycleUnless(oldBlur, Main.sCoverBitmap, Main.sCoverBlurBitmap);
@@ -1136,7 +1192,7 @@ public final class CoverPush {
         sCoverGuard = null;
         if (c == null || g == null) return;
         try {
-            c.getViewTreeObserver().removeOnPreDrawListener(g);
+            Gen.unpreDraw(c, g);
         } catch (Throwable ignored) {
         }
     }
@@ -1283,6 +1339,8 @@ public final class CoverPush {
         // Superseding anything in flight, the way a real track change does: this IS the track
         // change, ~0.8s before the player will admit to it.
         final int gen = ++Main.sPushGen;
+        sArtPushRequest = new ArtPushRequest(gen, true);
+        sKept = null; // A predicted next song must not be advertised as the old song's cover.
         Main.sCtTrack = sSkipAt;
         Main.sCtArt = sSkipAt;
         Main.sCtTries = 0;
@@ -1393,24 +1451,33 @@ public final class CoverPush {
      */
     private static volatile String sPreKey = "";
     private static volatile long sPreAt;
+    private static volatile long sPreOwnerVersion = -1L;
     /**
      * The picture the wallpaper process has kept, as far as this side knows: its key, the song
      * the session was on, the screen, bias and mode, and until when it is kept there. Set by a
      * precompose (kept 60s there) and by every push (kept while the cover shows it, and 30s
      * after it goes). What the tap's own message asks for (sendKeptFirst).
      */
-    private static volatile String sKeptKey = "";
-    private static volatile String sKeptTitle;
-    private static volatile String sKeptLayout = "";
-    private static volatile long sKeptUntil;
+    private static final class KeptArt {
+        final String key, layout, title;
+        final long until;
+        final ArtworkSessionState.Snapshot<android.media.session.MediaController,
+                android.media.session.MediaSession.Token> owner;
+        KeptArt(String key, String layout, String title, long until,
+                ArtworkSessionState.Snapshot<android.media.session.MediaController,
+                        android.media.session.MediaSession.Token> owner) {
+            this.key = key; this.layout = layout; this.title = title; this.until = until; this.owner = owner;
+        }
+    }
+    private static volatile KeptArt sKept;
     private static final long KEPT_AFTER_PRE_MS = 50_000L;
     private static final long KEPT_AFTER_OFF_MS = 25_000L;
 
-    private static void noteKept(String key, String layout, long until) {
-        sKeptTitle = Main.watchedTitle();
-        sKeptLayout = layout;
-        sKeptKey = key;
-        sKeptUntil = until;
+    private static void noteKept(String key, String layout, long until,
+            ArtworkSessionState.Snapshot<android.media.session.MediaController,
+                    android.media.session.MediaSession.Token> owner) {
+        if (Main.sArtworkSession.isCurrent(owner))
+            sKept = new KeptArt(key, layout, Main.watchedTitle(), until, owner);
     }
     private static volatile boolean sPrePending;
     /** Shorter than the wallpaper process keeps it (PRECOMPOSED_KEEP_MS), so it is never gone. */
@@ -1438,24 +1505,30 @@ public final class CoverPush {
                 try {
                     // The session's own bitmap only: the card lags a track change and can still
                     // be the last album, and a guess that misses is work for nothing.
-                    Bitmap art = AlbumArt.albumArt(ctx, false);
-                    if (art == null) return;
+                    ArtworkSessionState.Snapshot<android.media.session.MediaController,
+                            android.media.session.MediaSession.Token> owner = Main.sArtworkSession.snapshot();
+                    Bitmap art = AlbumArt.albumArt(ctx, false, null, owner);
+                    if (art == null || !Main.sArtworkSession.isCurrent(owner)) return;
                     int w = Main.sScreenW, h = Main.sScreenH;
                     boolean card = Main.sCoverCardStyle.mode == CoverCardStyle.CARD;
                     String key = preKey(art, w, h, card);
                     long now = android.os.SystemClock.uptimeMillis();
-                    if (key.equals(sPreKey) && now - sPreAt < PRE_RESEND_MS) return;
+                    if (key.equals(sPreKey) && sPreOwnerVersion == owner.version
+                            && now - sPreAt < PRE_RESEND_MS) return;
                     Bitmap src = CoverCompose.prepareSource(art, w);
                     java.io.File f = new java.io.File(SHARE_DIR, SHARE_PRE_SOURCE);
+                    sPreKey = ""; // The file is about to be overwritten, even on cancellation.
                     CoverCompose.writeSource(f, src, w, h, Main.sBias);
+                    if (!Main.sArtworkSession.isCurrent(owner) || !precomposeWanted()) return;
                     Intent out = wallpaperIntent("precompose");
                     out.putExtra("src", f.getAbsolutePath());
                     out.putExtra("cardmode", card);
                     out.putExtra("prekey", key);
                     ProbeGuard.send(ctx, out);
+                    sPreOwnerVersion = owner.version;
                     sPreKey = key;
                     sPreAt = now;
-                    noteKept(key, layoutKey(w, h, card), now + KEPT_AFTER_PRE_MS);
+                    noteKept(key, layoutKey(w, h, card), now + KEPT_AFTER_PRE_MS, owner);
                 } catch (Throwable t) {
                     Xp.w(Main.TAG + "precompose failed: " + t);
                 } finally {
@@ -1492,14 +1565,16 @@ public final class CoverPush {
         final int generation = Main.sPushGen;
         Context ctx = Main.sAppCtx;
         if (ctx == null || android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return;
-        String key = sKeptKey;
+        KeptArt kept = sKept;
+        if (kept == null || !Main.sArtworkSession.isCurrent(kept.owner)) return;
+        String key = kept.key;
         if (key.isEmpty() || !Main.sWpComposes || Main.sVideoWallpaper || Main.keepsWallpaper()) {
             return;
         }
-        if (android.os.SystemClock.uptimeMillis() >= sKeptUntil) return;
+        if (android.os.SystemClock.uptimeMillis() >= kept.until) return;
         boolean card = Main.sCoverCardStyle.mode == CoverCardStyle.CARD;
-        if (!layoutKey(Main.sScreenW, Main.sScreenH, card).equals(sKeptLayout)) return;
-        String title = sKeptTitle;
+        if (!layoutKey(Main.sScreenW, Main.sScreenH, card).equals(kept.layout)) return;
+        String title = kept.title;
         if (title == null || !title.equals(Main.watchedTitle())) return;
         try {
             Intent out = wallpaperIntent("art");
@@ -1507,7 +1582,7 @@ public final class CoverPush {
             LockLyrics.putBlurOn(out);
             out.putExtra("fade", Main.sFadeWp && Main.sScreenOn);
             out.putExtra("prekey", key);
-            if (!artPushCurrent(generation)) return;
+            if (!artPushCurrent(generation) || !Main.sArtworkSession.isCurrent(kept.owner)) return;
             ProbeGuard.send(ctx, out);
             Xp.log(Main.TAG + "pushart: the kept cover asked for from the tap");
         } catch (Throwable t) {
@@ -1525,8 +1600,11 @@ public final class CoverPush {
      * The precompose's file, when it holds exactly the source this push would write; null when
      * it does not. Worker thread, as both writers are, so the file cannot change under this.
      */
-    private static String preSourceFor(Bitmap art, int w, int h) {
-        if (sPreKey.isEmpty()) return null;
+    private static String preSourceFor(Bitmap art, int w, int h,
+            ArtworkSessionState.Snapshot<android.media.session.MediaController,
+                    android.media.session.MediaSession.Token> owner) {
+        if (owner == null || !Main.sArtworkSession.isCurrent(owner) ||
+                sPreOwnerVersion != owner.version || sPreKey.isEmpty()) return null;
         boolean card = Main.sCoverCardStyle.mode == CoverCardStyle.CARD;
         if (!preKey(art, w, h, card).equals(sPreKey)) return null;
         java.io.File f = new java.io.File(SHARE_DIR, SHARE_PRE_SOURCE);
@@ -1544,6 +1622,7 @@ public final class CoverPush {
         final Context ctx = Main.sAppCtx;
         if (ctx == null) return;
         final int gen = ++Main.sPushGen;
+        if (on) sArtPushRequest = new ArtPushRequest(gen, false);
         if (!on) {
             sMissingArtRetryAt = 0L;
             sArtPrint = 0;
@@ -1618,7 +1697,7 @@ public final class CoverPush {
         Main.worker().postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (gen != Main.sPushGen) {
+                if (!artPushCurrent(gen)) {
                     Xp.log(Main.TAG + "art push superseded, dropping it");
                     return;
                 }
@@ -1628,11 +1707,13 @@ public final class CoverPush {
                 Bitmap art;
                 int print;
                 try {
-                    art = AlbumArt.albumArt(ctx, last || allowCard, sessionBits);
+                    ArtPushRequest request = sArtPushRequest;
+                    art = request == null ? null : AlbumArt.albumArt(ctx, last || allowCard, sessionBits, request.owner);
                     print = art == null ? 0 : artPrint(art);
                 } finally {
                     android.os.Trace.endSection();
                 }
+                if (!artPushCurrent(gen)) return;
                 // A video request has two consumers. The wallpaper may already have the art
                 // while its UI task was superseded or still owes a swap/fade. The current
                 // generation must be allowed to finish that half even for identical artwork.
@@ -2420,6 +2501,15 @@ public final class CoverPush {
         } catch (Throwable t) {
             Xp.w(Main.TAG + "clearLockWallpaper failed: " + t);
         }
+    }
+
+    private static final LyricCoverTint sLyricCoverTint = new LyricCoverTint();
+
+    /** The first valid tint of a composition, held for all its lyric lines. */
+    public static int lyricCoverTint() {
+        if (!Main.sCoverMode || !Main.sScreenOn) return 0;
+        int forced = Main.sCoverTintOverride;
+        return forced != 0 ? forced : sLyricCoverTint.color();
     }
 
     /** Coarse identity of an artwork: enough to tell one cover from another, cheap to take. */

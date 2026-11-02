@@ -32,6 +32,7 @@ object SettingsBackup {
     private const val KEY_LYRICS_KEEP_ON = "lyricsKeepOn"
     private const val KEY_LYRICS_HDR = "lyricsHdr"
     private const val KEY_LYRIC_CLOCK_INDEPENDENT = "lyricClockIndependent"
+    private const val KEY_LYRIC_BT_SYNC = "lyricBluetoothSync"
     private const val KEY_LYRICS_TRANS = "lyricsTranslation"
     private const val KEY_AOD_BIG_CLOCK = "aodBigClock"
     private const val KEY_LYRICS_ROMA = "lyricsRomanisation"
@@ -69,6 +70,10 @@ object SettingsBackup {
             json.put(KEY_LYRICS_KEEP_ON, module.lyricsKeepOn)
             json.put(KEY_LYRICS_HDR, module.lyricsHdr)
             json.put(KEY_LYRIC_CLOCK_INDEPENDENT, module.lyricClockIndependent)
+            json.put(KEY_LYRIC_BT_SYNC, JSONObject()
+                .put("enabled", module.lyricBtSync)
+                .put("classic", module.lyricBtClassic)
+                .put("le", module.lyricBtLe))
             json.put(KEY_LYRICS_TRANS, module.lyricsTrans)
             json.put(KEY_AOD_BIG_CLOCK, module.aodBigClock)
             json.put(KEY_LYRICS_ROMA, module.lyricsRoma)
@@ -82,6 +87,7 @@ object SettingsBackup {
             }
             json.put(KEY_MINI, JSONObject(module.miniConfig))
             json.put("lyricAppearance", JSONObject(module.lyricAppearance))
+            json.put("lyricFill", module.lyricFill.toDouble())
             json.put("lyricSizeSp", module.lyricSizeSp.toDouble())
             json.put("lyricBgSizeSp", module.lyricBgSizeSp.toDouble())
             json.put("lyricsMaxLines", module.lyricsMaxLines)
@@ -97,10 +103,14 @@ object SettingsBackup {
         val settings = AppSettings.importFromJson(context, json)
         try {
             val obj = JSONObject(json)
+            obj.optJSONObject(KEY_LYRIC_BT_SYNC)?.let { sync ->
+                ModuleBridge.setLyricBluetoothSync(context, sync.optBoolean("enabled", true),
+                    sync.optInt("classic", 400), sync.optInt("le", 100))
+            }
             obj.optJSONObject("lyricSourcePolicy")?.let { policy ->
                 ModuleBridge.setLyricSourcePolicy(context, ModuleBridge.State(
                     lyricSourceCustom = policy.optBoolean("custom", false),
-                    lyricNetwork = policy.optBoolean("network", true),
+                    lyricNetwork = policy.optBoolean("network", false),
                     lyricSourceOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeSources(policy.optString("sources")),
                     lyricLocalFormat = com.os4.musiccover.lyrics.LocalLyricFormat.migrate(
                         if (policy.has("localFormat")) policy.optString("localFormat") else null,
@@ -110,6 +120,7 @@ object SettingsBackup {
             if (obj.has("lyricAppearance")) {
                 ModuleBridge.setLyricAppearance(context, obj.getJSONObject("lyricAppearance").toString())
             }
+            if (obj.has("lyricFill")) ModuleBridge.setLyricStyle(context, "fill", obj.getDouble("lyricFill").toFloat())
             if (obj.has("lyricSizeSp")) ModuleBridge.setLyricStyle(context, "size", obj.getDouble("lyricSizeSp").toFloat())
             if (obj.has("lyricBgSizeSp")) ModuleBridge.setLyricStyle(context, "bgsize", obj.getDouble("lyricBgSizeSp").toFloat())
             if (obj.has("lyricsMaxLines")) ModuleBridge.setLyricsMaxLines(context, obj.getInt("lyricsMaxLines"))

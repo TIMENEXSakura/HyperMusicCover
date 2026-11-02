@@ -209,6 +209,11 @@ internal fun CoverPageView(
                 ModuleBridge.markLost()
                 return@LaunchedEffect
             }
+            // Nothing to read: the defaults would turn the glass row off and forget the artwork.
+            if (!reply.answered) {
+                delay(SHOT_POLL_MS)
+                continue
+            }
             if (!reply.artUnchanged) artTrack = reply.track
             if (reply.clockHasGlass != module.clockHasGlass) {
                 module = module.copy(clockHasGlass = reply.clockHasGlass)
@@ -586,6 +591,23 @@ private fun LyricsGroup(
                         ModuleBridge.setLyricStyle(context, "size", size)
                     },
                 )
+                var heightDraft by remember(module.lyricFill) { mutableIntStateOf((module.lyricFill * 100).roundToInt()) }
+                ValueSlider(
+                    title = stringResource(R.string.lyrics_height),
+                    summary = stringResource(R.string.lyrics_height_summary),
+                    value = heightDraft.toFloat(),
+                    valueRange = 40f..100f,
+                    enabled = enabled,
+                    label = { "${it.roundToInt()}%" },
+                    onValueChange = { heightDraft = it.roundToInt().coerceIn(40, 100) },
+                    onValueChangeFinished = {
+                        val fill = heightDraft / 100f
+                        if (fill != module.lyricFill) {
+                            onChange(module.copy(lyricFill = fill))
+                            ModuleBridge.setLyricStyle(context, "fill", fill)
+                        }
+                    },
+                )
                 LyricAppearanceSettings(enabled, module, onChange)
                 SwitchPreference(
                     title = stringResource(R.string.lyrics_clock_independent),
@@ -597,6 +619,54 @@ private fun LyricsGroup(
                         ModuleBridge.setLyricClockIndependent(context, it)
                     },
                 )
+                SwitchPreference(
+                    title = stringResource(R.string.lyrics_bt_sync),
+                    summary = stringResource(R.string.lyrics_bt_sync_summary),
+                    checked = module.lyricBtSync,
+                    enabled = enabled,
+                    onCheckedChange = {
+                        onChange(module.copy(lyricBtSync = it))
+                        ModuleBridge.setLyricBluetoothSync(context, it, module.lyricBtClassic, module.lyricBtLe)
+                    },
+                )
+                if (module.lyricBtSync) {
+                    // Keep dragging local; querying the output route once per pointer frame is
+                    // unnecessary. Commit on release so SystemUI receives one update per drag.
+                    var classicDraft by remember(module.lyricBtClassic) { mutableIntStateOf(module.lyricBtClassic) }
+                    var leDraft by remember(module.lyricBtLe) { mutableIntStateOf(module.lyricBtLe) }
+                    ValueSlider(
+                        title = stringResource(R.string.lyrics_bt_classic),
+                        summary = stringResource(R.string.lyrics_bt_classic_summary),
+                        value = classicDraft.toFloat(),
+                        valueRange = -500f..500f,
+                        detent = 0f,
+                        enabled = enabled,
+                        label = { lyricOffsetLabel(it) },
+                        onValueChange = { classicDraft = ((it / 10f).roundToInt() * 10).coerceIn(-500, 500) },
+                        onValueChangeFinished = {
+                            if (classicDraft != module.lyricBtClassic) {
+                                onChange(module.copy(lyricBtClassic = classicDraft))
+                                ModuleBridge.setLyricBluetoothSync(context, module.lyricBtSync, classicDraft, module.lyricBtLe)
+                            }
+                        },
+                    )
+                    ValueSlider(
+                        title = stringResource(R.string.lyrics_bt_le),
+                        summary = stringResource(R.string.lyrics_bt_le_summary),
+                        value = leDraft.toFloat(),
+                        valueRange = -500f..500f,
+                        detent = 0f,
+                        enabled = enabled,
+                        label = { lyricOffsetLabel(it) },
+                        onValueChange = { leDraft = ((it / 10f).roundToInt() * 10).coerceIn(-500, 500) },
+                        onValueChangeFinished = {
+                            if (leDraft != module.lyricBtLe) {
+                                onChange(module.copy(lyricBtLe = leDraft))
+                                ModuleBridge.setLyricBluetoothSync(context, module.lyricBtSync, module.lyricBtClassic, leDraft)
+                            }
+                        },
+                    )
+                }
                 val alignModes = listOf(
                     stringResource(R.string.lyrics_align_left),
                     stringResource(R.string.lyrics_align_center),
@@ -839,6 +909,11 @@ private const val SHOT_POLL_MS = 3000L
 /** The clock size's floor and default, matching CLOCK_SIZE_MIN and DEFAULT_CLOCK_SIZE in Main. */
 private const val CLOCK_SIZE_MIN = 0.05f
 private const val DEFAULT_CLOCK_SIZE = 0.09f
+
+private fun lyricOffsetLabel(value: Float): String {
+    val ms = value.roundToInt()
+    return "${if (ms > 0) "+" else ""}$ms ms"
+}
 
 /** Two decimals, without dragging java.util.Formatter's locale into it. */
 private fun format(v: Float): String {

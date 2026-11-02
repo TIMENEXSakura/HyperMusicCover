@@ -119,14 +119,10 @@ final class NavigationSurfaceContrast {
             // Install the timeout before handing the owned control to another thread. Once
             // post succeeds only that worker releases it, even if later host work fails.
             Main.main().postDelayed(request.timeout, TIMEOUT_MS);
-            if (!Main.worker().post(() -> startCapture(request))) {
-                sPending = null;
-                SLOTS.finish(request);
-                Main.main().removeCallbacks(request.timeout);
-                release(copy);
-                fail("worker-unavailable");
-                return;
-            }
+            // Gen's skipped callback releases our owned native handle if retirement wins
+            // before this worker starts. A guarded Handler could silently drop that job.
+            Gen.thread("MCLyricCapture", () -> startCapture(request),
+                    () -> release(request.control));
         } catch (Throwable error) {
             if (sPending != null && sPending.control == copy) {
                 Main.main().removeCallbacks(sPending.timeout);
@@ -267,7 +263,11 @@ final class NavigationSurfaceContrast {
             request.consumer = (captured, status) -> {
                 if (!request.callbackSeen.compareAndSet(false, true)) { closeBuffer(api, captured); return; }
                 try {
-                    if (Main.worker().post(() -> consume(api, request, captured, status))) return;
+                    // A late native callback may arrive after retirement. The skipped branch
+                    // still closes its HardwareBuffer instead of enqueueing it into a dead handler.
+                    Gen.thread("MCLyricPixels", () -> consume(api, request, captured, status),
+                            () -> closeBuffer(api, captured));
+                    return;
                 } catch (Throwable ignored) {}
                 closeBuffer(api, captured);
                 complete(request, null, "worker-unavailable");

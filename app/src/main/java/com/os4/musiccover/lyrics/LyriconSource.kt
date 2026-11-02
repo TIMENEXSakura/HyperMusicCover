@@ -176,6 +176,47 @@ object LyriconSource {
     }
 
     /**
+     * Retirement: everything the bridge holds of ours is released.
+     *
+     * <p>The listener below and the connection listener in attach() are objects of the class
+     * loader that is going away, and the central keys a subscriber by (package, process): a live
+     * one left behind would be handed to the next generation instead of the one it creates (see
+     * the identity collision this module already hit). destroy() releases the connection; the
+     * active-player listener is taken off first, so no callback can arrive mid-teardown.
+     *
+     * <p>Safe to call when nothing was ever attached, and safe to call twice.
+     */
+    @JvmStatic
+    fun detach() {
+        val sub = synchronized(this) {
+            if (!sAttached) return
+            sAttached = false
+            val s = sSubscriber
+            sSubscriber = null
+            s
+        }
+        try {
+            sub?.unsubscribeActivePlayer(Listener)
+        } catch (t: Throwable) {
+            Xp.log("[MCLyricon] unsubscribe failed: " + t)
+        }
+        try {
+            sub?.destroy()
+        } catch (t: Throwable) {
+            Xp.log("[MCLyricon] destroy failed: " + t)
+        }
+        synchronized(sSongLock) {
+            sSong = null
+            sSongLock.notifyAll()
+        }
+        availability.connection("not started")
+        sPlayer = null
+        sProvider = null
+        sPlayerSongs = 0
+        Xp.log("[MCLyricon] detached")
+    }
+
+    /**
      * What the bridge is handed. Only the song is kept: the position comes from the MediaSession
      * this module already follows, the plain-text callback has no timing in it, and the two
      * display toggles are the player's own UI settings rather than anything about the lyric.
@@ -257,16 +298,17 @@ object LyriconSource {
      * the bridge was still holding, and the per-track cache kept it for every later play.
      *
      * When the song in hand is not this one but the active provider is reading this player, the
-     * right one is on its way, so this waits for it - briefly, on the lookup's worker - rather
-     * than handing the track to the catalogues, which is where the bridge's copy would be lost.
+     * right one may be on its way. When network lookup is enabled, wait briefly on the worker
+     * before asking catalogues. When it is disabled, report the current answer immediately;
+     * onSongChanged requests a fresh lookup if the provider subsequently publishes lyrics.
      */
     @JvmStatic
-    fun linesFor(title: String?, artist: String?, player: String?): List<LyricLine>? {
+    fun linesFor(title: String?, artist: String?, player: String?, waitForProvider: Boolean): List<LyricLine>? {
         if (!connected()) return null
         var song = sSong
         if (song == null || !isTrack(song, title, artist)) {
             // Only a provider that has shown it publishes; see sPlayerSongs.
-            if (player != null && player == sPlayer && sPlayerSongs > 0) {
+            if (waitForProvider && player != null && player == sPlayer && sPlayerSongs > 0) {
                 val until = android.os.SystemClock.uptimeMillis() + CATCH_UP_MS
                 synchronized(sSongLock) {
                     while (connected()) {

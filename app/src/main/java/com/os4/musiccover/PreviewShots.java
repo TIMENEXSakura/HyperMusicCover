@@ -81,7 +81,7 @@ final class PreviewShots {
             if (diag != null) {
                 diag.append("\n  art: ").append(thumb == null ? "NULL" : thumb.length + "B");
                 if (thumb == null) {
-                    MediaController mc = Main.pickController(c);
+                    MediaController mc = AlbumArt.select(c, Main.sArtworkSession.snapshot()).controller;
                     diag.append(" (session=")
                         .append(mc == null ? "none" : mc.getPackageName())
                         .append(" metadata=")

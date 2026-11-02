@@ -42,6 +42,24 @@ public class NavigationLyricBackgroundTest {
         assertTrue(state.finish("amap-nav", true, true));
     }
 
+    @Test public void hidingLyricsDoesNotExposeCoverWritesWhileMapIsStillRequested() {
+        NavigationLyricBackground state = new NavigationLyricBackground();
+        state.requestedOver("amap-nav");
+        assertTrue(state.protects("amap-nav"));
+        assertFalse(state.protects(null));
+        assertFalse(state.protects("other"));
+        assertTrue(state.finish("amap-nav", true, true));
+        assertFalse(state.protects("amap-nav"));
+    }
+
+    @Test public void immersiveTapsSurviveTemporarilyHiddenNativeMediaCard() {
+        assertTrue(NavigationLyricBackground.allowsToggle(true, false, false, false));
+        assertTrue(NavigationLyricBackground.allowsToggle(false, true, true, false));
+        assertTrue(NavigationLyricBackground.allowsToggle(false, true, false, true));
+        assertFalse(NavigationLyricBackground.allowsToggle(false, false, true, true));
+        assertFalse(NavigationLyricBackground.allowsToggle(false, true, false, false));
+    }
+
     @Test public void navigationWithoutAnExplicitMusicPageKeepsItsExistingBackground() {
         NavigationLyricBackground state = new NavigationLyricBackground();
         assertFalse(state.finish("amap-nav", true, true));

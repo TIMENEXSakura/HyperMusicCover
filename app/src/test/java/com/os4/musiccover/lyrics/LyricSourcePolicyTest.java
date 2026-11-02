@@ -4,6 +4,12 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricSourcePolicyTest {
+    @Test public void networkIsOffByDefaultButCanBeExplicitlyEnabled() {
+        assertFalse(LyricSourcePolicy.current.allowNetwork);
+        assertFalse(LyricSourcePolicy.current.permits("qq"));
+        assertTrue(new LyricSourcePolicy.Config(false, true, null, null).permits("qq"));
+    }
+
     @Test public void defaultStartsWithProviderThenMetadataAndDirectory() {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(false, true, "qq,local", null);
         assertEquals("lyricon", config.sources()[0]);

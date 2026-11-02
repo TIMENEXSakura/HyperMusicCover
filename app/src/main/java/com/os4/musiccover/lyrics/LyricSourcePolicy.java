@@ -6,7 +6,7 @@ import java.util.Locale;
 
 public final class LyricSourcePolicy {
     public static final String DEFAULT_SOURCES = "lyricon,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
-    public static volatile Config current = new Config(false, true, DEFAULT_SOURCES, LocalLyricFormat.TTML);
+    public static volatile Config current = new Config(false, false, DEFAULT_SOURCES, LocalLyricFormat.TTML);
 
     private LyricSourcePolicy() { }
 
