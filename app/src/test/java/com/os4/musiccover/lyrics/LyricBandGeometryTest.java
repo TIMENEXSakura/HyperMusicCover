@@ -5,6 +5,19 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricBandGeometryTest {
+    @Test public void interludeDotsFollowSingingAnchorThroughoutCardMorph() {
+        float top = 100f, height = 1000f, slotHeight = 90f;
+        for (float progress : new float[]{0f, .25f, .5f, .75f, 1f, .5f, 0f}) {
+            // A simultaneous-lyrics layout may have moved the next row from its base; the
+            // render adds that delta, so the correction must cancel it at every morph frame.
+            float rowDelta = -37f;
+            float fix = LyricBandGeometry.interludeAnchorFix(height, slotHeight, progress, rowDelta);
+            float slotTop = top + LyricBandGeometry.SINGING_FRACTION * height + fix + rowDelta;
+            assertEquals(LyricBandGeometry.singingTop(top, top + height, slotHeight, progress),
+                    slotTop, .001f);
+        }
+    }
+
     @Test public void singingGroupStaysAboveMiddleRegardlessOfItsHeight() {
         assertEquals(350f, LyricBandGeometry.singingTop(100f, 1100f, 100f), .001f);
         assertEquals(250f, LyricBandGeometry.singingTop(100f, 1100f, 300f), .001f);

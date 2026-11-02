@@ -20,7 +20,7 @@ class LyricPipelineRegressionTest {
         assertEquals(listOf(6000, 7000), lead.backgrounds().map { it.end })
         assertEquals(7000, lead.end)
         val focus = LyricFocus()
-        focus.update(lines, 3500, 3, 1)
+        focus.update(lines, 3500, 3, 1, 1)
         assertTrue(focus.contains(0))
         assertTrue(focus.contains(1))
         assertEquals(8000, lines.last().start)

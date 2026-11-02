@@ -44,7 +44,8 @@ public class LyricTransitionTest {
         focus.update(Arrays.asList(
                 new LyricLine("held", null, 0, 1000, false, null, null, null),
                 new LyricLine("short", null, 0, 100, false, null, null, null),
-                new LyricLine("new", null, 50, 1000, false, null, null, null)), position, 4, 2);
+                new LyricLine("new", null, 50, 1000, false, null, null, null)), position, 4, 2,
+                position >= 50 ? 2 : 1);
         focus.layout(base, heights, 20);
         return focus;
     }
@@ -160,7 +161,7 @@ public class LyricTransitionTest {
         for (int frame = 0; frame < 260; frame++) {
             int ms = frame * 75;
             int fallback = Math.min(count - 1, ms / 110);
-            focus.update(lines, ms, 4, fallback);
+            focus.update(lines, ms, 4, fallback, fallback);
             focus.layout(base, heights, 20f);
             int dots = frame % 19 == 0 ? fallback : -1;
             boolean snap = frame % 71 == 0;

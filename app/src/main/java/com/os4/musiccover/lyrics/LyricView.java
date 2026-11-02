@@ -766,7 +766,7 @@ final class LyricView extends View {
             }
         }
         int previousCount = singing.count;
-        boolean groupChanged = singing.update(lines, ms, LockLyrics.sMaxLines, sf);
+        boolean groupChanged = singing.update(lines, ms, LockLyrics.sMaxLines, sf, idx);
         if (groupChanged || focus < 0) {
             singing.layout(base, height, lyricGap(GAP_DP));
             if (focus >= 0) transition.rebase(singing, base, scroll, aim, nextAim);
@@ -1576,7 +1576,7 @@ final class LyricView extends View {
         // The words move every frame while they are being sung - the fill, the lift, a held
         // note's glow - and the interlude dots breathe for as long as they are up. Not in the
         // AOD's still mode, where they are drawn at rest.
-        return !LockLyrics.still() && (wordsLive() || dotsLive());
+        return !LockLyrics.still() && ((mediaPositionKnown && wordsLive()) || dotsLive());
     }
 
     /** Inside a frame, that frame's vsync time; outside one, the uptime clock it is based on. */
@@ -1586,6 +1586,8 @@ final class LyricView extends View {
 
     private float smoothMs;
     private long smoothAt;
+    private boolean mediaPositionKnown;
+    private final LyricStopPosition stopPosition = new LyricStopPosition();
 
     /**
      * The session's position at this frame's time, eased rather than jumped when a fresh read of
@@ -1594,9 +1596,27 @@ final class LyricView extends View {
      * and then - a visible hitch in the word fill. A real jump (a seek) is still taken at once.
      */
     private int smoothPosition(long now) {
-        long source = LockLyrics.rawPositionMs();
+        boolean playing = LockLyrics.playing();
+        long source = stopPosition.select(LockLyrics.feedbackTrackKey(), LockLyrics.sessionToken(),
+                playing, LockLyrics.stopped(), LockLyrics.rawPositionMs(), smoothAt != 0L,
+                Math.round(smoothMs), lines.isEmpty() ? 0L : LyricFocus.endOf(lines.get(lines.size() - 1)),
+                LockLyrics.bluetoothOffsetMs());
+        if (stopPosition.identityChanged()) {
+            smoothMs = 0f;
+            smoothAt = 0L;
+            jumpedAt = Long.MIN_VALUE;
+        }
+        mediaPositionKnown = source >= 0L;
+        // Some players briefly report no position while stopping at the end. Treating that
+        // as zero rewinds the lyric list and cancels a pending final-line fade. Hold the last
+        // known position without advancing it; never infer that an unfinished line completed.
+        if (source < 0L) {
+            if (smoothAt == 0L) return 0;
+            smoothAt = now;
+            return LyricBluetoothOffset.position(Math.round(smoothMs), LockLyrics.bluetoothOffsetMs());
+        }
         float raw = Math.max(0L, source) + (now - SystemClock.uptimeMillis());
-        if (smoothAt == 0L || !LockLyrics.playing()) {
+        if (smoothAt == 0L || !playing) {
             // Paused counts too: the progress bar can be dragged while paused, and that is still
             // a seek even though nothing is advancing between frames to compare against.
             if (smoothAt != 0L && Math.abs(raw - smoothMs) > JUMP_MS) {
@@ -1614,7 +1634,7 @@ final class LyricView extends View {
             }
         }
         smoothAt = now;
-        return source < 0L ? 0 : LyricBluetoothOffset.position(Math.round(smoothMs),
+        return LyricBluetoothOffset.position(Math.round(smoothMs),
                 LockLyrics.bluetoothOffsetMs());
     }
 
@@ -1948,7 +1968,7 @@ final class LyricView extends View {
         height = b.height;
         charX = b.charX;
         dotsTop = b.dotsTop;
-        singing.update(lines, ms, LockLyrics.sMaxLines, Math.max(0, focus));
+        singing.update(lines, ms, LockLyrics.sMaxLines, Math.max(0, focus), indexAt(ms));
         singing.layout(base, height, lyricGap(GAP_DP));
         blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
         if (preserve) {
@@ -1960,6 +1980,13 @@ final class LyricView extends View {
             return;
         }
         transRevealAt = 0L;
+        // A new lyric layout may belong to a different track; an unknown media position
+        // must never carry the previous track's playhead into it.
+        smoothMs = 0f;
+        smoothAt = 0L;
+        mediaPositionKnown = false;
+        stopPosition.reset();
+        jumpedAt = Long.MIN_VALUE;
         scroll = new float[n];
         vel = new float[n];
         aim = new float[n];
@@ -2259,11 +2286,16 @@ final class LyricView extends View {
     /**
      * How far the block wants to sit from the uncorrected anchor, in view pixels. The active
      * group is centred at the upper-band singing position; its actual measured height includes
-     * wrapped and simultaneous lines. Interludes retain the existing centred-block placement.
+     * wrapped and simultaneous lines. The interlude dots share the same singing position.
      *
      * Changes are rebased into the scroll coordinates before the spring is retargeted.
      */
     private float anchorFixTarget() {
+        if (centring() && dotsFor >= 0 && dotsFor < base.length) {
+            float positionDelta = singing.position(dotsFor, base) - base[dotsFor];
+            return LyricBandGeometry.interludeAnchorFix(bandBottom - bandTop,
+                    DOTS_SLOT_EM * textPx, musicCardProgress, positionDelta);
+        }
         if (centring() && dotsFor < 0 && singing.first >= 0 && singing.last < lines.size()) {
             float bandHeight = bandBottom - bandTop;
             return LyricBandGeometry.singingTop(0f, bandHeight, singing.height(base, height), musicCardProgress)

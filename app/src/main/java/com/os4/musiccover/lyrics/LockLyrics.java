@@ -1159,6 +1159,15 @@ public final class LockLyrics {
         return s != null && s.getState() == PlaybackState.STATE_PLAYING;
     }
 
+    static boolean stopped() {
+        PlaybackState s = sState;
+        return !sDemo && s != null && s.getState() == PlaybackState.STATE_STOPPED;
+    }
+
+    static Object sessionToken() {
+        return sController == null ? null : sController.getSessionToken();
+    }
+
     // ------------------------------------------------------------------ from Main
 
     /** The card is showing a track. Same key as last time is a no-op. */

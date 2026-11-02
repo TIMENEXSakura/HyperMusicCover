@@ -21,6 +21,13 @@ public final class LyricBandGeometry {
         return top + (bottom - top) * singingFraction(cardProgress) - groupHeight / 2f;
     }
 
+    /** Align the interlude slot's centre with the current singing position. */
+    static float interludeAnchorFix(float bandHeight, float slotHeight, float cardProgress,
+                                   float positionDelta) {
+        return singingTop(0f, bandHeight, slotHeight, cardProgress)
+                - SINGING_FRACTION * bandHeight - positionDelta;
+    }
+
     /** Use the same progress as the music surface, including a finger reversing its drag. */
     static float morphEdge(float mini, float card, float cardProgress) {
         float p = Float.isFinite(cardProgress) ? Math.max(0f, Math.min(1f, cardProgress)) : 0f;

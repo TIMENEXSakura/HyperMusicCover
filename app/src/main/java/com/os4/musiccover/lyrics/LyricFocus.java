@@ -6,6 +6,7 @@ import java.util.List;
 final class LyricFocus {
     static final int DEFAULT_LIMIT = 3;
     private final int[] selected = new int[4];
+    private final int[] next = new int[4];
     int count;
     int first;
     int last;
@@ -27,7 +28,7 @@ final class LyricFocus {
         return end;
     }
 
-    boolean update(List<LyricLine> lines, int position, int limit, int fallback) {
+    boolean update(List<LyricLine> lines, int position, int limit, int fallback, int latestStarted) {
         int previousCount = count;
         int found = 0;
         boolean changed = false;
@@ -35,8 +36,22 @@ final class LyricFocus {
         for (int index = lines.size() - 1; index >= 0 && found < limit; index--) {
             LyricLine line = lines.get(index);
             if (position < startOf(line) || position >= endOf(line)) continue;
-            if (selected[found] != index) changed = true;
-            selected[found++] = index;
+            next[found++] = index;
+        }
+        // A previous voice can outlast a newer lead line. Keep the most recently started lead
+        // in the group until a later line starts, rather than scrolling backwards to that voice.
+        // This is derived from the playhead, not a sticky historical index, so seeks and track
+        // changes immediately select the right line. The display limit still applies.
+        if (found > 0 && latestStarted > next[0] && latestStarted < lines.size()
+                && latestStarted >= 0 && lines.get(latestStarted).start <= position) {
+            int heldCount = Math.min(found + 1, limit);
+            for (int slot = heldCount - 1; slot > 0; slot--) next[slot] = next[slot - 1];
+            next[0] = latestStarted;
+            found = heldCount;
+        }
+        for (int slot = 0; slot < found; slot++) {
+            if (selected[slot] != next[slot]) changed = true;
+            selected[slot] = next[slot];
         }
         count = found;
         last = found == 0 ? fallback : selected[0];

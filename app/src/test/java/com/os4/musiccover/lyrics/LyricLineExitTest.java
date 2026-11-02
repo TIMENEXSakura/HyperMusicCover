@@ -69,7 +69,7 @@ public class LyricLineExitTest {
         exits.step(lines, 900, 100L, true, false, true);
         capture(exits, 0, 400f);
         LyricFocus focus = new LyricFocus();
-        focus.update(lines, 1100, 1, 1);
+        focus.update(lines, 1100, 1, 1, 1);
         assertFalse(focus.contains(0));
         exits.step(lines, 1100, 300L, true, false, true);
         assertFalse(exits.row(0).departing());
@@ -86,7 +86,9 @@ public class LyricLineExitTest {
         assertFalse(exits.row(0).departing());
         exits.step(lines, 1800, 1000L, true, false, true);
         assertTrue(exits.row(0).waitingForTop());
-        assertTrue(exits.startAtTop(0, 320f, 300f, 40f, 1000L));
+        assertFalse(exits.startAtTop(0, 320f, 300f, 40f, 1000L));
+        exits.step(lines, 1800, 1000L + LyricLineExit.LAST_LINE_WAIT_MS, true, false, true);
+        assertTrue(exits.row(0).departing());
     }
 
     @Test public void forwardSeekDoesNotReplayEveryCrossedEndAndBackwardSeekCanSingAgain() {
@@ -115,11 +117,12 @@ public class LyricLineExitTest {
         capture(exits, 0, 400f);
         exits.step(lines, 1000, 200L, false, false, true);
         assertTrue(exits.row(0).waitingForTop());
-        assertTrue(exits.startAtTop(0, 320f, 300f, 40f, 200L));
+        assertFalse(exits.startAtTop(0, 320f, 300f, 40f, 200L));
+        exits.step(lines, 1000, 1400L, false, false, true);
         assertTrue(exits.moving());
-        exits.step(lines, 1000, 350L, false, false, true);
-        assertEquals(0.5f, exits.row(0).alpha(350L), 0f);
-        exits.step(lines, 1000, 500L, false, false, true);
+        exits.step(lines, 1000, 1550L, false, false, true);
+        assertEquals(0.5f, exits.row(0).alpha(1550L), 0f);
+        exits.step(lines, 1000, 1700L, false, false, true);
         assertTrue(exits.row(0).finished);
         assertFalse(exits.moving());
     }
@@ -148,16 +151,18 @@ public class LyricLineExitTest {
         exits.step(lines, 900, 100L, true, false, true);
         capture(exits, 0, 400f);
         exits.step(lines, 1000, 200L, true, false, true);
-        assertTrue(exits.startAtTop(0, 320f, 300f, 40f, 200L));
+        assertFalse(exits.startAtTop(0, 320f, 300f, 40f, 200L));
+        exits.step(lines, 1000, 1400L, true, false, true);
         exits.finishForLayout();
         assertTrue(exits.row(0).finished);
         assertTrue(exits.row(0).departing());
-        exits.step(lines, 50, 300L, true, false, true);
+        exits.step(lines, 50, 1500L, true, false, true);
         assertFalse(exits.row(0).departing());
         capture(exits, 0, 500f);
-        exits.step(lines, 1000, 1250L, true, false, true);
+        exits.step(lines, 1000, 2450L, true, false, true);
         assertTrue(exits.row(0).waitingForTop());
-        assertTrue(exits.startAtTop(0, 320f, 300f, 40f, 1250L));
+        exits.step(lines, 1000, 3650L, true, false, true);
+        assertTrue(exits.row(0).departing());
         exits.reset(1); // a different song can have the same row count
         assertFalse(exits.row(0).departing());
         assertFalse(exits.row(0).captured);
@@ -226,6 +231,57 @@ public class LyricLineExitTest {
         assertEquals(-1L, exits.finalWakeAt());
         assertFalse(exits.row(0).departing());
         assertFalse(exits.startAtTop(0, 300f, 300f, 40f, 1600L));
+    }
+
+    @Test public void finalLineAtTopRemainsVisibleUntilTimedFade() {
+        List<LyricLine> lines = Arrays.asList(line(0, 1000));
+        LyricLineExit exits = new LyricLineExit();
+        exits.step(lines, 900, 100L, true, false, true);
+        capture(exits, 0, 250f);
+        exits.step(lines, 1000, 200L, true, false, true);
+        assertFalse(exits.startAtTop(0, 250f, 300f, 40f, 200L));
+        assertFalse(exits.row(0).departing());
+        exits.step(lines, 1000, 1400L, true, false, true);
+        assertTrue(exits.row(0).departing());
+        assertEquals(1f, exits.row(0).alpha(1400L), 0f);
+        assertEquals(0.5f, exits.row(0).alpha(1550L), 0f);
+    }
+
+    @Test public void delayedFinalTickCanStillStartTheFadeAfterPlaybackStops() {
+        List<LyricLine> lines = Arrays.asList(line(0, 1000));
+        LyricLineExit exits = new LyricLineExit();
+        exits.step(lines, 900, 100L, true, false, true);
+        capture(exits, 0, 500f);
+        exits.step(lines, 1800, 1000L, false, false, true);
+        assertTrue(exits.row(0).waitingForTop());
+        exits.step(lines, 1800, 2200L, false, false, true);
+        assertTrue(exits.row(0).departing());
+    }
+
+    @Test public void pausingBeforeFinalLineEndsNeverStartsTheFade() {
+        List<LyricLine> lines = Arrays.asList(line(0, 1000));
+        LyricLineExit exits = new LyricLineExit();
+        exits.step(lines, 900, 100L, true, false, true);
+        capture(exits, 0, 500f);
+        exits.step(lines, 900, 200L, false, false, true);
+        exits.step(lines, 900, 3000L, false, false, true);
+        assertFalse(exits.row(0).waitingForTop());
+        assertFalse(exits.row(0).departing());
+        assertEquals(-1L, exits.finalWakeAt());
+    }
+
+    @Test public void oldObservationAndSeekNeverReplayAFinalExit() {
+        List<LyricLine> lines = Arrays.asList(line(0, 1000));
+        LyricLineExit exits = new LyricLineExit();
+        exits.step(lines, 900, 100L, true, false, true);
+        capture(exits, 0, 500f);
+        exits.step(lines, 1800, 5000L, true, false, true);
+        assertFalse(exits.row(0).waitingForTop());
+        exits.reset(1);
+        exits.step(lines, 900, 100L, true, false, true);
+        capture(exits, 0, 500f);
+        exits.step(lines, 1800, 1000L, true, true, true);
+        assertFalse(exits.row(0).waitingForTop());
     }
 
     @Test public void exitStartsAtLastLiveOpacityEvenWhenLongLineIsClippedAtTop() {

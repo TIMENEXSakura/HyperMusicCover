@@ -10,6 +10,10 @@ final class LyricLineExit {
     static final float END_SCALE = 0.85f;
     // Line-timed lyrics wake at most every 500ms. Returning from sleep must not replay old exits.
     private static final int MAX_END_LAG_MS = 600;
+    // A busy UI can delay the final tick. Allow a little more time only for the last row,
+    // provided the previous observation was recent rather than from before screen sleep.
+    private static final int LAST_END_LAG_MS = 1500;
+    private static final long LAST_OBSERVATION_AGE_MS = 1600L;
 
     static final class Row {
         float x, y, scale, alpha, emphasis, lit, blur;
@@ -31,6 +35,7 @@ final class LyricLineExit {
 
     private Row[] rows = new Row[0];
     private int previousPosition = -1;
+    private long previousAt = -1L;
     private boolean previouslyPlaying;
     private boolean seeking;
 
@@ -38,6 +43,7 @@ final class LyricLineExit {
         rows = new Row[Math.max(0, count)];
         for (int i = 0; i < rows.length; i++) rows[i] = new Row();
         previousPosition = -1;
+        previousAt = -1L;
         previouslyPlaying = false;
         seeking = false;
     }
@@ -96,15 +102,20 @@ final class LyricLineExit {
             }
             LyricLine line = lines.get(i);
             int start = LyricFocus.startOf(line), end = LyricFocus.endOf(line);
+            long lag = (long) position - end;
+            boolean lateFinal = i == rows.length - 1 && lag <= LAST_END_LAG_MS
+                    && previousAt >= 0L && now >= previousAt
+                    && now - previousAt <= LAST_OBSERVATION_AGE_MS;
             if ((!playing && !previouslyPlaying) || !animate || seek || !row.captured || end <= start
                     || previousPosition < start || previousPosition >= end || position < end
-                    || (long) position - end > MAX_END_LAG_MS) continue;
+                    || (lag > MAX_END_LAG_MS && !lateFinal)) continue;
             // Being finished is permission to exit, not a command to freeze midway down the
             // screen. Keep following the list until the last drawn pose reaches its upper edge.
             row.readyAt = now;
             changed = true;
         }
         previousPosition = position;
+        previousAt = now;
         previouslyPlaying = playing;
         seeking = seek;
         return changed;
@@ -131,6 +142,10 @@ final class LyricLineExit {
         if (row == null) return false;
         float previousRelativeY = row.relativeY;
         row.relativeY = relativeY;
+        // There is no later row to push the final line away. In particular a tall, wrapped
+        // final lyric may already touch the clip while singing; keep it at its live pose
+        // through the normal hold and let the timed fallback start the fade.
+        if (index == rows.length - 1) return false;
         if (!row.waitingForTop() || !row.captured
                 || top > clipTop + Math.max(0f, fade)) return false;
         if (morphing && (!Float.isFinite(previousRelativeY) || !Float.isFinite(relativeY)
