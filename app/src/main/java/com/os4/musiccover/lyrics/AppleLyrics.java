@@ -58,7 +58,7 @@ public final class AppleLyrics {
      * previous build - and a change that only shows up as a line NOT being logged looks
      * identical to not having loaded at all. It cost a round trip once.
      */
-    private static final String BUILD = "native-voices-2";
+    private static final String BUILD = "native-voices-3";
 
     /** The player's package, and the only process this class ever runs in. */
     public static final String PKG = "com.apple.android.music";
@@ -95,14 +95,10 @@ public final class AppleLyrics {
 
     /** The session Apple Music is publishing through, so a late lyric can be pushed into it. */
     private static volatile Object sSession;
-    /** The store id of whatever was last set on that session, and its title. */
-    private static volatile String sPlayingId;
-    private static volatile String sPlayingTitle;
-    /** The id the last built lyric belongs to, and the payload built from it. */
-    private static volatile String sHeldId;
-    private static volatile String sHeldPayload;
-    /** Set while we are re-publishing, so our own setMetadata does not re-enter the hook. */
-    private static volatile boolean sPublishing;
+    private static final AppleLyricStore LYRICS = new AppleLyricStore();
+    // Serializes real metadata changes with republishing. Session commands only read LYRICS.
+    private static final Object PUBLISH_LOCK = new Object();
+    private static boolean sPublishing;
     private static volatile Requester sRequester;
 
     // ---------------------------------------------------------------- hot reload (Step 0)
@@ -114,32 +110,13 @@ public final class AppleLyrics {
      * stays empty until the next track, which is indistinguishable from a broken adoption.
      */
 
-    public static String heldId() {
-        return sHeldId;
+    public static Object[] saveState() {
+        return LYRICS.save();
     }
 
-    public static String heldPayload() {
-        return sHeldPayload;
-    }
-
-    public static String playingId() {
-        return sPlayingId;
-    }
-
-    public static String playingTitle() {
-        return sPlayingTitle;
-    }
-
-    public static void adoptState(String heldId, String heldPayload,
-                                  String playingId, String playingTitle) {
-        sHeldId = heldId;
-        sHeldPayload = heldPayload;
-        sPlayingId = playingId;
-        sPlayingTitle = playingTitle;
-        if (heldId != null) {
-            note("adopted held lyric for " + heldId
-                    + (heldPayload == null ? " (no payload)" : " (" + heldPayload.length() + " chars)"));
-        }
+    public static void adoptState(String heldId, String heldPayload, String playingId,
+                                  String playingTitle, String duet, String replacedPlain) {
+        LYRICS.adopt(heldId, heldPayload, playingId, playingTitle, duet, replacedPlain);
     }
 
     // ---------------------------------------------------------------- hook 1: the session
@@ -158,45 +135,39 @@ public final class AppleLyrics {
         Method m = android.media.session.MediaSession.class
                 .getDeclaredMethod("setMetadata", MediaMetadata.class);
         Xp.hook("apple.lyrics.set_metadata", m, (XposedInterface.Hooker) chain -> {
-            try {
-                if (!sPublishing) {
-                    onMetadata(chain.getThisObject(), chain.getArgs());
+            String request = null;
+            Object result;
+            synchronized (PUBLISH_LOCK) {
+                try {
+                    if (!sPublishing) request = onMetadata(chain.getThisObject(), chain.getArgs());
+                } catch (Throwable t) {
+                    note("onMetadata failed: " + t);
                 }
-            } catch (Throwable t) {
-                note("onMetadata failed: " + t);
+                result = chain.proceed();
             }
-            return chain.proceed();
+            Requester requester = sRequester;
+            if (request != null && requester != null) requester.request(request);
+            return result;
         });
     }
 
-    private static void onMetadata(Object session, List<Object> args) {
-        if (session != null) {
-            sSession = session;
+    private static String onMetadata(Object session, List<Object> args) {
+        Object first = args.isEmpty() ? null : args.get(0);
+        if (!(first instanceof MediaMetadata)) {
+            if (first == null && session == sSession) {
+                sSession = null;
+                LYRICS.clear();
+            }
+            return null;
         }
-        Object a0 = args.isEmpty() ? null : args.get(0);
-        if (!(a0 instanceof MediaMetadata)) {
-            return;
-        }
-        MediaMetadata md = (MediaMetadata) a0;
-        String id = md.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
-        if (id == null || id.isEmpty()) {
-            return;
-        }
-        sPlayingId = id;
-        sPlayingTitle = md.getString(MediaMetadata.METADATA_KEY_TITLE);
-        if (id.equals(sHeldId) && sHeldPayload != null) {
-            // Already built, from a previous play of this track. Attach it on the way past,
-            // which is cheaper and earlier than publishing it again afterwards.
-            inject(md, id, sHeldPayload);
-            return;
-        }
-        // Not built yet. Apple only builds a lyric when its own lyric page asks for one, so
-        // left alone this would never fire for a track the person does not open that page for -
-        // which is every track, when the phone is locked.
-        Requester r = sRequester;
-        if (r != null) {
-            r.request(id);
-        }
+        MediaMetadata md = (MediaMetadata) first;
+        String id = clean(md.getString(MediaMetadata.METADATA_KEY_MEDIA_ID));
+        if (id == null) return null;
+        sSession = session;
+        AppleLyricStore.Snapshot lyric = LYRICS.playing(id, md.getString(MediaMetadata.METADATA_KEY_TITLE));
+        if (lyric == null) return id;
+        inject(md, lyric);
+        return null;
     }
 
     // ---------------------------------------------------------------- hook 2: the lyric
@@ -233,7 +204,9 @@ public final class AppleLyrics {
 
     /** A built song: read it, turn it into a payload, and get it onto the session. */
     private static void onSong(Object song) {
-        String id = str(call(song, "getAdamId"));
+        String id = clean(str(call(song, "getAdamId")));
+        if (id == null) return;
+        AppleLyricStore.Capture capture = LYRICS.begin(id);
         List<Line> lines = readLines(song);
         List<String> voices = readVoices(song, lines);
         note("agents: " + describeAgents(song) + " -> voices=" + voices);
@@ -249,19 +222,28 @@ public final class AppleLyrics {
             note("song " + id + ": " + lines.size() + " lines with no timing, not published");
             return;
         }
-        String payload = payload(id, lines, voices);
-        sHeldId = id;
-        sHeldPayload = payload;
+        String payload = payload(id, lines, voices, capture.title);
+        boolean duet = hasSecondLead(lines, voices);
+        synchronized (PUBLISH_LOCK) {
+            AppleLyricStore.Snapshot selected = LYRICS.offer(capture, payload, duet);
+            if (selected != null) republish(selected);
+        }
         note("song " + id + ": " + lines.size() + " lines, "
                 + (lines.get(0).words.isEmpty() ? "line-timed" : "word-timed")
                 + (voices.size() >= 2 ? ", duet(" + voices.size() + ")" : "")
                 + ", bg=" + bgLines(lines)
                 + ", first=" + lines.get(0).describe());
-        // The track this belongs to is the one playing, so the session is holding a metadata
-        // without it. Publishing again is what the lock screen's re-read is there to catch.
-        if (id != null && id.equals(sPlayingId)) {
-            republish(payload);
+    }
+
+    static boolean hasSecondLead(List<Line> lines, List<String> voices) {
+        if (voices.size() < 2) return false;
+        String second = voices.get(1);
+        for (Line l : lines) {
+            if (l.text.isEmpty()) continue;
+            if (second.equals(l.agent)) return true;
+            if (l.agent == null) for (Word w : l.words) if (second.equals(w.agent)) return true;
         }
+        return false;
     }
 
     // ---------------------------------------------------------------- reading Apple's objects
@@ -619,6 +601,10 @@ public final class AppleLyrics {
      * for simply gets no rawLyric, and the line-timed copy is what shows.
      */
     static String payload(String id, List<Line> lines, List<String> voices) {
+        return payload(id, lines, voices, null);
+    }
+
+    private static String payload(String id, List<Line> lines, List<String> voices, String title) {
         StringBuilder plain = new StringBuilder();
         StringBuilder word = new StringBuilder();
         StringBuilder trans = new StringBuilder();
@@ -653,7 +639,6 @@ public final class AppleLyrics {
         // believes one - see LyricSource.infoFor(). Apple publishes an ordinary title, so this
         // is a real check here rather than the dead weight it is on a player that writes
         // something else into that field.
-        String title = sPlayingTitle;
         if (title != null && !title.isEmpty()) {
             json.append(",\"songName\":").append(quote(title));
         }
@@ -874,11 +859,11 @@ public final class AppleLyrics {
      * Put the reference to the payload into a metadata on its way out, without disturbing
      * anything else in it. The payload itself is handed over on request - see hookCommand.
      */
-    private static void inject(MediaMetadata md, String id, String payload) {
+    private static void inject(MediaMetadata md, AppleLyricStore.Snapshot snapshot) {
         try {
             Bundle b = (Bundle) Xp.getObjectField(md, "mBundle");
-            if (b != null && id != null) {
-                b.putString(LyricSource.KEY_LYRIC_REF, LyricSource.lyricRef(id, payload));
+            if (b != null) {
+                b.putString(LyricSource.KEY_LYRIC_REF, snapshot.ref);
             }
         } catch (Throwable t) {
             note("could not attach to the metadata: " + t);
@@ -893,7 +878,7 @@ public final class AppleLyrics {
      * The framework treats that as an ordinary metadata change, which is exactly what the lock
      * screen's re-read was built to notice.
      */
-    private static void republish(String payload) {
+    private static void republish(AppleLyricStore.Snapshot lyric) {
         Object session = sSession;
         if (session == null) {
             note("no session to publish to");
@@ -906,15 +891,18 @@ public final class AppleLyrics {
                 note("session is holding no metadata to revise");
                 return;
             }
-            inject((MediaMetadata) md, sHeldId, payload);
+            MediaMetadata old = (MediaMetadata) md;
+            if (!lyric.id.equals(old.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))) return;
+            MediaMetadata next = new MediaMetadata.Builder(old)
+                    .putString(LyricSource.KEY_LYRIC_REF, lyric.ref).build();
             sPublishing = true;
             try {
                 session.getClass().getMethod("setMetadata", MediaMetadata.class)
-                        .invoke(session, md);
+                        .invoke(session, next);
             } finally {
                 sPublishing = false;
             }
-            note("published the reference to " + payload.length() + " chars to the session");
+            note("published the reference to " + lyric.payload.length() + " chars to the session");
         } catch (Throwable t) {
             sPublishing = false;
             note("republish failed: " + t);
@@ -943,18 +931,16 @@ public final class AppleLyrics {
             android.os.ResultReceiver cb = (android.os.ResultReceiver) args.get(3);
             Bundle asked = (Bundle) args.get(2);
             String ref = asked == null ? null : asked.getString(LyricSource.KEY_LYRIC_REF);
-            String id = sHeldId;
-            String payload = sHeldPayload;
-            boolean have = ref != null && id != null && payload != null
-                    && ref.equals(LyricSource.lyricRef(id, payload));
+            AppleLyricStore.Snapshot lyric = LYRICS.held();
+            boolean have = lyric != null && lyric.ref.equals(ref);
             if (cb != null) {
                 Bundle out = new Bundle();
                 if (have) {
-                    out.putString("lyricInfo", payload);
+                    out.putString("lyricInfo", lyric.payload);
                 }
                 cb.send(have ? 0 : 1, out);
             }
-            note("asked for " + ref + (have ? ", sent " + payload.length() + " chars" : ", not held"));
+            note("asked for " + ref + (have ? ", sent " + lyric.payload.length() + " chars" : ", not held"));
             return null;
         });
     }
@@ -973,17 +959,18 @@ public final class AppleLyrics {
     private static final class Requester {
         private final ClassLoader cl;
         private volatile Object vm;
-        private volatile String last;
+        private long requestedEpoch = -1;
 
         Requester(ClassLoader cl) {
             this.cl = cl;
         }
 
         void request(String id) {
-            if (id == null || id.isEmpty() || id.equals(last)) {
-                return;
+            long epoch = LYRICS.missingEpoch(id);
+            synchronized (this) {
+                if (epoch < 0 || epoch <= requestedEpoch) return;
+                requestedEpoch = epoch;
             }
-            last = id;
             try {
                 Class<?> songCls = cl.loadClass("com.apple.android.music.model.Song");
                 Object song = songCls.newInstance();

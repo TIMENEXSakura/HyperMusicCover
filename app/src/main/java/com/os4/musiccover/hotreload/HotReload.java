@@ -305,10 +305,7 @@ public final class HotReload {
     private static Object[][] saveFeatures(String proc) {
         List<Object[]> out = new ArrayList<>();
         if (AppleLyrics.PKG.equals(proc)) {
-            out.add(new Object[]{"apple", new Object[]{
-                    AppleLyrics.heldId(), AppleLyrics.heldPayload(),
-                    AppleLyrics.playingId(), AppleLyrics.playingTitle(),
-            }});
+            out.add(new Object[]{"apple", AppleLyrics.saveState()});
         }
         if ("com.android.systemui".equals(proc)) {
             // What the state file cannot say and the new generation cannot look up again the
@@ -614,7 +611,7 @@ public final class HotReload {
         for (Object[] f : state.features) {
             if (!"apple".equals(f[0]) || !(f[1] instanceof Object[])) continue;
             Object[] a = (Object[]) f[1];
-            AppleLyrics.adoptState(str(a, 0), str(a, 1), str(a, 2), str(a, 3));
+            AppleLyrics.adoptState(str(a, 0), str(a, 1), str(a, 2), str(a, 3), str(a, 4), str(a, 5));
         }
     }
 

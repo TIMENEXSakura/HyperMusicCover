@@ -74,7 +74,18 @@ def dismiss_launcher_anr(root):
     return True
 
 
-def locate(options, scroll=False, bottom_tab=False):
+def edge_of_page(area, height):
+    # Compose exposes scrolled rows underneath the status bar and large/collapsed app bar.
+    # The root also extends behind the navigation bar. Both can intercept an otherwise valid tap.
+    y = (area[1] + area[3]) // 2
+    if y < height * .16:
+        return "up"
+    if y > height * .90:
+        return "down"
+    return None
+
+
+def locate(options, scroll=False, bottom_tab=False, for_tap=False):
     last_labels = []
     for index in range(22 if scroll else 12):
         try:
@@ -91,21 +102,30 @@ def locate(options, scroll=False, bottom_tab=False):
         if bottom_tab:
             visible_nodes.sort(key=lambda node: bounds(node)[3], reverse=True)
         last_labels = [node.get("text") or node.get("content-desc") for node in visible_nodes]
+        viewport_height = max((bounds(node)[3] for node in visible_nodes), default=2400)
+        reveal = None
         for option in options:
             for node in visible_nodes:
                 values = [node.get("text", ""), node.get("content-desc", "")]
                 # A merged Compose button sometimes exposes the role and sample on separate lines.
                 if not any(option == line.strip() for value in values for line in value.splitlines()):
                     continue
-                return bounds(node)
-        if scroll and index >= 1:
+                area = bounds(node)
+                edge = edge_of_page(area, viewport_height) if scroll and for_tap else None
+                if edge:
+                    reveal = edge
+                    continue
+                return area
+        if reveal:
+            swipe(reveal, short=True)
+        elif scroll and index >= 1:
             swipe("up" if scroll == "up" else "down")
         time.sleep(0.5)
     raise AssertionError(f"Could not locate {options} in {activity()}: {list(filter(None, last_labels))}")
 
 
 def tap(options, scroll=False, bottom_tab=False):
-    x1, y1, x2, y2 = locate(options, scroll, bottom_tab)
+    x1, y1, x2, y2 = locate(options, scroll, bottom_tab, for_tap=True)
     shell("input", "tap", (x1 + x2) // 2, (y1 + y2) // 2)
     time.sleep(0.45)
 
@@ -122,10 +142,12 @@ def start_main():
         raise AssertionError(result)
 
 
-def swipe(direction):
-    # Swipe along the page margin so a horizontal preference slider cannot take the gesture.
-    start, end = (1840, 1010) if direction == "down" else (1010, 1840)
-    shell("input", "swipe", 1050, start, 1050, end, 380)
+def swipe(direction, short=False):
+    # A slower nudge moves an already located edge row out from behind the bars without
+    # flinging it past the other end. The long swipe is for searching through the list.
+    lo, hi = (1060, 1530) if short else (1010, 1840)
+    start, end = (hi, lo) if direction == "down" else (lo, hi)
+    shell("input", "swipe", 1050, start, 1050, end, 540 if short else 380)
     time.sleep(0.25)
 
 
@@ -139,9 +161,19 @@ def open_lyrics_tab():
 
 
 def enter_editor():
-    tap(labels("lyrics_style_title"), scroll="up")
-    locate(labels("lyric_editor_sample_lead"))
-    assert "LyricStyleActivity" in activity(), activity()
+    for attempt in range(2):
+        tap(labels("lyrics_style_title"), scroll="up")
+        for _ in range(8):
+            current = activity()
+            if "LyricStyleActivity" in current:
+                locate(labels("lyric_editor_sample_lead"))
+                return
+            time.sleep(.25)
+        if "CoverActivity" not in current:
+            raise AssertionError(f"Unexpected activity opening lyric colours: {current}")
+        if attempt == 0:
+            print("Cover screen still resumed; locating its entry again", flush=True)
+    raise AssertionError(f"Lyric colour entry did not open the editor: {current}")
 
 
 def return_to_lyrics():

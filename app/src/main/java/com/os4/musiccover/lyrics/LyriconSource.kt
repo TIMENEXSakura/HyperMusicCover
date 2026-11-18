@@ -406,6 +406,7 @@ object LyriconSource {
             sb.append(" song=").append(song.name).append(" / ").append(song.artist)
                 .append(" / ").append(song.duration).append("ms")
                 .append(" lines=").append(lines).append(" wordLines=").append(words)
+                .append(" alignedRightRows=").append(song.lyrics?.count { it.isAlignedRight } ?: 0)
         }
         sError?.let { sb.append(" lastError=").append(it) }
         return sb.toString()

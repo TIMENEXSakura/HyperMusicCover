@@ -2010,8 +2010,16 @@ public final class LockLyrics {
         LyricView v = sView;
         View c = Main.sContainer;
         View card = card();
+        // The capsule may temporarily detach the view while playback and its track cache continue.
+        Cached cached = sLines.isEmpty() ? CACHE.get(sKey) : null;
+        List<LyricLine> available = cached == null ? sLines : cached.lines;
+        int duetRows = 0;
+        for (LyricLine line : available) {
+            if (line.voice(true) == LyricLine.Voice.DUET) duetRows++;
+        }
         return "enabled=" + Settings.LYRICS.on() + " tap=" + (sTapHidden ? "hidden" : "shown")
                 + " demo=" + sDemo + " key=" + sKey + " lines=" + sLines.size()
+                + " availableRows=" + available.size() + " duetRows=" + duetRows
                 + " has=" + hasLyrics() + " loading=" + sLoading
                 + " (" + sWhy + ") src=" + srcName(sSource)
                 + " sessionHasLyric=" + LyricSource.hasLyricInfo(sController)

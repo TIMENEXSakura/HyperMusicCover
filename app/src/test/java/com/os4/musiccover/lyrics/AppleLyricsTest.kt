@@ -41,6 +41,21 @@ class AppleLyricsTest {
         return (0 until ps.length).map { ps.item(it) as Element }
     }
 
+    @Test fun onlyAnActualSecondLeadCountsForTheNativeSnapshot() {
+        val agents = Vec(Agent("v1", 1), Agent("v2", 5))
+        fun isDuet(row: Row): Boolean {
+            val song = Song(Vec(Section(Vec(row))), agents)
+            val lines = AppleLyrics.readLines(song)
+            return AppleLyrics.hasSecondLead(lines, AppleLyrics.readVoices(song, lines))
+        }
+        assertFalse(isDuet(Row("唱", 1000, 2000, "v1",
+            backing = Vec(Word("和", 1200, 1800, "v2")))))
+        assertFalse(isDuet(Row("", 1000, 2000, "v2", bg = "和")))
+        assertTrue(isDuet(Row("答", 1000, 2000, "v2")))
+        assertTrue(isDuet(Row("问答", 1000, 2000,
+            words = Vec(Word("问", 1000, 2000, "v1"), Word("答", 1000, 2000, "v2")))))
+    }
+
     @Test fun numericOtherCanSingSecondButNumericGroupCannot() {
         val payload = extract(Vec(Agent("lead", 1), Agent("ensemble", 3), Agent("guest", 5)),
             Row("一起", 1000, 2000, "ensemble"),
