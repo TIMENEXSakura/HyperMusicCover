@@ -1976,16 +1976,6 @@ internal class MiniPlayerController(
         return out
     }
 
-    /**
-     * The music's island at rest: the small island's circle when the music sits there, else the
-     * pill's rest box - the music is in its card now, so neither is drawn where it will be.
-     */
-    fun musicIslandHomeOnScreen(): FloatArray? {
-        val box = if (smallKey == MUSIC_ISLAND && smallIsland != null) smallBoxOnScreen()
-            else player?.restBoxOnScreen() ?: return null
-        return floatArrayOf(box.cx(), box.cy())
-    }
-
     /** The row can be shown and touched: with music, the media card has to be up; without, not. */
     private fun canShow(): Boolean =
         // The music on its way in or out of its card or the cover is not the row's to gate: the

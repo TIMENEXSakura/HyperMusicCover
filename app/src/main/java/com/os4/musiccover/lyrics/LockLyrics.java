@@ -73,10 +73,19 @@ public final class LockLyrics {
 
     public static boolean capsuleLayoutOrigin() { return sCapsuleLayoutOrigin; }
 
+    /** Apply an explicit page gesture before the scene changes its layout or clears the lyrics. */
+    public static void animatePageRequest(boolean visible) {
+        LyricView view = sView;
+        if (view == null) return;
+        if (visible) view.reopenPage();
+        else view.beginPageExit();
+    }
+
     /** Actual scene destruction/new non-capsule entry, not a card presentation handoff. */
     public static void resetCapsuleLayoutOrigin() { sCapsuleLayoutOrigin = false; }
     /** A new ordinary entry must not inherit the previous capsule's closing presentation. */
     public static void prepareStandardPresentation() {
+        animatePageRequest(true);
         resetCapsuleLayoutOrigin();
         sCapsuleFadeOnly = false;
     }
@@ -91,11 +100,11 @@ public final class LockLyrics {
 
     /** A capsule pull keeps the user's lyric choice, but shares the body's stable presentation. */
     public static void prepareCapsulePresentation() {
+        animatePageRequest(true);
         if (!sCapsuleLayoutOrigin) sContrastRequestId++;
         sCapsuleLayoutOrigin = true;
         sCapsuleFadeOnly = true;
         notePopOrigin(null);
-        notePopTarget(null);
         capsuleLayoutBottomOnScreen();
     }
 
@@ -106,6 +115,7 @@ public final class LockLyrics {
 
     /** Prepare the lyric request/cache before Main enters the chosen background scene. */
     public static void setCapsuleVisible(boolean visible, String key, MediaController controller) {
+        animatePageRequest(visible);
         sCapsulePreparation = false;
         sCapsulePage = visible;
         Main.setCapsuleArtworkOwner(visible, controller, key);
@@ -113,7 +123,6 @@ public final class LockLyrics {
         sTapHidden = !visible;
         sCapsuleFadeOnly = true;
         notePopOrigin(null);
-        notePopTarget(null);
         if (!visible) Main.clearCapsuleNavigationOverlay();
         show(visible, key, controller, "hidden by capsule");
         if (visible) capsuleLayoutBottomOnScreen();
@@ -888,30 +897,6 @@ public final class LockLyrics {
         if (at == 0L || SystemClock.uptimeMillis() - at > POP_ORIGIN_MS) return false;
         out[0] = sPopX;
         out[1] = sPopY;
-        return true;
-    }
-
-    /** The other way: where the island will be as the cover goes back into it. */
-    private static volatile float sPopToX = Float.NaN, sPopToY = Float.NaN;
-    private static volatile long sPopToAt;
-
-    /** An exit into the mini player: centre is the island's home on screen, or null. */
-    public static void notePopTarget(float[] centre) {
-        if (centre == null) {
-            sPopToAt = 0L;
-            return;
-        }
-        sPopToX = centre[0];
-        sPopToY = centre[1];
-        sPopToAt = SystemClock.uptimeMillis();
-    }
-
-    static boolean takePopTarget(float[] out) {
-        long at = sPopToAt;
-        sPopToAt = 0L;
-        if (at == 0L || SystemClock.uptimeMillis() - at > POP_ORIGIN_MS) return false;
-        out[0] = sPopToX;
-        out[1] = sPopToY;
         return true;
     }
 
@@ -1858,6 +1843,7 @@ public final class LockLyrics {
     /** The app's switch. The setting: it is written to the state file and the app reads it back. */
     public static void setEnabled(boolean on, String key, MediaController c) {
         boolean hadCapsuleOwner = capsuleRequestActive();
+        if (on != Settings.LYRICS.on() || on && sTapHidden) animatePageRequest(on);
         Settings.LYRICS.set(on);
         if (!on) {
             sCapsulePreparation = false;
@@ -1886,13 +1872,15 @@ public final class LockLyrics {
      */
     public static void toggleByTap(String key, MediaController c) {
         if (!Settings.LYRICS.on()) return;
+        boolean showPage = sTapHidden;
+        animatePageRequest(showPage);
         if (!sCapsulePage) {
             resetCapsuleLayoutOrigin();
             sCapsuleFadeOnly = false;
         }
-        sTapHidden = !sTapHidden;
+        sTapHidden = !showPage;
         Xp.log(TAG + "two-finger tap: lyrics " + (sTapHidden ? "hidden" : "shown"));
-        show(!sTapHidden, key, c, "hidden by the two-finger tap");
+        show(showPage, key, c, "hidden by the two-finger tap");
         ModuleState.saveState();
     }
 

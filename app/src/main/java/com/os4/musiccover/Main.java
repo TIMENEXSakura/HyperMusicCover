@@ -3294,7 +3294,6 @@ public class Main extends XposedModule {
         // and without this the swipe up on the pill went to the plain card - the card up, the
         // cover still held off, no picture behind it (#63).
         MiniPlayerRuntime.rememberScene();
-        LockLyrics.notePopTarget(MiniPlayerRuntime.musicIslandHomeOnScreen());
         exitFromTap("island opened from the cover");
     }
 
@@ -3318,7 +3317,6 @@ public class Main extends XposedModule {
             else enterFromTap("mini player pulled back up", true);
         } else {
             if (!sCoverMode) return;
-            LockLyrics.notePopTarget(MiniPlayerRuntime.musicIslandHomeOnScreen());
             exitFromTap("mini player pulled back down");
         }
     }
@@ -4249,6 +4247,7 @@ public class Main extends XposedModule {
      * and the next thing the user plays then starts from the cover as it always did.
      */
     private static void exitFromTapNow(String why) {
+        LockLyrics.animatePageRequest(false);
         int from = LockLyrics.wantsAttached()
                 ? CoverMorphRoute.LYRICS : CoverMorphRoute.COVER;
         boolean pillMorph = MiniPlayerRuntime.prepareSceneExit();

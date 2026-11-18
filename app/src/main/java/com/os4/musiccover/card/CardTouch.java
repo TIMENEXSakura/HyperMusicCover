@@ -259,8 +259,6 @@ public final class CardTouch {
                     // shrinks the card into it.
                     MiniPlayerRuntime.preferMini();
                     MiniPlayerRuntime.rememberScene();
-                    // The lyrics go the same way, shrinking into the island's place.
-                    LockLyrics.notePopTarget(MiniPlayerRuntime.musicIslandHomeOnScreen());
                     Main.exitFromTap("media card swiped down");
                 } else if (!MiniPlayerRuntime.beginDrag(true, ev)) {
                     // No geometry to pull: the switch still happens, on its own spring.

@@ -1798,10 +1798,6 @@ object MiniPlayerRuntime {
         top
     }
 
-    /** Where the music's island will rest once back from its card, for the lyrics to go into. */
-    @JvmStatic fun musicIslandHomeOnScreen(): FloatArray? =
-        live().firstNotNullOfOrNull { it.musicIslandHomeOnScreen() }
-
     /** A notification's row in the stack, for ImmersiveHost: the open page's turn arrow is in it. */
     @JvmStatic fun rowOf(key: String): View? = live().firstNotNullOfOrNull { it.rowOf(key) }
 

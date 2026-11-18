@@ -25,7 +25,7 @@ jobs:
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
       - name: Check module entry points and record artifact identity
         run: |
-          jq -e '.elements[0] | .versionName == "0.9.57" and .versionCode == 957003' app/build/outputs/apk/release/output-metadata.json
+          jq -e '.elements[0] | .versionName == "0.9.57" and .versionCode == 957004' app/build/outputs/apk/release/output-metadata.json
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.57.apk
           cd dist
@@ -50,7 +50,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  editor:
+  render:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -63,8 +63,14 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build debuggable app for isolated preference fixture
-        run: ./gradlew --no-daemon :app:assembleDebug
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the isolated hardware rendering fixture
+        run: |
+          python -m pip install "Pillow>=10,<14" "numpy>=1.26,<3"
+          python tools/ci/page_exit_probe.py prepare
+          ./gradlew --no-daemon :app:assembleDebug
       - name: Enable the hosted runner's virtualisation device
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -79,11 +85,11 @@ jobs:
           heap-size: 384M
           profile: pixel_7
           disable-animations: true
-          script: python3 tools/ci/lyric_editor_smoke.py
+          script: python3 tools/ci/page_exit_probe.py run
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lyric-editor-diagnostics
-          path: diagnostics/
+          name: page-exit-render-diagnostics
+          path: page-exit-diagnostics/
           if-no-files-found: ignore
           retention-days: 14

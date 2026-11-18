@@ -10,6 +10,7 @@ import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.RenderNode;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -176,41 +177,16 @@ final class LyricView extends View {
     private static final float TAU_POP_SHOW = 0.03f;
     /** Out faster than in: the clock starts growing into the lyrics' space at once. */
     private static final float TAU_HIDE = 0.06f;
-    /**
-     * How far the lyrics float up into place as they appear, and back down as they leave.
-     *
-     * A wake already moves them: the band is measured from the clock's live ink, so on the way
-     * in from the AOD they ride the collapse down into place. A two-finger switch has no such
-     * movement behind it - cover mode is already on and the clock is already small - so the
-     * lyrics simply materialised where they were going to be. This gives the switch the same
-     * arrival, and the same departure in reverse.
-     *
-     * Driven by `show` rather than by a timer of its own, so the movement and the fade are the
-     * same event: in on TAU_SHOW, out on TAU_HIDE, and an arrival interrupted half way turns
-     * around from where it is instead of from the far end.
-     */
+    /** The regular page's arrival rises into the band; explicit dismissals freeze its position. */
     private static final float FLOAT_DP = 26f;
     private static final float CAPSULE_ENTRY_DP = 36f;
 
-    /*
-     * The lyrics and the mini player's island, both ways: ColorOS's capsule-to-immersive entry
-     * for its multi-line lyrics and its way back (SystemUIPlugin w6.i). In, the block starts on
-     * the island's centre at 0.6 of its size, transparent and blurred, and springs home (w6.f.k);
-     * out, it shrinks to 0.1 into where the island will be, fading and blurring (w6.f.g). Each
-     * property is its own spring, stepped per frame, so an arrival or a departure turned round
-     * half way goes back from where it is with the speed it has. (response, bounce) as PageSpring.
-     */
-    private static final float POP_SCALE_IN = 0.6f, POP_SCALE_OUT = 0.1f;
+    /** Island-origin entrance springs (response, bounce). */
+    private static final float POP_SCALE_IN = 0.6f;
     private static final float[] POP_IN_MOVE = {0.52f, 0.21f}, POP_IN_ALPHA = {0.1f, 0f},
             POP_IN_SCALE = {0.5f, 0.2f}, POP_IN_BLUR = {0.2f, 0f};
-    private static final float[] POP_OUT_MOVE = {0.35f, 0f}, POP_OUT_ALPHA = {0.25f, 0f},
-            POP_OUT_SCALE = {0.3f, 0f}, POP_OUT_BLUR = {0.3f, 0f};
-    /** ColorOS blurs from and to 200px on its ~3.5 density. */
     private static final float POP_BLUR_DP = 57f;
-    /** A departure is over once it is this faint, or after this long whatever it looks like. */
-    private static final float POP_OUT_GONE = 0.004f;
-    private static final long POP_OUT_MAX_MS = 1200L;
-    private static final int POP_NONE = 0, POP_IN = 1, POP_OUT = 2, POP_HOLD = 3;
+    private static final int POP_NONE = 0, POP_IN = 1, POP_HOLD = 2;
 
     /** A gap between lines at least this long gets the interlude dots. */
     private static final int LULL_MS = 4000;
@@ -367,12 +343,7 @@ final class LyricView extends View {
     private int focusKey = Integer.MIN_VALUE;
     private int ms;
     private float show;
-    /**
-     * The island pop (POP_*): which way it is going, when a departure began, and whether this
-     * showing is the pop's - that takes the float out for all of it, arrival to departure, and
-     * lasts until the page has faded to nothing. HOLD is an arrival cut short by anything but
-     * the island: the springs stop where they are and the page fades as any other does.
-     */
+    /** HOLD pauses an unfinished island entrance while the clock temporarily hides it. */
     private int popMode = POP_NONE;
     /** One transform for the whole lyric group; it never enters the per-line layout. */
     private final LyricGestureFeedback gestureFeedback = new LyricGestureFeedback();
@@ -406,12 +377,21 @@ final class LyricView extends View {
     private boolean morphIndependentKnown, morphIndependent;
     private float musicCardProgress;
     private boolean popped;
-    private long popOutAt;
+    private final LyricPageExit pageExit = new LyricPageExit();
+    private final LyricPageExitMask pageMask = new LyricPageExitMask();
+    private final LyricPageExitMask.Content departingPage = this::drawDepartingPage;
+    private RenderNode pagePicture;
+    private boolean closingPage;
+    private String lastPageTrack;
+    private long lastPageDrawAt;
+    private float lastFloatOffset, lastPageAnchor, lastPageScale, lastPageOffset;
+    private float lastBandTop, lastBandBottom;
+    private int lastPageWidth, lastPageHeight;
     private final float[] popPoint = new float[2];
     /** Offsets from home in this view's pixels, the scale, the alpha and the blur radius. */
     private final Spring popX = new Spring(), popY = new Spring(), popS = new Spring(1f),
             popA = new Spring(1f), popB = new Spring();
-    private float popToX, popToY, popBlur;
+    private float popBlur;
     private float bandTop, bandBottom;
     /** Extra row slots retained while an overlapping line is still on screen. */
     private boolean[] overlapSlots = new boolean[0];
@@ -534,6 +514,7 @@ final class LyricView extends View {
      * left one - the next step starts afresh rather than integrating the whole time parked.
      */
     void rejoin() {
+        resetPageExit();
         gestureFeedback.reset();
         entryMotion.reset();
         fixedCapsuleBand.clear();
@@ -624,6 +605,7 @@ final class LyricView extends View {
     @Override
     protected void onDetachedFromWindow() {
         cancelLayout();
+        resetPageExit();
         gestureFeedback.reset();
         entryMotion.reset();
         fixedCapsuleBand.clear();
@@ -696,25 +678,18 @@ final class LyricView extends View {
         boolean gone = LyricWindow.owns(this) ? LockLyrics.lockScreenGone()
                 : LockLyrics.keyguardChildLeaving();
         boolean changed = followAodDim();
+        changed |= followHostAlpha(gone);
+        changed |= followBouncer(dt);
+        boolean still = LockLyrics.still();
+        pageWanted = LockLyrics.wantsWindow();
+        // Before gesture, band, entry, scroll or layout changes: the departing page keeps the
+        // exact group pose which was visible when the user closed it.
+        if (advancePageExit(now, still || gone || !Main.screenOnCached())) return true;
         // A paused line may have no movement to invalidate it. Observe color changes on the
         // existing tick/pre-draw as well, so ending navigation restores the saved colors.
         try { changed |= updateTint(); } catch (Throwable error) { reportDrawFailure(error); }
-        changed |= followHostAlpha(gone);
-        changed |= followBouncer(dt);
-        // Before the band below, which reads this view's scale.
         changed |= followSwipeZoom();
         int why = 0;
-        // The AOD's still mode: every frame here is one the display was let up for, and the next
-        // is a line away, so nothing eases - each value is put where it is heading. See
-        // LockLyrics.still().
-        boolean still = LockLyrics.still();
-        // Leaving the lock screen, in the window (LyricWindow): the keyguard is gone and the
-        // desktop is what is behind, so there is nothing left to fade against - the page goes on
-        // the frame the lock screen does rather than after it (user, 2026-09-29: "解锁的时候歌词
-        // 会有一瞬间的残留"). Gone is also "a leaving hook has fired", not only the keyguard
-        // reading unlocked: that reading lags the start of the OEM's exit animation, and the lag
-        // is the residue. As a child of the keyguard the lock screen takes the view with it.
-        pageWanted = LockLyrics.wantsWindow();
         float dtTo = still || gone ? Float.POSITIVE_INFINITY : dt;
         if (still || gone || !pageWanted && show == 0f) {
             changed |= gestureFeedback.scale() != 1f;
@@ -760,25 +735,20 @@ final class LyricView extends View {
         // Remember this before show advances: a late layout/clock measurement may make the
         // first visible frame exceed 0.02 already, but its group still needs its final fit.
         boolean startingPage = show < 0.02f;
-        if (turnPop(now, showTo, still || gone)) changed = true;
-        // Going into the island, the page stays up and the pop's alpha is its fade; coming out
-        // of it, `show` only carries the card's progress and the clock's alpha, so it goes
-        // straight there instead of easing.
-        if (popMode != POP_OUT) {
-            // Back from under the control centre: as quick as the way out, not the slow
-            // arrival a song's first lines get (#52, "淡入回来太慢了").
-            if (centreHeld && showTo <= show) centreHeld = showTo == 0f;
-            float tauShow = showTo < show ? TAU_HIDE : popMode == POP_IN ? TAU_POP_SHOW
-                    : centreHeld ? TAU_HIDE : TAU_SHOW;
-            float s = approach(show, showTo, dtTo, tauShow);
-            if (Math.abs(s - showTo) < 0.004f) s = showTo;
-            if (s != show) {
-                show = s;
-                changed = true;
-                why |= 4;
-            }
+        if (turnPop(showTo, still || gone)) changed = true;
+        // Back from under the control centre: as quick as the way out, not the slow
+        // arrival a song's first lines get (#52, "淡入回来太慢了").
+        if (centreHeld && showTo <= show) centreHeld = showTo == 0f;
+        float tauShow = showTo < show ? TAU_HIDE : popMode == POP_IN ? TAU_POP_SHOW
+                : centreHeld ? TAU_HIDE : TAU_SHOW;
+        float s = approach(show, showTo, dtTo, tauShow);
+        if (Math.abs(s - showTo) < 0.004f) s = showTo;
+        if (s != show) {
+            show = s;
+            changed = true;
+            why |= 4;
         }
-        if (stepPop(now, dt, showTo)) {
+        if (stepPop(dt, showTo)) {
             changed = true;
             why |= 4;
         }
@@ -793,7 +763,7 @@ final class LyricView extends View {
             Gen.postOn(this, new Runnable() {
                 @Override
                 public void run() {
-                    LockLyrics.detach(LyricView.this);
+                    if (show == 0f && !pageExit.active()) LockLyrics.detach(LyricView.this);
                 }
             });
             return changed;
@@ -1447,74 +1417,76 @@ final class LyricView extends View {
         }
     }
 
-    /**
-     * Where the pop goes next: out of the island on an arrival from it, into it on a departure
-     * towards it, and round again either way. Screen points from LockLyrics, each taken once.
-     *
-     * @return whether anything changed
-     */
-    private boolean turnPop(long now, float showTo, boolean cut) {
-        if (capsulePresentation()) {
-            // Body taps and upward capsule entries share one bounded whole-group arrival.
-            // Never add the old island-origin POP on top of that translation and scale.
+    /** Only an explicit user departure arms this transition. Effective page opacity alone cannot. */
+    void beginPageExit() {
+        if (lastPageDrawAt == 0 || show <= 0.003f || !bandOk || LockLyrics.still()
+                || !Main.screenOnCached() || !isAttachedToWindow() || getAlpha() <= 0f) return;
+        closingPage = true;
+        if (!pageExit.active()) pageExit.start(now());
+        kick();
+    }
+
+    void reopenPage() {
+        if (!pageExit.active()) return;
+        closingPage = false;
+        kick();
+    }
+
+    private boolean advancePageExit(long now, boolean cut) {
+        if (!pageExit.active()) return false;
+        String currentTrack = Main.trackKey();
+        boolean changedTrack = lastPageTrack != null && !lastPageTrack.isEmpty()
+                && currentTrack != null && !currentTrack.isEmpty() && !lastPageTrack.equals(currentTrack);
+        if (cut || changedTrack || getWidth() != lastPageWidth || getHeight() != lastPageHeight) {
+            if (!pageWanted) show = 0f;
+            resetPageExit();
+            return false;
+        }
+        pageExit.step(now, closingPage);
+        if (pageExit.active()) return true;
+        if (pageExit.closed()) {
+            show = 0f;
+            entryMotion.reset();
+            gestureFeedback.reset();
+            if (popped) endPop("page closed");
+            popped = false;
+        }
+        resetPageExit();
+        return false;
+    }
+
+    private void resetPageExit() {
+        pageExit.reset();
+        if (pagePicture != null) pagePicture.discardDisplayList();
+        lastPageDrawAt = 0;
+        lastPageTrack = null;
+    }
+
+    /** The original island entrance can pause and resume across incidental clock-opacity changes. */
+    private boolean turnPop(float showTo, boolean cut) {
+        if (capsulePresentation() || cut) {
             boolean changed = popped || popMode != POP_NONE;
             if (popMode != POP_NONE) {
                 float visible = show * clamp01(popA.x);
-                endPop("capsule group arrival");
+                endPop("presentation changed");
                 show = visible;
             }
             popped = false;
             return changed;
         }
-        if (cut) {
-            // Unlocked, or the AOD's still frames: nothing animates there, the page is simply cut.
-            if (popMode == POP_NONE) return false;
-            endPop("cut");
+        if (popMode == POP_NONE && showTo > 0f && show < 0.02f && bandOk && LockLyrics.takePopOrigin(popPoint)) {
+            popFrom(popPoint);
             return true;
         }
-        switch (popMode) {
-            case POP_NONE:
-                if (showTo > 0f && show < 0.02f && bandOk && LockLyrics.takePopOrigin(popPoint)) {
-                    popFrom(popPoint);
-                    return true;
-                }
-                if (showTo == 0f && show > 0.02f && bandOk && LockLyrics.takePopTarget(popPoint)) {
-                    popInto(now, popPoint);
-                    return true;
-                }
-                return false;
-            case POP_IN:
-                if (showTo > 0f) return false;
-                if (LockLyrics.takePopTarget(popPoint)) {
-                    popInto(now, popPoint);
-                } else {
-                    popMode = POP_HOLD;
-                    Xp.log(TAG + "island pop held: left another way");
-                }
-                return true;
-            case POP_HOLD:
-                if (showTo > show) {
-                    popMode = POP_IN;
-                    LockLyrics.takePopOrigin(popPoint);
-                    Xp.log(TAG + "island pop resumed");
-                    return true;
-                }
-                if (showTo == 0f && LockLyrics.takePopTarget(popPoint)) {
-                    popInto(now, popPoint);
-                    return true;
-                }
-                return false;
-            case POP_OUT:
-                if (showTo == 0f) return false;
-                // Turned round on its way into the island: home from where it is, as fast as it
-                // is going. The entry's own origin is this one's, already on screen.
-                LockLyrics.takePopOrigin(popPoint);
-                popMode = POP_IN;
-                Xp.log(TAG + "island pop turned back out at s=" + r2(popS.x) + " a=" + r2(popA.x));
-                return true;
-            default:
-                return false;
+        if (popMode == POP_IN && showTo == 0f) {
+            popMode = POP_HOLD;
+            return true;
         }
+        if (popMode == POP_HOLD && showTo > show) {
+            popMode = POP_IN;
+            return true;
+        }
+        return false;
     }
 
     /** The home the springs are measured from: the band's centre, in this view's pixels. */
@@ -1537,20 +1509,7 @@ final class LyricView extends View {
                 + " band " + Math.round(bandTop) + ".." + Math.round(bandBottom));
     }
 
-    /** A departure into the island, from wherever the block is and at whatever speed. */
-    private void popInto(long now, float[] onScreen) {
-        getLocationOnScreen(loc);
-        popToX = onScreen[0] - loc[0] - getWidth() / 2f;
-        popToY = onScreen[1] - loc[1] - homeY();
-        popOutAt = now;
-        popMode = POP_OUT;
-        popped = true;
-        Xp.log(TAG + "island pop into y=" + Math.round(onScreen[1]) + " from s=" + r2(popS.x)
-                + " a=" + r2(popA.x));
-    }
-
     private void endPop(String why) {
-        if (popMode == POP_OUT) show = 0f;
         popMode = POP_NONE;
         popX.set(0f);
         popY.set(0f);
@@ -1562,7 +1521,7 @@ final class LyricView extends View {
     }
 
     /** @return whether the pop moved this frame */
-    private boolean stepPop(long now, float dt, float showTo) {
+    private boolean stepPop(float dt, float showTo) {
         if (popMode == POP_NONE) {
             // The showing is over: the next is a new one, from the island or not.
             if (popped && show == 0f) popped = false;
@@ -1573,30 +1532,19 @@ final class LyricView extends View {
             endPop("faded");
             return true;
         }
-        if (popMode == POP_IN) {
-            popX.step(0f, dt, POP_IN_MOVE);
-            popY.step(0f, dt, POP_IN_MOVE);
-            popS.step(1f, dt, POP_IN_SCALE);
-            popA.step(1f, dt, POP_IN_ALPHA);
-            popB.step(0f, dt, POP_IN_BLUR);
-            float px = 0.5f;
-            boolean home = popX.settle(0f, px) & popY.settle(0f, px) & popS.settle(1f, 0.001f)
-                    & popA.settle(1f, 0.002f) & popB.settle(0f, 0.3f);
-            applyPop();
-            if (home && show >= showTo) {
-                popMode = POP_NONE;
-                Xp.log(TAG + "island pop landed");
-            }
-            return true;
-        }
-        popX.step(popToX, dt, POP_OUT_MOVE);
-        popY.step(popToY, dt, POP_OUT_MOVE);
-        popS.step(POP_SCALE_OUT, dt, POP_OUT_SCALE);
-        popA.step(0f, dt, POP_OUT_ALPHA);
-        popB.step(POP_BLUR_DP * density, dt, POP_OUT_BLUR);
+        popX.step(0f, dt, POP_IN_MOVE);
+        popY.step(0f, dt, POP_IN_MOVE);
+        popS.step(1f, dt, POP_IN_SCALE);
+        popA.step(1f, dt, POP_IN_ALPHA);
+        popB.step(0f, dt, POP_IN_BLUR);
+        float px = 0.5f;
+        boolean home = popX.settle(0f, px) & popY.settle(0f, px) & popS.settle(1f, 0.001f)
+                & popA.settle(1f, 0.002f) & popB.settle(0f, 0.3f);
         applyPop();
-        if (popA.x <= POP_OUT_GONE && popA.v <= 0f) endPop("in the island");
-        else if (now - popOutAt > POP_OUT_MAX_MS) endPop("timed out");
+        if (home && show >= showTo) {
+            popMode = POP_NONE;
+            Xp.log(TAG + "island pop landed");
+        }
         return true;
     }
 
@@ -1620,10 +1568,10 @@ final class LyricView extends View {
 
     private boolean needsFrames() {
         if (!isAttachedToWindow() || LyricWindow.parked(this)) return false;
-        if (gestureFeedback.moving() || entryMotion.moving()) return true;
+        if (pageExit.active() || gestureFeedback.moving() || entryMotion.moving()) return true;
         if (navigationColor.moving()) return true;
         if (show != showTarget()) return true;
-        if (popMode == POP_IN || popMode == POP_OUT) return true;
+        if (popMode == POP_IN) return true;
         // The keyguard dimming around us is a movement like any other, and so is the keyguard
         // coming back: without this the loop would stop the moment the words settled and leave
         // the lyrics at whatever alpha the AOD had put them at - dimmed on a lit screen, or at
@@ -2784,7 +2732,8 @@ final class LyricView extends View {
         // save is outside the try so an unbalanced save inside drawLyrics cannot outlive it.
         int save = canvas.save();
         try {
-            drawLyrics(canvas);
+            if (pageExit.active()) pageMask.draw(canvas, lastBandTop, lastBandBottom, pageExit.progress(), departingPage);
+            else drawLyrics(canvas);
         } catch (Throwable t) {
             reportDrawFailure(t);
         } finally {
@@ -2812,6 +2761,23 @@ final class LyricView extends View {
         }
     }
 
+    private void drawDepartingPage(Canvas canvas) {
+        if (!canvas.isHardwareAccelerated()) {
+            drawLyrics(canvas);
+            return;
+        }
+        // Record once on dismissal rather than copying a full-screen bitmap or re-shaping
+        // every glyph for each mask frame. HDR ink and the current per-word poses stay intact.
+        if (pagePicture == null) pagePicture = new RenderNode("Departing lyrics");
+        if (!pagePicture.hasDisplayList()) {
+            pagePicture.setPosition(0, 0, getWidth(), getHeight());
+            Canvas frameCanvas = pagePicture.beginRecording(getWidth(), getHeight());
+            try { drawLyrics(frameCanvas); }
+            finally { pagePicture.endRecording(); }
+        }
+        canvas.drawRenderNode(pagePicture);
+    }
+
     private void drawLyrics(Canvas canvas) {
         drawCount++;
         if (show <= 0.003f || lines.isEmpty() || focus < 0 || main.length != lines.size()) return;
@@ -2825,13 +2791,14 @@ final class LyricView extends View {
         // Grown out of the island instead: the pop is the arrival's movement, all of it.
         boolean capsule = capsulePresentation();
         float floatAmount = capsule ? 0f : 1f - show;
-        float floatOffset = popped ? 0f : floatAmount * FLOAT_DP * density;
-        float anchor = anchorY() + floatOffset;
+        boolean frozen = pageExit.active();
+        float floatOffset = frozen ? lastFloatOffset : popped ? 0f : floatAmount * FLOAT_DP * density;
+        float anchor = frozen ? lastPageAnchor : anchorY() + floatOffset;
         float vis = show * clamp01(popA.x);
         float side = sidePx;
         float fade = Math.min(EDGE_FADE_DP * density, bandH / 3f);
         int n = lines.size();
-        updateTint();
+        if (!frozen) updateTint();
 
         int save = canvas.save();
         if (popped) {
@@ -2844,12 +2811,27 @@ final class LyricView extends View {
         canvas.clipRect(0f, clipBandTop, getWidth(), clipBandBottom);
         // The scene's clip stays still. All lyrics, harmonies, dots and departing rows then
         // travel as a single group; changing this transform cannot retarget a line spring.
-        float presentationScale = presentationScale(), presentationOffset = presentationOffset();
+        float presentationScale = frozen ? lastPageScale : presentationScale();
+        float presentationOffset = frozen ? lastPageOffset : presentationOffset();
         if (presentationOffset != 0f) canvas.translate(0f, presentationOffset);
         if (presentationScale != 1f)
             canvas.scale(presentationScale, presentationScale, getWidth() / 2f, homeY());
         float center = (bandTop + bandBottom) / 2f;
-        long drawAt = now();
+        long drawAt = frozen ? lastPageDrawAt : now();
+        if (!frozen) {
+            lastPageDrawAt = drawAt;
+            lastPageTrack = Main.trackKey();
+            lastPageWidth = getWidth();
+            lastPageHeight = getHeight();
+            lastFloatOffset = floatOffset;
+            lastPageAnchor = anchor;
+            lastPageScale = presentationScale;
+            lastPageOffset = presentationOffset;
+            float sc = popped ? Math.max(0f, popS.x) : 1f;
+            float dy = popped ? popY.x : 0f;
+            lastBandTop = Math.max(0f, dy + center + (clipBandTop - center) * sc);
+            lastBandBottom = Math.min(getHeight(), dy + center + (clipBandBottom - center) * sc);
+        }
         float separationDt = separationAt == 0L ? 0f : Math.min(0.05f, Math.max(0f, (drawAt - separationAt) / 1000f));
         separationAt = drawAt;
         // A layout rebase preserves each row's old screen position and every row has its own
