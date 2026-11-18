@@ -18,6 +18,18 @@ public class LyricFinalHoldTest {
         assertFalse(hold.step(1000, 0, 1000, 60f, false));
     }
 
+    @Test public void lastLineUsesTheFieldClockAndRemainsVisibleWhenItCompletes() {
+        LyricFinalHold hold = new LyricFinalHold();
+        float half = LyricExitWipe.DURATION_MS / 2000f;
+        hold.step(1000, 0, 1000, half, false);
+        assertEquals(0.5f, hold.progress(), 0.0001f);
+        assertEquals(0f, LyricExitWipe.opacity(0, 3, hold.progress()), 0f);
+        assertEquals(1f, LyricExitWipe.opacity(2, 3, hold.progress()), 0f);
+        hold.step(1100, 0, 1000, half, false);
+        assertEquals(0.55f, hold.alpha(), 0.0001f);
+        assertFalse(hold.moving());
+    }
+
     @Test public void pauseBeforeEndNeverRelaxesLastLine() {
         LyricFinalHold hold = new LyricFinalHold();
         hold.step(999, 0, 1000, 10f, false);

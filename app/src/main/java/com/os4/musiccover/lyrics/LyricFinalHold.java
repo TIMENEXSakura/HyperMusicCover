@@ -3,7 +3,6 @@ package com.os4.musiccover.lyrics;
 /** The last sung line stays in place; completion gently relaxes its appearance. */
 final class LyricFinalHold {
     static final float FADE_FRACTION = 0.45f;
-    private static final float TIME_SECONDS = 0.22f;
     private float amount;
     private float target;
 
@@ -12,8 +11,8 @@ final class LyricFinalHold {
         float before = amount;
         if (snap) amount = target;
         else if (amount != target && dt > 0f) {
-            amount += (target - amount) * (1f - (float) Math.exp(-dt / TIME_SECONDS));
-            if (Math.abs(target - amount) < 0.003f) amount = target;
+            float travel = dt * 1000f / LyricExitWipe.DURATION_MS;
+            amount = target > amount ? Math.min(target, amount + travel) : Math.max(target, amount - travel);
         }
         return before != amount;
     }
