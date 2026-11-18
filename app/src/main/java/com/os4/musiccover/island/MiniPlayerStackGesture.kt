@@ -1,6 +1,6 @@
 package com.os4.musiccover.island
 import kotlin.math.abs
-import com.os4.musiccover.CoverMorphMotion
+import com.os4.musiccover.cover.CoverMorphMotion
 
 /** Owns one visible motion; a new drag or a native handoff retires the previous release. */
 internal class MiniPlayerSpreadMotion {

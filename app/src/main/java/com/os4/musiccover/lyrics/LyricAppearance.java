@@ -5,18 +5,57 @@ import org.json.JSONObject;
 /** Persisted drawing preferences; defaults reproduce upstream colors and opacity. */
 public final class LyricAppearance {
     public static final int OFFICIAL = 0, COVER = 1, CUSTOM = 2, SYSTEM = 3;
-    public static final LyricAppearance DEFAULT = new LyricAppearance(0, 0, -1, -1, 1f, 0.72f);
-    public final int mainMode, bgMode, mainColor, bgColor;
-    public final float mainOpacity, bgOpacity;
+    /**
+     * The translation's own row joined the other two on 2026-11-15. Its official colour is the
+     * pale cover tint it was always drawn in, at the 0.62 it always had, so a JSON written
+     * before the row existed reads back looking exactly as it did.
+     */
+    public static final float DEFAULT_TRANS_OPACITY = 0.62f;
+    public static final LyricAppearance DEFAULT =
+            new LyricAppearance(0, 0, -1, -1, 1f, 0.72f, 0, -1, DEFAULT_TRANS_OPACITY);
+    public final int mainMode, bgMode, transMode, mainColor, bgColor, transColor;
+    public final float mainOpacity, bgOpacity, transOpacity;
+    public static final float DEFAULT_INTENSITY = 0.65f;
+    public final float mainIntensity, bgIntensity, transIntensity;
 
     public LyricAppearance(int mainMode, int bgMode, int mainColor, int bgColor,
                            float mainOpacity, float bgOpacity) {
+        this(mainMode, bgMode, mainColor, bgColor, mainOpacity, bgOpacity,
+                OFFICIAL, -1, DEFAULT_TRANS_OPACITY);
+    }
+
+    public LyricAppearance(int mainMode, int bgMode, int mainColor, int bgColor,
+                           float mainOpacity, float bgOpacity,
+                           int transMode, int transColor, float transOpacity) {
+        this(mainMode, bgMode, mainColor, bgColor, mainOpacity, bgOpacity, transMode, transColor,
+                transOpacity, DEFAULT_INTENSITY, DEFAULT_INTENSITY, DEFAULT_INTENSITY);
+    }
+
+    public LyricAppearance(int mainMode, int bgMode, int mainColor, int bgColor,
+                           float mainOpacity, float bgOpacity, int transMode, int transColor,
+                           float transOpacity, float mainIntensity, float bgIntensity, float transIntensity) {
+        this.mainIntensity = opacity(mainIntensity, DEFAULT_INTENSITY);
+        this.bgIntensity = opacity(bgIntensity, DEFAULT_INTENSITY);
+        this.transIntensity = opacity(transIntensity, DEFAULT_INTENSITY);
         this.mainMode = mode(mainMode);
         this.bgMode = mode(bgMode);
+        this.transMode = mode(transMode);
         this.mainColor = mainColor | 0xff000000;
         this.bgColor = bgColor | 0xff000000;
+        this.transColor = transColor | 0xff000000;
         this.mainOpacity = opacity(mainOpacity, 1f);
         this.bgOpacity = opacity(bgOpacity, 0.72f);
+        this.transOpacity = opacity(transOpacity, DEFAULT_TRANS_OPACITY);
+    }
+
+    /** Pure RGB blend used by both the app preview and cached renderer colours. */
+    public static int soften(int color, float intensity) {
+        float amount = opacity(intensity, DEFAULT_INTENSITY);
+        int r = (color >>> 16) & 255, g = (color >>> 8) & 255, b = color & 255;
+        int neutral = Math.max(r, Math.max(g, b));
+        return 0xff000000 | Math.round(neutral + (r - neutral) * amount) << 16
+                | Math.round(neutral + (g - neutral) * amount) << 8
+                | Math.round(neutral + (b - neutral) * amount);
     }
 
     private static int mode(int value) { return value >= OFFICIAL && value <= SYSTEM ? value : OFFICIAL; }
@@ -31,15 +70,24 @@ public final class LyricAppearance {
             return new LyricAppearance(json.optInt("mainMode", 0), json.optInt("bgMode", 0),
                     json.optInt("mainColor", -1), json.optInt("bgColor", -1),
                     (float) json.optDouble("mainOpacity", 1d),
-                    (float) json.optDouble("bgOpacity", 0.72d));
+                    (float) json.optDouble("bgOpacity", 0.72d),
+                    json.optInt("transMode", OFFICIAL), json.optInt("transColor", -1),
+                    (float) json.optDouble("transOpacity", DEFAULT_TRANS_OPACITY),
+                    (float) json.optDouble("mainIntensity", DEFAULT_INTENSITY),
+                    (float) json.optDouble("bgIntensity", DEFAULT_INTENSITY),
+                    (float) json.optDouble("transIntensity", DEFAULT_INTENSITY));
         } catch (Exception ignored) { return DEFAULT; }
     }
 
     public String toJson() {
         try {
             return new JSONObject().put("mainMode", mainMode).put("bgMode", bgMode)
-                    .put("mainColor", mainColor).put("bgColor", bgColor)
-                    .put("mainOpacity", (double) mainOpacity).put("bgOpacity", (double) bgOpacity).toString();
+                    .put("transMode", transMode)
+                    .put("mainColor", mainColor).put("bgColor", bgColor).put("transColor", transColor)
+                    .put("mainOpacity", (double) mainOpacity).put("bgOpacity", (double) bgOpacity)
+                    .put("transOpacity", (double) transOpacity)
+                    .put("mainIntensity", (double) mainIntensity).put("bgIntensity", (double) bgIntensity)
+                    .put("transIntensity", (double) transIntensity).toString();
         } catch (Exception ignored) { return "{}"; }
     }
 }

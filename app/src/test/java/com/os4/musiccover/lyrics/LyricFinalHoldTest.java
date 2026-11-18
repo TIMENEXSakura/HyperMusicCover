@@ -8,16 +8,13 @@ public class LyricFinalHoldTest {
         LyricFinalHold hold = new LyricFinalHold();
         assertFalse(hold.step(999, 0, 1000, 0.1f, false));
         assertEquals(1f, hold.alpha(), 0f);
-        assertEquals(1f, hold.scale(), 0f);
         assertTrue(hold.step(1000, 0, 1000, 0.1f, false));
         assertTrue(hold.completed());
         assertTrue(hold.moving());
         assertTrue(hold.alpha() > 0.55f && hold.alpha() < 1f);
-        assertTrue(hold.scale() > 0.94f && hold.scale() < 1f);
         for (int i = 0; i < 100 && hold.moving(); i++) hold.step(1000, 0, 1000, 0.1f, false);
         assertFalse(hold.moving());
         assertEquals(0.55f, hold.alpha(), 0.00001f);
-        assertEquals(0.94f, hold.scale(), 0.00001f);
         assertFalse(hold.step(1000, 0, 1000, 60f, false));
     }
 
@@ -38,7 +35,6 @@ public class LyricFinalHoldTest {
         assertTrue(hold.alpha() > 0.55f);
         for (int i = 0; i < 100 && hold.moving(); i++) hold.step(700, 0, 1000, 0.1f, false);
         assertEquals(1f, hold.alpha(), 0f);
-        assertEquals(1f, hold.scale(), 0f);
     }
 
     @Test public void backgroundVoicesMustAlsoFinish() {

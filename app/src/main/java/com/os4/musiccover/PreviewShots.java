@@ -1,5 +1,11 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.card.MediaCard;
+import com.os4.musiccover.clock.ClockCollapse;
+import com.os4.musiccover.clock.ClockGlass;
+import com.os4.musiccover.clock.ClockViews;
+import com.os4.musiccover.cover.AlbumArt;
+import com.os4.musiccover.cover.CoverPush;
 import com.os4.musiccover.lyrics.LockLyrics;
 import android.content.Context;
 import android.content.Intent;
@@ -20,7 +26,7 @@ import android.view.View;
  * comments, references across the line prefixed with Main. or PreviewShots., nothing else
  * changed.
  */
-final class PreviewShots {
+public final class PreviewShots {
     private PreviewShots() {}
 
     /**
@@ -62,7 +68,7 @@ final class PreviewShots {
         out.putString("track", MediaCard.sCardKey);
         if (diag != null) {
             diag.append("preview: cover=").append(Main.sCoverMode)
-                .append(" auto=").append(Main.sAuto)
+                .append(" auto=").append(Settings.AUTO.on())
                 .append(" cardKnown=").append(MediaCard.sCardKnown)
                 .append(" cardShowing=").append(MediaCard.sCardShowing)
                 .append(" keyguard=").append(Main.keyguardShowing())
@@ -136,7 +142,7 @@ final class PreviewShots {
                 .append(" rect=").append(MediaCard.sCardL).append(',').append(MediaCard.sCardT).append(' ')
                 .append(MediaCard.sCardW).append('x').append(MediaCard.sCardH)
                 .append(" artslot=").append(out.containsKey("artfrac") ? "yes" : "no")
-                .append(" hideArt=").append(Main.sMcHideArt);
+                .append(" hideArt=").append(Settings.MC_HIDE_ART.on());
         }
 
         putDate(out, dump);
@@ -147,7 +153,7 @@ final class PreviewShots {
                     : date.getClass().getSimpleName() + " " + date.getWidth() + "x"
                       + date.getHeight() + " vis=" + date.getVisibility())
                 .append(" shot=").append(out.containsKey("date") ? "yes" : "NULL");
-            diag.append("\n  clock: geom=").append(cg == null ? "NULL (no date or no glyph box)"
+            diag.append("\n  clock: geom=").append(cg == null ? "NULL (clock not measured yet)"
                     : "w" + cg[0] + " h" + cg[1] + " y" + cg[2] + " x" + cg[3] + " pivot" + cg[4]);
             View[] roots = Main.clockRoots();
             diag.append(" roots=").append(roots.length);
@@ -238,7 +244,7 @@ final class PreviewShots {
         View img = box == null ? null : Main.findByName(box, "album_art_image");
         if (img == null) return;
         // Hidden by the user's own setting - nothing to draw, and saying so is how the app knows.
-        if (Main.sMcHideArt || box.getVisibility() != View.VISIBLE) return;
+        if (Settings.MC_HIDE_ART.on() || box.getVisibility() != View.VISIBLE) return;
         if (img.getWidth() <= 0 || img.getHeight() <= 0) return;
         int[] a = new int[2], b = new int[2];
         img.getLocationOnScreen(a);
@@ -282,7 +288,7 @@ final class PreviewShots {
         int[] loc = new int[2];
         date.getLocationOnScreen(loc);
         out.putByteArray("date", png);
-        out.putIntArray("daterect", new int[]{loc[0], Math.round(ClockCollapse.coverDateY(date)),
+        out.putIntArray("daterect", new int[]{loc[0], Math.round(ClockCollapse.coverBlockTop()),
                 date.getWidth(), date.getHeight()});
     }
 
@@ -366,7 +372,7 @@ final class PreviewShots {
      * and reported around the card - the sampled rectangle, the artwork's slot - is relative to
      * mi_media_controls, and only an identically placed parent keeps those true.
      */
-    static View cardShotRoot(View card) {
+    public static View cardShotRoot(View card) {
         if (card == null) return null;
         if (!(card.getParent() instanceof View)) return card;
         View p = (View) card.getParent();

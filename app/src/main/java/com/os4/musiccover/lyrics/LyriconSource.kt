@@ -1,4 +1,5 @@
 package com.os4.musiccover.lyrics
+import com.os4.musiccover.Settings
 import com.os4.musiccover.Xp
 import android.content.Context
 import android.content.ContextWrapper
@@ -303,18 +304,18 @@ object LyriconSource {
      * onSongChanged requests a fresh lookup if the provider subsequently publishes lyrics.
      */
     @JvmStatic
-    fun linesFor(title: String?, artist: String?, player: String?, waitForProvider: Boolean): List<LyricLine>? {
+    fun linesFor(track: TrackIdentity, player: String?, waitForProvider: Boolean): List<LyricLine>? {
         if (!connected()) return null
-        val flexibleDuet = LockLyrics.sFlexibleDuet
+        val flexibleDuet = Settings.LYRIC_FLEX_DUET.on()
         var song = sSong
-        if (song == null || !isTrack(song, title, artist)) {
+        if (song == null || !isTrack(song, track)) {
             // Only a provider that has shown it publishes; see sPlayerSongs.
             if (waitForProvider && player != null && player == sPlayer && sPlayerSongs > 0) {
                 val until = android.os.SystemClock.uptimeMillis() + CATCH_UP_MS
                 synchronized(sSongLock) {
                     while (connected()) {
                         song = sSong
-                        if (song != null && isTrack(song!!, title, artist)) break
+                        if (song != null && isTrack(song!!, track)) break
                         val left = until - android.os.SystemClock.uptimeMillis()
                         if (left <= 0) break
                         sSongLock.wait(left)
@@ -322,10 +323,10 @@ object LyriconSource {
                 }
             }
             val held = song
-            if (held == null || !isTrack(held, title, artist)) {
+            if (held == null || !isTrack(held, track)) {
                 if (held != null) {
-                    Xp.log("[MCLyricon] holding \"" + held.name + "\" while the track is \""
-                            + title + "\"; not reading it")
+                    Xp.log("[MCLyricon] holding \"" + held.name + "\" while the track is "
+                            + track.readings + "; not reading it")
                 }
                 return null
             }
@@ -338,39 +339,27 @@ object LyriconSource {
         // own: the arrival of the line after it, the same room every other word-timed source
         // leaves - see LyricParse.closeUntimedTail. By time, since the bridge's order is not
         // trusted either (the rows are sorted below).
-        val begins = rich.map { it.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() }.sorted().toIntArray()
+        val begins = rich.map { ms(it.begin) }.sorted().toIntArray()
         for (line in rich) {
-            val nextStart = LyricParse.nextAfter(begins, line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
-            try {
-                LyriconConverter.convert(line, nextStart)?.let { out.add(it) }
-            } catch (error: Exception) {
-                runCatching { Xp.w("[MCLyricon] invalid row skipped: $error") }
-            }
+            val nextStart = LyricParse.nextAfter(begins, ms(line.begin), ms(line.end))
+            LyriconConverter.convert(line, nextStart, flexibleDuet)?.let { out.add(it) }
         }
         if (out.isEmpty()) return null
         out.sortBy { it.start }
         val lines = LyricParse.flexibleSpeakers(out, flexibleDuet)
-        return lines.takeIf { connected() && song === sSong && LockLyrics.sFlexibleDuet == flexibleDuet }
+        return lines.takeIf { connected() && song === sSong && Settings.LYRIC_FLEX_DUET.on() == flexibleDuet }
     }
 
     /**
-     * Whether the bridge's song is this track: a title that agrees, and an artist that does not
-     * disagree - or, on the players that sing into TITLE, the song and singer ARTIST spells
-     * (TrackName.splits). Held against the title alone, 汽水's song was refused from its first
-     * sung line on, and the lookup went to the catalogues with the line as the song's name (#56).
+     * Whether the bridge's song is this track: a name that agrees with a reading of the session
+     * (TrackIdentity) and a singer that does not disagree with that same reading. Held against
+     * TITLE alone, 汽水's song was refused from its first sung line on, and the lookup went to the
+     * catalogues with the line as the song's name (#56). A session with nothing to hold it
+     * against takes nothing.
      */
-    private fun isTrack(song: Song, title: String?, artist: String?): Boolean {
+    private fun isTrack(song: Song, track: TrackIdentity): Boolean {
         if (song.name.isNullOrBlank()) return false
-        if (!title.isNullOrBlank() && names(song.name, title) && names(song.artist, artist)) return true
-        return TrackName.pairIn(song.name, song.artist, artist)
-    }
-
-    /** Whether two names agree, or say nothing. A blank on either side is not a contradiction. */
-    private fun names(theirs: String?, ours: String?): Boolean {
-        val a = theirs?.trim()?.lowercase().orEmpty()
-        val b = ours?.trim()?.lowercase().orEmpty()
-        if (a.isEmpty() || b.isEmpty()) return true
-        return a.contains(b) || b.contains(a)
+        return track.accepts(song.name, song.artist)
     }
 
     /**
@@ -383,6 +372,14 @@ object LyriconSource {
      * A line whose words are missing or unusable stays line-timed, which draws correctly and
      * simply does not fill word by word.
      */
+    internal fun convert(line: RichLyricLine, nextStart: Int): LyricLine? =
+        LyriconConverter.convert(line, nextStart)
+
+    internal fun background(line: RichLyricLine, nextStart: Int): LyricLine? =
+        LyriconBackground.convert(line, nextStart)
+
+    private fun ms(v: Long) = v.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+
 
     /** Diagnostics: what the bridge is doing, for the probe. Never throws. */
     @JvmStatic

@@ -1,5 +1,6 @@
 package com.os4.musiccover.immersive;
-import com.os4.musiccover.ClockCollapse;
+import com.os4.musiccover.Settings;
+import com.os4.musiccover.clock.ClockCollapse;
 import com.os4.musiccover.EdgeBlurView;
 import com.os4.musiccover.island.LockIslands;
 import com.os4.musiccover.lyrics.LockLyrics;
@@ -261,7 +262,7 @@ public final class ImmersiveHost {
         }
         // The transit page is deliberately disabled upstream. Its framework trip still
         // runs and must not lose contrast merely because that page cannot be presented.
-        return AmapTransitScene.sOn && AmapTransitScene.INSTANCE.tripUp();
+        return Settings.TRANSIT.on() && AmapTransitScene.INSTANCE.tripUp();
     }
 
     /** A remote navigation page is actually in front; readiness alone is not visibility. */
@@ -789,7 +790,7 @@ public final class ImmersiveHost {
         // A page that yielded to this cover comes back when it goes (coverLeft), and CoverPush
         // asks before cover mode has ended: the whole fade in is still ahead of it.
         if (sYield && sOpen != null && sOpen.ready() && sOpen.hasContent() && litNow()) {
-            return Main.fadeMsFor(Main.sClockResponse) + 32L;
+            return Main.fadeMsFor(Settings.SPRING.get()) + 32L;
         }
         ValueAnimator a = sFadeAnim;
         if (a == null || sFadeTo != 1f || !sShown) return 0L;
@@ -1297,7 +1298,7 @@ public final class ImmersiveHost {
         final float from = sFade;
         // The share still to travel keeps a reversal continuous. Navigation is brought up
         // faster, without shortening a close or another scene's existing animation.
-        long ms = ImmersiveOpenTiming.duration(Main.fadeMsFor(Main.sClockResponse),
+        long ms = ImmersiveOpenTiming.duration(Main.fadeMsFor(Settings.SPRING.get()),
                 to - from, page.isNavigation(), to > from);
         ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
         a.setDuration(ms);
@@ -1365,7 +1366,7 @@ public final class ImmersiveHost {
         sSwapOut = out;
         final float from = sFade;
         sSwapFade = from;
-        long ms = Math.max(1L, Math.round(Main.fadeMsFor(Main.sClockResponse) * from * SWAP_OUT_SHARE));
+        long ms = Math.max(1L, Math.round(Main.fadeMsFor(Settings.SPRING.get()) * from * SWAP_OUT_SHARE));
         ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
         a.setDuration(ms);
         a.setInterpolator(t -> 1f - (1f - t) * (1f - t) * (1f - t));

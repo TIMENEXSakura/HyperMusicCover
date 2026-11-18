@@ -1,5 +1,7 @@
 package com.os4.musiccover
 
+import com.os4.musiccover.hotreload.HotReload
+
 /**
  * What the module and the app have to agree on for a hot reload: the protocol number in the
  * extras, the process list both sides work from, and the remote preferences that switch it off.

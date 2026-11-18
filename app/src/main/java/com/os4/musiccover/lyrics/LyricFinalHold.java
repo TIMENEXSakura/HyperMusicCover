@@ -2,6 +2,7 @@ package com.os4.musiccover.lyrics;
 
 /** The last sung line stays in place; completion gently relaxes its appearance. */
 final class LyricFinalHold {
+    static final float FADE_FRACTION = 0.45f;
     private static final float TIME_SECONDS = 0.22f;
     private float amount;
     private float target;
@@ -19,7 +20,7 @@ final class LyricFinalHold {
 
     boolean completed() { return target == 1f; }
     boolean moving() { return amount != target; }
-    float alpha() { return 1f - 0.45f * amount; }
-    float scale() { return 1f - 0.06f * amount; }
+    float progress() { return amount; }
+    float alpha() { return 1f - FADE_FRACTION * amount; }
     void reset() { amount = target = 0f; }
 }

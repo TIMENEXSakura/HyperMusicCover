@@ -59,7 +59,7 @@ public final class Gen {
     /** Set when retirement is committed: hooks pass through, queued work is dropped. */
     static volatile boolean retired;
     /** Adoption failed: this generation answers nothing until the process restarts. */
-    static volatile boolean inert;
+    public static volatile boolean inert;
     /**
      * Set while a retirement's teardown runs on the main thread. The teardown gives OEM state
      * back through the same helpers the features use at runtime, and those are all refused once
@@ -131,7 +131,7 @@ public final class Gen {
      * HotReload, and until then they pass through because [retired] is set. The sweep is best
      * effort on purpose: every step is independent and a failure is left for the next one.
      */
-    static String retireOnMain(long timeoutMs, java.util.function.Supplier<String> check,
+    public static String retireOnMain(long timeoutMs, java.util.function.Supplier<String> check,
                                Runnable beforeSweep) {
         final AtomicInteger state = new AtomicInteger(R_WAITING);
         final String[] refusal = {null};
@@ -204,7 +204,7 @@ public final class Gen {
      * restoring OEM state the new hooks are about to write, and sweeping as they go in. False
      * when it is still running.
      */
-    static boolean awaitPredecessor(long timeoutMs) {
+    public static boolean awaitPredecessor(long timeoutMs) {
         String mark = System.getProperty(TEARDOWN_MARK);
         if (mark == null) return true;
         long start = android.os.SystemClock.uptimeMillis();
@@ -239,7 +239,7 @@ public final class Gen {
      * keep running half a generation. So the same teardown and sweep a retirement runs, on the
      * main thread; [teardown] may be null for a process with no host state to give back.
      */
-    static void goInert(long timeoutMs, Runnable teardown) {
+    public static void goInert(long timeoutMs, Runnable teardown) {
         quiescing = true;
         inert = true;
         boolean ran = onMain(timeoutMs, () -> {
@@ -283,14 +283,17 @@ public final class Gen {
 
     /**
      * Registrations made before the first container attach. A dry run re-runs boot and the
-     * attach path, not installSystemUi, so anything recorded here would otherwise be taken back
-     * and never put back.
+     * attach path, not SystemUI's feature list, so anything recorded here would otherwise be
+     * taken back and never put back.
      */
     private static final java.util.Set<Object> INSTALL_KEPT =
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
-    /** Called at the end of installSystemUi: from here on, these registrations outlive a dry run. */
-    static void markInstallScope() {
+    /**
+     * Called once SystemUI's features are all in (FeatureHost.installAll, skipped and failed ones
+     * included): from here on, these registrations outlive a dry run.
+     */
+    public static void markInstallScope() {
         INSTALL_KEPT.clear();
         INSTALL_KEPT.addAll(receivers);
         INSTALL_KEPT.addAll(observers);
@@ -301,6 +304,7 @@ public final class Gen {
         INSTALL_KEPT.addAll(networkCallbacks);
         INSTALL_KEPT.addAll(sensorListeners);
         INSTALL_KEPT.addAll(preDraws);
+        INSTALL_KEPT.addAll(draws);
         INSTALL_KEPT.addAll(attachStates);
         INSTALL_KEPT.addAll(layoutChanges);
         INSTALL_KEPT.addAll(displayListeners);
@@ -495,10 +499,21 @@ public final class Gen {
         }
         retain(dryRun, preDraws);
 
+        for (DrawReg d : draws) {
+            if (kept(dryRun, d)) continue;
+            try {
+                d.view.getViewTreeObserver().removeOnDrawListener(d.listener);
+            } catch (Throwable ignored) {
+            }
+        }
+        retain(dryRun, draws);
+
         for (AttachReg a : attachStates) {
             if (kept(dryRun, a)) continue;
             try {
-                a.view.removeOnAttachStateChangeListener(a.listener);
+                View view = a.view();
+                View.OnAttachStateChangeListener listener = a.listener();
+                if (view != null && listener != null) view.removeOnAttachStateChangeListener(listener);
             } catch (Throwable ignored) {
             }
         }
@@ -595,7 +610,7 @@ public final class Gen {
 
     // ---------------------------------------------------------------- what we own
 
-    static final List<XposedInterface.HookHandle> hooks = new CopyOnWriteArrayList<>();
+    public static final List<XposedInterface.HookHandle> hooks = new CopyOnWriteArrayList<>();
     private static final List<PostedOn> postedOn = new CopyOnWriteArrayList<>();
     /**
      * The main-looper Handlers the features made for themselves; see {@link #handler()}.
@@ -628,6 +643,7 @@ public final class Gen {
     private static final List<SensorReg> sensorListeners = new CopyOnWriteArrayList<>();
     private static final List<TreeReg> treeListeners = new CopyOnWriteArrayList<>();
     private static final List<PreDrawReg> preDraws = new CopyOnWriteArrayList<>();
+    private static final List<DrawReg> draws = new CopyOnWriteArrayList<>();
     private static final List<AttachReg> attachStates = new CopyOnWriteArrayList<>();
     private static final List<LayoutReg> layoutChanges = new CopyOnWriteArrayList<>();
     private static final List<DisplayReg> displayListeners = new CopyOnWriteArrayList<>();
@@ -785,6 +801,8 @@ public final class Gen {
         }
     }
 
+    private record DrawReg(View view, ViewTreeObserver.OnDrawListener listener) {}
+
     private static final class PreDrawReg {
         /** The view, or null for a call site that only holds the observer (then [vto]). */
         final View view;
@@ -801,10 +819,26 @@ public final class Gen {
     private static final class AttachReg {
         final View view;
         final View.OnAttachStateChangeListener listener;
+        final java.lang.ref.WeakReference<View> weakView;
+        final java.lang.ref.WeakReference<View.OnAttachStateChangeListener> weakListener;
 
         AttachReg(View view, View.OnAttachStateChangeListener listener) {
-            this.view = view;
-            this.listener = listener;
+            this(view, listener, false);
+        }
+
+        AttachReg(View view, View.OnAttachStateChangeListener listener, boolean weak) {
+            this.view = weak ? null : view;
+            this.listener = weak ? null : listener;
+            weakView = weak ? new java.lang.ref.WeakReference<>(view) : null;
+            weakListener = weak ? new java.lang.ref.WeakReference<>(listener) : null;
+        }
+
+        View view() {
+            return weakView == null ? view : weakView.get();
+        }
+
+        View.OnAttachStateChangeListener listener() {
+            return weakListener == null ? listener : weakListener.get();
         }
     }
 
@@ -1278,6 +1312,18 @@ public final class Gen {
 
     // ---------------------------------------------------------------- view listeners
 
+    /** Observes visibility after every pre-draw listener has finished. */
+    public static void draw(View v, ViewTreeObserver.OnDrawListener l) {
+        if (refused("a draw listener")) return;
+        v.getViewTreeObserver().addOnDrawListener(l);
+        draws.add(new DrawReg(v, l));
+    }
+
+    public static void undraw(View v, ViewTreeObserver.OnDrawListener l) {
+        v.getViewTreeObserver().removeOnDrawListener(l);
+        draws.removeIf(r -> r.view == v && r.listener == l);
+    }
+
     public static void preDraw(View v, ViewTreeObserver.OnPreDrawListener l) {
         if (refused("a pre-draw")) return;
         v.getViewTreeObserver().addOnPreDrawListener(l);
@@ -1308,9 +1354,21 @@ public final class Gen {
         attachStates.add(new AttachReg(v, l));
     }
 
+    /** A detached view may never return. Its own listener list keeps l alive, not this ledger. */
+    public static void weakAttachState(View v, View.OnAttachStateChangeListener l) {
+        if (refused("a weak attach listener")) return;
+        pruneAttachStates();
+        v.addOnAttachStateChangeListener(l);
+        attachStates.add(new AttachReg(v, l, true));
+    }
+
+    private static void pruneAttachStates() {
+        attachStates.removeIf(r -> r.view() == null || r.listener() == null);
+    }
+
     public static void unattachState(View v, View.OnAttachStateChangeListener l) {
         v.removeOnAttachStateChangeListener(l);
-        attachStates.removeIf(r -> r.view == v && r.listener == l);
+        attachStates.removeIf(r -> r.view() == v && r.listener() == l);
     }
 
     public static void layoutChange(View v, View.OnLayoutChangeListener l) {
@@ -1344,9 +1402,9 @@ public final class Gen {
     }
 
     /**
-     * The same, for a value written after installSystemUi from a path a dry run does not run
-     * again (the control-centre plugin's watch): [outlivesDryRun] keeps a dry run from giving
-     * it back, as markInstallScope does for what install wrote.
+     * The same, for a value written after SystemUI's features are in, from a path a dry run
+     * does not run again (the control-centre plugin's watch): [outlivesDryRun] keeps a dry run
+     * from giving it back, as markInstallScope does for what install wrote.
      */
     public static <T> void swap(Object owner, String what, T original, Runnable restore,
                                 boolean outlivesDryRun) {
@@ -1413,7 +1471,8 @@ public final class Gen {
     }
 
     /** What this generation holds, for the probe and for the hot-reload log line. */
-    static String report() {
+    public static String report() {
+        pruneAttachStates();
         return "class=" + Integer.toHexString(System.identityHashCode(Gen.class))
                 + " live=" + live()
                 + " quiescing=" + quiescing
@@ -1433,6 +1492,7 @@ public final class Gen {
                 + " sensorListeners=" + sensorListeners.size()
                 + " treeListeners=" + treeListeners.size()
                 + " preDraws=" + preDraws.size()
+                + " draws=" + draws.size()
                 + " attachStates=" + attachStates.size()
                 + " layoutChanges=" + layoutChanges.size()
                 + " displayListeners=" + displayListeners.size()

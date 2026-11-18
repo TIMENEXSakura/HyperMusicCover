@@ -1,10 +1,11 @@
 package com.os4.musiccover.lyrics;
+import com.os4.musiccover.Settings;
 import com.os4.musiccover.ModuleState;
-import com.os4.musiccover.MediaCard;
-import com.os4.musiccover.ClockCollapse;
-import com.os4.musiccover.CoverCardLayer;
-import com.os4.musiccover.CoverMorphRoute;
-import com.os4.musiccover.CoverPush;
+import com.os4.musiccover.card.MediaCard;
+import com.os4.musiccover.clock.ClockCollapse;
+import com.os4.musiccover.cover.CoverCardLayer;
+import com.os4.musiccover.cover.CoverMorphRoute;
+import com.os4.musiccover.cover.CoverPush;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
@@ -41,21 +42,10 @@ public final class LockLyrics {
     public static volatile boolean verbose;
 
     /**
-     * Whether the lyrics are the lock screen's to show.
-     *
-     * ON, and not a switch any more: the app has no row for it and loadState does not read one.
-     * The two-finger tap below is how the lock screen is asked to show the cover instead, and it
-     * is the one that survives - it is what the setting was for most of its life. It does mean
-     * the network fetch happens inside SystemUI without anyone asking for it; that is the trade
-     * the setting was removed for, and `op lyrics` still turns it off for the rest of the
-     * session.
-     */
-    public static volatile boolean sEnabled = true;
     /** Keep lyric motion independent of the system clock's entrance transform. */
-    public static volatile boolean sClockIndependentMotion = true;
 
     public static void setClockIndependentMotion(boolean on) {
-        sClockIndependentMotion = on;
+        Settings.LYRIC_CLOCK_INDEPENDENT.set(on);
         refresh();
         ModuleState.saveState();
     }
@@ -193,15 +183,11 @@ public final class LockLyrics {
     private static MediaController sController;
     private static volatile PlaybackState sState;
     /** Positive values show lyrics earlier; negative values delay them. */
-    public static volatile boolean sBluetoothSync = true;
-    public static volatile int sBluetoothClassicMs = LyricBluetoothOffset.DEFAULT_CLASSIC_MS;
-    public static volatile int sBluetoothLeMs = LyricBluetoothOffset.DEFAULT_LE_MS;
     /** Allow heuristic recognition of duet metadata in nonstandard lyric files. */
-    public static volatile boolean sFlexibleDuet = true;
 
     public static void setFlexibleDuet(boolean enabled) {
-        if (sFlexibleDuet == enabled) return;
-        sFlexibleDuet = enabled;
+        if (Settings.LYRIC_FLEX_DUET.on() == enabled) return;
+        Settings.LYRIC_FLEX_DUET.set(enabled);
         // Parsed lines depend on this setting, including entries for other tracks.
         LyricSource.invalidateRequests();
         CACHE.clear();
@@ -211,13 +197,13 @@ public final class LockLyrics {
         sInfoSeen = null;
         sInfoTries = 0;
         sSource = LyricSource.SRC_NONE;
-        if (sEnabled && !sDemo && !sKey.isEmpty()) lookup(sKey, sController, false);
+        if (Settings.LYRICS.on() && !sDemo && !sKey.isEmpty()) lookup(sKey, sController, false);
     }
 
     public static void setBluetoothSync(boolean enabled, int classicMs, int leMs) {
-        sBluetoothSync = enabled;
-        sBluetoothClassicMs = LyricBluetoothOffset.clamp(classicMs);
-        sBluetoothLeMs = LyricBluetoothOffset.clamp(leMs);
+        Settings.LYRIC_BT_SYNC.set(enabled);
+        Settings.LYRIC_BT_CLASSIC.set(LyricBluetoothOffset.clamp(classicMs));
+        Settings.LYRIC_BT_LE.set(LyricBluetoothOffset.clamp(leMs));
         LyricBluetoothRoute.settingChanged(enabled);
         onBluetoothRouteChanged();
     }
@@ -235,23 +221,7 @@ public final class LockLyrics {
     }
     private static long sStateReadAt;
 
-    /** The user's second switch: keep the screen lit while lyrics are playing on the lock screen. */
-    public static volatile boolean sKeepOn;
     private static boolean sHolding;
-
-    /**
-     * The third switch: a held note's glow brighter than white on an HDR screen.
-     *
-     * Off by default, and it was off for a reason that has since been fixed: the colour mode is a
-     * whole window's, and the lyrics used to share the lock screen's with the clock and the media
-     * card, so the card's material was drawn as HDR content and brightened (reported 2026-09-16,
-     * still there on 2026-09-29 with the headroom request removed - SurfaceFlinger picks its own
-     * 5.00). With this switch on the lyrics have a window of their own, and only it is switched
-     * - see {@link LyricWindow}; with it off they stay in the keyguard's layer, since the window
-     * costs them the lock screen's z-order (see attach). Off by default until that has been
-     * lived with.
-     */
-    public static volatile boolean sHdr = false;
 
     /**
      * The switch, on a screen that can show it. Everything the highlight changes - the window,
@@ -260,62 +230,105 @@ public final class LockLyrics {
      * there whatever the switch says.
      */
     static boolean hdr() {
-        return sHdr && HdrDisplay.supported(Main.sAppCtx);
+        return Settings.LYRIC_HDR.on() && HdrDisplay.supported(Main.sAppCtx);
     }
+
     /**
-     * The fourth switch: whether a line's translation is drawn under it.
-     *
-     * On by default, because it is what the lyrics look like when the source has one: off is for
-     * people who read the language and find the second line in the way. It is not a filter on
-     * what is fetched - the layout drops the translation's rows, so the lines close up rather
-     * than leaving a gap where it was.
+     * The lyric settings' effects, registered into the settings table at install (stage 5.1):
+     * Settings.java names no feature any more. One refresh After for the four switches, so a
+     * batch that changes several of them refreshes once.
      */
-    public static volatile boolean sTrans = true;
+    private static final Settings.After REFRESH = c -> refresh();
+
+    public static void bindSettings() {
+        Settings.LYRIC_CLOCK_INDEPENDENT.then(REFRESH);
+        Settings.LYRIC_FLEX_DUET.apply((c, v) -> { setFlexibleDuet(v); return true; });
+        Settings.LYRIC_MAX_LINES.apply((c, v) -> setMaxLines(v)).then(REFRESH);
+        Settings.After bluetooth = c -> {
+            LyricBluetoothRoute.settingChanged(Settings.LYRIC_BT_SYNC.on());
+            onBluetoothRouteChanged();
+        };
+        Settings.LYRIC_BT_SYNC.then(bluetooth);
+        Settings.LYRIC_BT_CLASSIC.then(bluetooth);
+        Settings.LYRIC_BT_LE.then(bluetooth);
+        Settings.After policy = c -> sourcePolicyChanged();
+        Settings.LYRIC_SOURCE_CUSTOM.then(policy);
+        Settings.LYRIC_SOURCE_ORDER.then(policy);
+        Settings.LYRIC_LOCAL_FORMAT.then(policy);
+        Settings.LYRICS.apply((c, v) -> {
+            setEnabled(v, Main.trackKey(), Main.miniPlayerSession());
+            return true;
+        });
+        Settings.LYRIC_ONLINE.apply((c, v) -> setOnline(v));
+        Settings.LYRIC_ALIGN.apply((c, v) -> setAlign(v));
+        Settings.LYRIC_STYLE.apply((c, v) -> setStyle(v));
+        Settings.LYRIC_APPEARANCE.apply((c, v) -> {
+            setAppearance(v);
+            return true;
+        });
+        Settings.LYRIC_KEEP_ON.then(REFRESH);
+        Settings.LYRIC_HDR.then(REFRESH);
+        Settings.LYRIC_TRANS.then(REFRESH);
+        Settings.LYRIC_ROMA.then(REFRESH);
+    }
+
     /**
-     * The fifth: whether a line's romanisation is drawn under it, over the translation. Off by
-     * default and apart from the translation's switch - either can be shown alone (#64). Like
-     * the translation it is laid out, not fetched: switching it redraws what is already there.
+     * Switches Settings.LYRIC_ONLINE and looks the song on screen up again: off, a lyric that came off the
+     * network goes - with nothing local to replace it the song has none; on, a song with no
+     * lyric, or no translation, gets the chance of one. The cache goes either way, since it
+     * holds answers found under the other setting.
      */
-    public static volatile boolean sRoma = false;
+    public static boolean setOnline(boolean on) {
+        if (on == Settings.LYRIC_ONLINE.on()) return false;
+        Settings.LYRIC_ONLINE.set(on);
+        Main.main().post(() -> {
+            CACHE.clear();
+            if (!Settings.LYRICS.on() || sDemo || sKey.isEmpty() || sController == null) return;
+            if (!on && sLines.isEmpty() && !sLoading) return;
+            Main.main().removeCallbacks(SETTLED_LOOKUP);
+            unpark();
+            sInfoSeen = LyricSource.infoFor(sController);
+            lookup(sKey, sController, on && !sLines.isEmpty());
+        });
+        return true;
+    }
     /** The two switches together, as LyricLine.under() and the layout read them. */
     static final int BELOW_TRANS = 1, BELOW_ROMA = 2;
 
     static int below() {
-        return (sTrans ? BELOW_TRANS : 0) | (sRoma ? BELOW_ROMA : 0);
+        return (Settings.LYRIC_TRANS.on() ? BELOW_TRANS : 0) | (Settings.LYRIC_ROMA.on() ? BELOW_ROMA : 0);
     }
     /** Where the lines settle in their column: left, centre or right, as the settings offer. */
     static final int ALIGN_LEFT = 0, ALIGN_CENTER = 1, ALIGN_RIGHT = 2;
     /**
-     * The alignment pref: one of the three constants above.
-     *
-     * Unlike the switches this cannot be drawn around once changed - the alignment is baked into
-     * every StaticLayout - so LyricView lays the lines out again when this differs from what the
-     * layout in use was built with (see its builtAlign). Left is what the lyrics did before the
-     * setting existed, and what a state file written before it loads as.
+     * The most lines sung at the same time that are lit together (LyricFocus), 1..4. Not saved:
+     * every overlapping line is lit, up to the ceiling; `op lyricmaxlines` lowers it for the
+     * session.
      */
-    public static volatile int sAlign = ALIGN_LEFT;
-    /** Immutable snapshot: the UI, renderer and state loader all use the same validated values. */
-    public static volatile LyricStyle sStyle = LyricStyle.DEFAULT;
-    public static volatile LyricAppearance sAppearance = LyricAppearance.DEFAULT;
 
-    public static void setAppearance(String json) {
-        LyricAppearance next = LyricAppearance.parse(json);
-        if (sAppearance.toJson().equals(next.toJson())) return;
-        sAppearance = next;
+    public static void setAppearance(LyricAppearance next) {
+        if (Settings.LYRIC_APPEARANCE.get().toJson().equals(next.toJson())) return;
+        Settings.LYRIC_APPEARANCE.set(next);
         LyricView view = sView;
         if (view != null) {
             view.invalidate();
             view.kick();
         }
     }
-    public static volatile int sMaxLines = LyricFocus.DEFAULT_LIMIT;
 
     public static void setSourcePolicy(boolean custom, boolean network, String sources, String formats) {
-        LyricSourcePolicy.Config previous = LyricSourcePolicy.current;
+        LyricSourcePolicy.Config previous = LyricSourcePolicy.current();
         LyricSourcePolicy.Config next = new LyricSourcePolicy.Config(custom, network, sources, formats);
         if (previous.custom == next.custom && previous.allowNetwork == next.allowNetwork
                 && previous.sourceOrder.equals(next.sourceOrder) && previous.localFormat.equals(next.localFormat)) return;
-        LyricSourcePolicy.current = next;
+        Settings.LYRIC_SOURCE_CUSTOM.set(next.custom);
+        Settings.LYRIC_ONLINE.set(next.allowNetwork);
+        Settings.LYRIC_SOURCE_ORDER.set(next.sourceOrder);
+        Settings.LYRIC_LOCAL_FORMAT.set(next.localFormat);
+        sourcePolicyChanged();
+    }
+
+    private static void sourcePolicyChanged() {
         LyricSource.invalidateRequests();
         CACHE.clear();
         Main.main().removeCallbacks(SETTLED_LOOKUP);
@@ -324,13 +337,13 @@ public final class LockLyrics {
         sInfoSeen = null;
         sInfoTries = 0;
         sSource = LyricSource.SRC_NONE;
-        if (sEnabled && !sDemo && !sKey.isEmpty()) lookup(sKey, sController, false);
+        if (Settings.LYRICS.on() && !sDemo && !sKey.isEmpty()) lookup(sKey, sController, false);
     }
 
     static void onProviderLyrics() {
         Main.main().post(() -> {
-            if (!sEnabled || sDemo || sKey.isEmpty() || sController == null) return;
-            if (!sLines.isEmpty() && !LyricSourcePolicy.current.mayReplace(policySource(sSource), "lyricon")) return;
+            if (!Settings.LYRICS.on() || sDemo || sKey.isEmpty() || sController == null) return;
+            if (!sLines.isEmpty() && !LyricSourcePolicy.current().mayReplace(policySource(sSource), "lyricon")) return;
             CACHE.remove(sKey);
             lookup(sKey, sController, !sLines.isEmpty());
         });
@@ -339,7 +352,7 @@ public final class LockLyrics {
     static void onProviderUnavailable() {
         Main.main().post(() -> {
             CACHE.entrySet().removeIf(entry -> entry.getValue().source == LyricSource.SRC_LYRICON);
-            if (sDemo || !sEnabled || sKey.isEmpty()) return;
+            if (sDemo || !Settings.LYRICS.on() || sKey.isEmpty()) return;
             if (!sLoading && sSource != LyricSource.SRC_LYRICON) return;
             LyricSource.invalidateRequests();
             sGen++;
@@ -354,8 +367,8 @@ public final class LockLyrics {
 
     public static boolean setMaxLines(int value) {
         int next = LyricFocus.clampLimit(value);
-        if (next == sMaxLines) return false;
-        sMaxLines = next;
+        if (next == Settings.LYRIC_MAX_LINES.get()) return false;
+        Settings.LYRIC_MAX_LINES.set(next);
         LyricView view = sView;
         if (view != null) view.kick();
         return true;
@@ -367,17 +380,16 @@ public final class LockLyrics {
      */
     public static boolean setAlign(int mode) {
         int next = mode <= ALIGN_LEFT ? ALIGN_LEFT : Math.min(mode, ALIGN_RIGHT);
-        if (next == sAlign) return false;
-        sAlign = next;
+        if (next == Settings.LYRIC_ALIGN.get()) return false;
+        Settings.LYRIC_ALIGN.set(next);
         LyricView view = sView;
         if (view != null) view.kick();
         return true;
     }
 
-    public static boolean setStyle(String key, float value) {
-        LyricStyle next = sStyle.with(key, value);
-        if (next == sStyle) return false;
-        sStyle = next;
+    public static boolean setStyle(LyricStyle next) {
+        if (next == Settings.LYRIC_STYLE.get()) return false;
+        Settings.LYRIC_STYLE.set(next);
         LyricView view = sView;
         if (view != null) view.kick();
         return true;
@@ -508,7 +520,7 @@ public final class LockLyrics {
      * half, arrives after the switch that replaced it. Without the time on it the wallpaper
      * process has no way to tell which of the two is the newer answer and takes the last one to
      * arrive: the cover comes in sharp under its lyrics and stays that way for the song, because
-     * both sides believe they agree. See WallpaperProbe.takeBlurDecision.
+     * both sides believe they agree. See WallpaperArt.takeBlurDecision.
      */
     public static void putBlurOn(Intent out) {
         long state = sBlurSent;      // one read: the answer and its time travel together
@@ -574,7 +586,7 @@ public final class LockLyrics {
      * A demo asks for them itself, whatever the switch says.
      */
     private static boolean wanted() {
-        return sEnabled && !sTapHidden || sDemo;
+        return Settings.LYRICS.on() && !sTapHidden || sDemo;
     }
 
     /**
@@ -616,7 +628,7 @@ public final class LockLyrics {
 
     /** Begin or reuse the selected track's lookup without opening its page or cover. */
     public static LyricAvailability prepareForCapsule(String key, MediaController controller) {
-        if (!sEnabled || controller == null) return LyricAvailability.PENDING;
+        if (!Settings.LYRICS.on() || controller == null) return LyricAvailability.PENDING;
         sCapsulePreparation = true;
         Main.setCapsuleArtworkOwner(true, controller, key);
         String expected = lyricKey(key, controller);
@@ -905,11 +917,11 @@ public final class LockLyrics {
 
     /** The lyric page a tap into cover mode will land on. */
     public static boolean willAttachOnEntry() {
-        return hasLyrics() && CoverMorphRoute.lyricsAfterEntry(sEnabled, sTapHidden, sDemo);
+        return hasLyrics() && CoverMorphRoute.lyricsAfterEntry(Settings.LYRICS.on(), sTapHidden, sDemo);
     }
 
     public static boolean willAttachAfterTapToggle() {
-        return hasLyrics() && CoverMorphRoute.lyricsAfterToggle(sEnabled, sTapHidden, sDemo);
+        return hasLyrics() && CoverMorphRoute.lyricsAfterToggle(Settings.LYRICS.on(), sTapHidden, sDemo);
     }
 
     /**
@@ -1158,8 +1170,8 @@ public final class LockLyrics {
 
     /** Keep route/setting changes separate from media seeks in the view's clock. */
     static int bluetoothOffsetMs() {
-        return sDemo ? 0 : LyricBluetoothOffset.adjustment(sBluetoothSync,
-                LyricBluetoothRoute.current(), sBluetoothClassicMs, sBluetoothLeMs);
+        return sDemo ? 0 : LyricBluetoothOffset.adjustment(Settings.LYRIC_BT_SYNC.on(),
+                LyricBluetoothRoute.current(), Settings.LYRIC_BT_CLASSIC.get(), Settings.LYRIC_BT_LE.get());
     }
 
     static long rawPositionMs() {
@@ -1229,6 +1241,7 @@ public final class LockLyrics {
             // when the source is something else can never replace it. Asking after the payload
             // instead both fires for that and cannot loop, because each payload is tried once.
             rereadIfNewPayload(key, c);
+            rereadIfIdentityMoved(key, c);
             return;
         }
         String lastKey = sKey;
@@ -1240,10 +1253,12 @@ public final class LockLyrics {
         Main.main().removeCallbacks(SETTLED_LOOKUP);
         unpark();
         sBlurVideoReloaded = false;
-        if (sEnabled && !key.isEmpty()) scheduleBlurKick(BLUR_ENTER_DELAY_MS + 16L);
+        if (Settings.LYRICS.on() && !key.isEmpty()) scheduleBlurKick(BLUR_ENTER_DELAY_MS + 16L);
         // A different song: the budget above is per track, and so is the payload it was spent on.
         sInfoSeen = null;
         sInfoTries = 0;
+        sIdentityRetried = false;
+        sLookedUpAs = null;
         // The previous song's route says nothing about this one, and leaving it set would let a
         // track that follows a session-lyric track skip the upgrade check entirely.
         sSource = LyricSource.SRC_NONE;
@@ -1255,9 +1270,9 @@ public final class LockLyrics {
         // - two messages, in the middle of the track change's crossfade, which is exactly when
         // the wallpaper process holds a switch back to wait for the fade. Those two could then
         // land in the wrong order and leave the cover sharp.
-        sLoading = sEnabled && !key.isEmpty();
+        sLoading = Settings.LYRICS.on() && !key.isEmpty();
         setLines(Collections.<LyricLine>emptyList(), "track changed");
-        if (!sEnabled || key.isEmpty()) return;
+        if (!Settings.LYRICS.on() || key.isEmpty()) return;
         Cached hit = CACHE.get(key);
         if (hit != null) {
             sLoading = false;
@@ -1272,7 +1287,7 @@ public final class LockLyrics {
         // The wait is for the network's sake. A lyric the session already carries for this song
         // costs nothing to read and is the best answer there is, so it is read at once: waited
         // for, QQ's own lyric came up SETTLE_MS late on every track (2026-10-06, 1.2s a track).
-        if (LyricSourcePolicy.current.allowNetwork && sInfoSeen == null
+        if (LyricSourcePolicy.current().allowNetwork && sInfoSeen == null
                 && ((lastChange > 0L && sTrackAt - lastChange < BURST_MS) || staleDuration(lastKey, key))) {
             Main.main().postDelayed(SETTLED_LOOKUP, SETTLE_MS);
             return;
@@ -1303,9 +1318,16 @@ public final class LockLyrics {
      */
     private static boolean staleDuration(String lastKey, String key) {
         if (lastKey == null || lastKey.isEmpty() || !pkgOf(lastKey).equals(pkgOf(key))) return false;
-        String a = lastKey.substring(lastKey.lastIndexOf('|') + 1);
-        String b = key.substring(key.lastIndexOf('|') + 1);
+        String a = durationOf(lastKey);
+        String b = durationOf(key);
         return !a.isEmpty() && !"0".equals(a) && a.equals(b) && a.matches("[0-9]+");
+    }
+
+    /** The duration field of a song key: pkg|album|duration|id-or-name (TrackIdentity.keyOf). */
+    private static String durationOf(String key) {
+        int last = key.lastIndexOf('|');
+        int prev = last <= 0 ? -1 : key.lastIndexOf('|', last - 1);
+        return prev < 0 ? "" : key.substring(prev + 1, last);
     }
 
     private static final Runnable SETTLED_LOOKUP = new Runnable() {
@@ -1313,7 +1335,7 @@ public final class LockLyrics {
         public void run() {
             String key = sKey;
             MediaController c = sController;
-            if (!sEnabled || sDemo || key.isEmpty()) return;
+            if (!Settings.LYRICS.on() || sDemo || key.isEmpty()) return;
             Cached hit = CACHE.get(key);
             if (hit != null) {
                 sLoading = false;
@@ -1351,8 +1373,8 @@ public final class LockLyrics {
         // the network by now, and the session's own lyric outranks anything it can find. Turned
         // away, Apple's lyric - on the session 0.55s after the track change - waited out ten
         // seconds of catalogues that had nothing (2026-10-06, Here's to Never Growing Up).
-        if (!sEnabled || key.isEmpty() || sDemo) return;
-        if (!sLines.isEmpty() && !LyricSourcePolicy.current.mayReplace(policySource(sSource), "metadata")) return;
+        if (!Settings.LYRICS.on() || key.isEmpty() || sDemo) return;
+        if (!sLines.isEmpty() && !LyricSourcePolicy.current().mayReplace(policySource(sSource), "metadata")) return;
         if (sLoading && sParked == null && !sLines.isEmpty()) return;
         if (sParked != null && sParked.rereading) return;
         String info = LyricSource.infoFor(c);
@@ -1373,6 +1395,36 @@ public final class LockLyrics {
         lookup(key, c, !sLines.isEmpty());
         if (sParked != null) sParked.rereading = true;
     }
+
+    /**
+     * Looks `key` up once more when the lookup found nothing and the session has since been read
+     * as a different song: a lookup started at the track change, while TITLE still looked like
+     * the song, searched under TITLE - and only later did TITLE move with the singing and give
+     * way to the name ARTIST spells (TrackIdentity), which is what the catalogues have. Once per
+     * song, and never over lines already up.
+     */
+    private static void rereadIfIdentityMoved(String key, MediaController c) {
+        if (!Settings.LYRICS.on() || sDemo || key.isEmpty() || sLoading || sParked != null
+                || !sLines.isEmpty() || sIdentityRetried || sLookedUpAs == null) {
+            return;
+        }
+        String now = readAs(c);
+        if (now.equals(sLookedUpAs)) return;
+        sIdentityRetried = true;
+        Xp.log(TAG + key + " found nothing as " + sLookedUpAs + "; now read as " + now
+                + ", looking again");
+        CACHE.remove(key);
+        lookup(key, c, false);
+    }
+
+    /** How the session reads as a lookup, to notice it being read differently. */
+    private static String readAs(MediaController c) {
+        return TrackIdentity.of(c).lookupSignature();
+    }
+
+    /** What the last lookup searched for, and whether this song has been looked up again. */
+    private static String sLookedUpAs;
+    private static boolean sIdentityRetried;
 
     /** How many times one song may be re-read because the session published something new. */
     private static final int MAX_INFO_TRIES = 3;
@@ -1395,6 +1447,7 @@ public final class LockLyrics {
         sSettledKey = null;
         sLoading = true;
         notifyAvailabilitySoon();
+        sLookedUpAs = readAs(c);
         LyricSource.load(c, new LyricSource.Callback() {
             @Override
             public void onLines(List<LyricLine> lines, String why, int source) {
@@ -1403,7 +1456,7 @@ public final class LockLyrics {
                     return;
                 }
                 if (keepCurrent && !sLines.isEmpty() && !lines.isEmpty()
-                        && !LyricSourcePolicy.current.mayReplace(policySource(sSource), policySource(source))) {
+                        && !LyricSourcePolicy.current().mayReplace(policySource(sSource), policySource(source))) {
                     sLoading = false;
                     refresh();
                     return;
@@ -1433,7 +1486,7 @@ public final class LockLyrics {
                     return;
                 }
                 if (!keepCurrent && !lines.isEmpty() && source != LyricSource.SRC_LYRIC_INFO
-                        && LyricSourcePolicy.current.mayReplace(policySource(source), "metadata")
+                        && LyricSourcePolicy.current().mayReplace(policySource(source), "metadata")
                         && pkgOf(want).equals(sSessionPkg)) {
                     long left = sTrackAt + SESSION_WAIT_MS - SystemClock.uptimeMillis();
                     if (left > 0L) {
@@ -1557,30 +1610,18 @@ public final class LockLyrics {
     }
 
     /**
-     * Which song the lyrics belong to - deliberately without the title.
-     *
-     * Salt Player writes the line being sung INTO the title (for car and status bar lyrics) and
-     * moves "artist - title" into the artist field. Keyed on the title, every line of every song
-     * was a new track: the lines were thrown away and parsed again a line at a time, which on
-     * screen was the lyrics blinking out and back (state log 2026-09-16 02:42). Artist, album
-     * and duration hold still across a song under either convention.
-     *
-     * Except on 汽水 and QQ, which spell the artist two ways in one song - the singer, then
-     * "歌名 — 歌手" or "歌名-歌手" while a line is in the title - so the artist is its singer here
-     * (TrackName.singer). Read as published, that switch emptied the lyrics mid-song (#56).
+     * Which song the lyrics belong to: TrackIdentity's song key - package, album, duration and the
+     * catalogue's id, never TITLE (Salt, 汽水, QQ and NetEase write the line being sung into it, and
+     * every line was a new track: the lyrics blinked out and back, 2026-09-16) nor the singer
+     * (汽水 and QQ spell it two ways in one song, #56). The card's key when the session has no
+     * metadata to key on.
      */
     private static String lyricKey(String cardKey, MediaController c) {
         String fallback = cardKey == null ? "" : cardKey;
         if (c == null) return fallback;
         try {
-            android.media.MediaMetadata md = c.getMetadata();
-            if (md == null) return fallback;
-            String album = md.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM);
-            String artist = TrackName.singer(c.getPackageName(),
-                    md.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST), album);
-            long dur = md.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION);
-            return LyricTrackKey.fromMetadata(fallback, c.getPackageName(),
-                    md.getString(android.media.MediaMetadata.METADATA_KEY_TITLE), artist, album, dur);
+            String key = TrackIdentity.of(c).songKey();
+            return key.isEmpty() ? fallback : key;
         } catch (Throwable t) {
             return fallback;
         }
@@ -1753,6 +1794,17 @@ public final class LockLyrics {
         Main.main().removeCallbacks(WATCH);
     }
 
+    /**
+     * A held doze has just been established from the doze's own box (ClockCollapse.holdFromDoze):
+     * the page belongs to it from this frame, so ask the view for a frame now instead of leaving
+     * it to the tick's next beat - in a doze that beat can be a second away.
+     */
+    public static void onAodHeld() {
+        LyricView v = sView;
+        if (v != null) v.kick();
+        startTick();
+    }
+
     public static void refresh() {
         // A configured cover already owns the clock. Only the cover-master-off fallback
         // needs a lyric-only owner; it must not introduce a different wallpaper treatment.
@@ -1773,7 +1825,7 @@ public final class LockLyrics {
     /** The app's switch. The setting: it is written to the state file and the app reads it back. */
     public static void setEnabled(boolean on, String key, MediaController c) {
         boolean hadCapsuleOwner = capsuleRequestActive();
-        sEnabled = on;
+        Settings.LYRICS.set(on);
         if (!on) {
             sCapsulePreparation = false;
             sCapsulePage = false;
@@ -1800,7 +1852,7 @@ public final class LockLyrics {
      * would be the lock screen writing the app's setting, which is what it no longer does.
      */
     public static void toggleByTap(String key, MediaController c) {
-        if (!sEnabled) return;
+        if (!Settings.LYRICS.on()) return;
         if (!sCapsulePage) {
             resetCapsuleLayoutOrigin();
             sCapsuleFadeOnly = false;
@@ -1925,7 +1977,7 @@ public final class LockLyrics {
         LyricView v = sView;
         View c = Main.sContainer;
         View card = card();
-        return "enabled=" + sEnabled + " tap=" + (sTapHidden ? "hidden" : "shown")
+        return "enabled=" + Settings.LYRICS.on() + " tap=" + (sTapHidden ? "hidden" : "shown")
                 + " demo=" + sDemo + " key=" + sKey + " lines=" + sLines.size()
                 + " has=" + hasLyrics() + " loading=" + sLoading
                 + " (" + sWhy + ") src=" + srcName(sSource)
@@ -2434,7 +2486,7 @@ public final class LockLyrics {
         // it while the display is dozing takes a screen wake lock and pulls the phone out of the
         // AOD at full brightness. Called from the tick, which never stops, so this would have
         // fired within a second of the screen going off.
-        boolean asked = sKeepOn && wantsShown() && !inHeldAod()
+        boolean asked = Settings.LYRIC_KEEP_ON.on() && wantsShown() && !inHeldAod()
                 && !sLines.isEmpty() && playing();
         // Not in a pocket or face down: with nothing to stop it, a song playing kept the screen
         // lit and the lyrics drawing at 60Hz wherever the phone was put, for as long as it

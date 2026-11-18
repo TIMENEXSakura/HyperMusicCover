@@ -11,7 +11,7 @@ public final class LyricLine {
     final String translation;
     /**
      * How the line is said in Latin letters - romaji, jyutping, a Korean romanisation - or null.
-     * Kept apart from the translation because it has a switch of its own (LockLyrics.sRoma);
+     * Kept apart from the translation because it has a switch of its own (Settings.LYRIC_ROMA);
      * drawn over it when both are on (under()).
      */
     final String roma;
@@ -29,29 +29,31 @@ public final class LyricLine {
     final int[] sylEnd;
     final int[] charEnd;
 
+    private static final LyricLine[] NONE = new LyricLine[0];
+
     /**
-     * The background vocal sung over this line, if the file has one - drawn smaller underneath,
-     * with its own word timing. Null for most lines.
+     * The background vocals sung over this line, each drawn smaller underneath in turn, with its
+     * own word timing. Empty for most lines; a TTML line can carry several x-bg spans, and only
+     * keeping the first dropped the rest (PR #106). Never changed in place - addBackground
+     * replaces the array - so a copy of the line can share it.
      */
-    LyricLine bg;
-    private LyricLine[] backing = new LyricLine[0];
+    private LyricLine[] backgrounds = NONE;
 
     LyricLine[] backgrounds() {
-        if (bg != null && (backing.length == 0 || backing[0] != bg)) backing = new LyricLine[]{bg};
-        return backing;
+        return backgrounds;
     }
 
-    void addBackground(LyricLine line) {
-        LyricLine[] previous = backgrounds();
-        backing = java.util.Arrays.copyOf(previous, previous.length + 1);
-        backing[previous.length] = line;
-        bg = backing[0];
-        end = Math.max(end, line.end);
+    /** Hangs a background vocal under this line; one that outlasts the line extends it. */
+    void addBackground(LyricLine b) {
+        LyricLine[] next = java.util.Arrays.copyOf(backgrounds, backgrounds.length + 1);
+        next[backgrounds.length] = b;
+        backgrounds = next;
+        if (b.end > end) end = b.end;
     }
 
-    void copyBackgrounds(LyricLine other) {
-        bg = other.bg;
-        backing = other.backgrounds().clone();
+    /** The same background vocals as from, for a copy of it with other text. */
+    void copyBackgrounds(LyricLine from) {
+        backgrounds = from.backgrounds;
     }
 
     public LyricLine(String text, String translation, int start, int end, boolean opposite,
@@ -69,27 +71,28 @@ public final class LyricLine {
         boolean words = sylStart != null && sylStart.length > 0
                 && sylEnd != null && sylEnd.length == sylStart.length
                 && charEnd != null && charEnd.length == sylStart.length;
-        // Validate the renderer contract once, before any Canvas/StaticLayout work. A bad
-        // word map falls back to its intact line text; other lines and backing vocals survive.
+        // Character ranges the renderer would index past the text with, or run backwards over,
+        // leave the line line-timed: it still draws, just not word by word. Only that is checked
+        // here - times out of order are odd but drawable, and sungChars copes with them.
         if (words) {
-            int previousChar = 0;
-            int previousStart = -1;
-            for (int k = 0; k < sylStart.length; k++) {
-                if (sylStart[k] < previousStart || sylStart[k] < 0 || sylEnd[k] < sylStart[k]
-                        || charEnd[k] < previousChar || charEnd[k] > this.text.length()) {
+            int previous = 0;
+            for (int k = 0; k < charEnd.length; k++) {
+                if (charEnd[k] < previous || charEnd[k] > this.text.length() || sylStart[k] < 0) {
                     words = false;
                     break;
                 }
-                previousStart = sylStart[k];
-                previousChar = charEnd[k];
+                previous = charEnd[k];
             }
         }
-        // Valid word timing may begin before the enclosing line's declared boundary.
-        this.start = words ? Math.min(Math.max(0, start), sylStart[0]) : Math.max(0, start);
-        this.end = Math.max(end, this.start);
         this.sylStart = words ? sylStart.clone() : null;
         this.sylEnd = words ? sylEnd.clone() : null;
         this.charEnd = words ? charEnd.clone() : null;
+        // A first word sung before the line's own start would be half filled by the time the
+        // line is lit; the line starts when its singing does.
+        this.start = words ? Math.min(Math.max(0, start), sylStart[0]) : Math.max(0, start);
+        // A database file is edited by hand; a line that ends before it starts is clamped here
+        // rather than trusted into a negative duration later.
+        this.end = Math.max(end, this.start);
         // A word-timed line is not over while its last word is still being sung, whatever end
         // the file reported. Most word-timed files give a line no end of its own - enhanced LRC
         // is a timestamp per word and nothing else - and lyrics-core reads the line's end off
@@ -98,7 +101,8 @@ public final class LyricLine {
         // this end and stops drawing the word path at it, so an end ahead of the last syllable
         // cuts its fill off mid-sweep: on a line whose next one starts within a second, the
         // last word gets no sweep at all and the line leaves just as it begins.
-        if (words) for (int wordEnd : sylEnd) this.end = Math.max(this.end, wordEnd);
+        // Every word's end, not the last one's: times are not required to be in order.
+        if (words) for (int e : sylEnd) this.end = Math.max(this.end, e);
     }
 
     /**

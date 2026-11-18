@@ -1,4 +1,5 @@
 package com.os4.musiccover.lyrics;
+import com.os4.musiccover.Settings;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
@@ -112,7 +113,27 @@ public final class LyricSource {
             return !placeholder(raw);
         }
         String text = textOfLyricInfo(info);
-        return text != null && timedLines(text) >= MIN_SESSION_LINES && !placeholder(text);
+        return text != null && timedLines(text) >= MIN_SESSION_LINES && !placeholder(text)
+                && !oneStamp(text);
+    }
+
+    /**
+     * Every line stamped with the same time: an unsynced lyric dressed as LRC, which is what an
+     * Apple song with only static lyrics published as - every line [00:00.000] (2026-11-04).
+     * Not a lyric worth holding a timed one back for; see dropUntimed for the parsed form.
+     */
+    static boolean oneStamp(String text) {
+        java.util.regex.Matcher m = TIMED.matcher(text);
+        String first = null;
+        int n = 0;
+        while (m.find()) {
+            String t = m.group();
+            if (t.charAt(0) != '[') continue;
+            if (first == null) first = t;
+            else if (!first.equals(t)) return false;
+            n++;
+        }
+        return n >= 2;
     }
 
     /** How many LRC timestamps a payload carries, counted no further than the answer needs. */
@@ -157,11 +178,13 @@ public final class LyricSource {
      * payload reads as a stale one from the first sung line onwards: the only moment it passes is
      * the track change itself, before the player has overwritten TITLE. That is why the lyric was
      * there when the provider module was quick and gone for the whole song when it was not.
-     * So ARTIST's tail and the album are asked too, and agreement with any of the three is
-     * agreement - a rejection now needs every field the session published to disagree.
-     * ARTIST is read every way a player spells a song into it (TrackName.splits): Salt's
-     * "歌手 - 歌名", 汽水's "歌名 — 歌手" and QQ's "歌名-歌手", which is how QQ's payload came to be
-     * refused on every sung line (#47).
+     * So the payload's name is held against every reading of the session TrackIdentity makes -
+     * TITLE as published, the song ARTIST spells, the album - and agreement with any of them is
+     * agreement: a rejection needs every one to disagree. ARTIST is read the way each player
+     * spells a song into it, which a single hard-wired direction got wrong: QQ's "歌名-歌手"
+     * refused its payload on every sung line (#47), and NetEase's "歌名 - 歌手" was read as
+     * Salt's "歌手 - 歌名" and refused the whole song (#127). A reading the payload agrees with
+     * is the song from then on (TrackIdentity.accepts).
      */
     static String infoFor(MediaController c) {
         String session = sessionInfoFor(c);
@@ -191,36 +214,16 @@ public final class LyricSource {
             return null;
         }
         String theirs = songNameOf(info);
-        String ours = titleOf(c);
-        if (theirs == null || ours == null) {
+        if (theirs == null || theirs.trim().isEmpty()) {
             return info;
         }
-        String a = theirs.trim().toLowerCase();
-        String b = ours.trim().toLowerCase();
-        if (a.isEmpty() || b.isEmpty() || a.contains(b) || b.contains(a)) {
-            return info;
-        }
-        if (TrackName.songIn(a, metaOf(c, MediaMetadata.METADATA_KEY_ARTIST))
-                || agrees(a, metaOf(c, MediaMetadata.METADATA_KEY_ALBUM))) {
+        TrackIdentity id = TrackIdentity.of(c);
+        if (id.readings.isEmpty() || id.accepts(theirs)) {
             return info;
         }
         Xp.log("[MCLyric] the session's lyricInfo is still \"" + theirs
-                + "\" while the track is \"" + ours + "\"; not reading it");
+                + "\" while the track is " + id.readings + "; not reading it");
         return null;
-    }
-
-    /**
-     * Whether one of the session's other fields carries the name the payload claims.
-     *
-     * `name` is already trimmed and lowered; the field is not. Same containment test as the
-     * title's, and for the same reason: either side may carry decorations the other does not.
-     */
-    private static boolean agrees(String name, String other) {
-        if (other == null) {
-            return false;
-        }
-        String s = other.trim().toLowerCase();
-        return !s.isEmpty() && (name.contains(s) || s.contains(name));
     }
 
     /** Which song the payload says it is for, or null when it does not say. */
@@ -230,11 +233,6 @@ public final class LyricSource {
         } catch (Throwable t) {
             return null;
         }
-    }
-
-    /** What the session says is playing, for the payload to be held against. */
-    private static String titleOf(MediaController c) {
-        return metaOf(c, MediaMetadata.METADATA_KEY_TITLE);
     }
 
     /** One metadata string, or null - including when the session has no metadata at all. */
@@ -481,6 +479,26 @@ public final class LyricSource {
     private static boolean dropPlaceholder(Rows r) {
         if (!placeholderLines(r.lines)) return false;
         r.why = "instrumental, by its lyric: " + r.why;
+        r.lines = java.util.Collections.emptyList();
+        r.source = SRC_NONE;
+        return true;
+    }
+
+    /**
+     * A lyric with no timing, from any source, taken for what it is to a lock screen: nothing it
+     * can play. Every line at one moment put the focus on the last line for the whole song, and
+     * the session's copy of it held back the word-timed lyric NetEase had for the same song
+     * (Apple's unsynced lyrics, 2026-11-04). Emptied, so the search goes on; a song whose every
+     * source is like this shows no lyrics. True when [r] was emptied.
+     */
+    private static boolean dropUntimed(Rows r) {
+        List<LyricLine> lines = r.lines;
+        if (lines.size() < 2) return false;
+        int first = lines.get(0).start;
+        for (LyricLine l : lines) {
+            if (l.start != first || l.hasWords()) return false;
+        }
+        r.why = "no timing on any line: " + r.why;
         r.lines = java.util.Collections.emptyList();
         r.source = SRC_NONE;
         return true;
@@ -765,7 +783,7 @@ public final class LyricSource {
      * anything, and the artwork prefetch shares neither the thread nor the wait.
      */
     public static void warm(String id, String dir, String title, String artist) {
-        final LyricSourcePolicy.Config policy = LyricSourcePolicy.current;
+        final LyricSourcePolicy.Config policy = LyricSourcePolicy.current();
         if (!policy.allowNetwork) return;
         final int gen = --sWarmGen;
         if (id != null && dir != null) {
@@ -789,7 +807,7 @@ public final class LyricSource {
         // Not the whole by-name lookup: choosing between the results needs the duration, which a
         // queue item does not carry, and a choice made without one can land on another recording
         // of the same song. The search does not need it, so the search is what is done early.
-        if (title != null && !superseded(gen) && policy == LyricSourcePolicy.current) {
+        if (title != null && !superseded(gen) && policy == LyricSourcePolicy.current()) {
             NcmLyrics.warmSearch(title, artist);
         }
     }
@@ -871,7 +889,9 @@ public final class LyricSource {
         // Held now, on the caller's thread, because the worker below has no way to reach one.
         final android.content.Context ctx = Main.sAppCtx;
         final MediaController controller = c;
-        final LyricSourcePolicy.Config policy = LyricSourcePolicy.current;
+        final LyricSourcePolicy.Config policy = LyricSourcePolicy.current();
+        // Read once: a switch flipped mid-lookup starts a lookup of its own (LockLyrics.setOnline).
+        final boolean online = Settings.LYRIC_ONLINE.on();
         if (info == null && id == null && q == null && ctx == null) {
             Xp.log("[MCLyric] " + pkg + " publishes neither lyricInfo, a song id, nor a name");
             onMain(cb, java.util.Collections.<LyricLine>emptyList(),
@@ -907,8 +927,10 @@ public final class LyricSource {
                     } catch (Throwable error) {
                         Xp.w("[MCLyric] " + source + " failed: " + error);
                     }
-                    return !dropPlaceholder(r) && !r.lines.isEmpty() ? r : null;
-                }, () -> !superseded(gen) && policy == LyricSourcePolicy.current);
+                    boolean placeholder = dropPlaceholder(r);
+                    dropUntimed(r);
+                    return !placeholder && !r.lines.isEmpty() ? r : null;
+                }, () -> !superseded(gen) && policy == LyricSourcePolicy.current());
                 final Rows r = selected != null ? selected : new Rows();
                 // A translation left on the line itself by its tag writer (#95) is hung on the
                 // line before anything reads it: borrow() must see it and not go and fetch a
@@ -916,7 +938,7 @@ public final class LyricSource {
                 r.lines = LyricParse.splitInlineTranslations(r.lines);
                 Xp.log("[MCLyric] " + pkg + " -> " + r.why);
                 Main.main().post(() -> {
-                    if (!superseded(gen) && policy == LyricSourcePolicy.current) cb.onLines(r.lines, r.why, r.source);
+                    if (!superseded(gen) && policy == LyricSourcePolicy.current()) cb.onLines(r.lines, r.why, r.source);
                 });
             }
         });
@@ -946,8 +968,8 @@ public final class LyricSource {
             hasRoma |= l.roma != null;
         }
         boolean[] want = {
-                LockLyrics.sTrans && !hasTrans && LyricParse.foreign(r.lines),
-                LockLyrics.sRoma && !hasRoma && LyricParse.romanisable(r.lines),
+                Settings.LYRIC_TRANS.on() && !hasTrans && LyricParse.foreign(r.lines),
+                Settings.LYRIC_ROMA.on() && !hasRoma && LyricParse.romanisable(r.lines),
         };
         if (!want[0] && !want[1]) return;
         final int own = r.source;
@@ -1385,10 +1407,7 @@ public final class LyricSource {
     private static void lyricon(MediaController c, Rows r, boolean waitForProvider) {
         String before = r.why;
         try {
-            MediaMetadata md = c == null ? null : c.getMetadata();
-            String title = md == null ? null : md.getString(MediaMetadata.METADATA_KEY_TITLE);
-            String artist = md == null ? null : md.getString(MediaMetadata.METADATA_KEY_ARTIST);
-            List<LyricLine> lines = LyriconSource.linesFor(title, artist,
+            List<LyricLine> lines = LyriconSource.linesFor(TrackIdentity.of(c),
                     c == null ? null : c.getPackageName(), waitForProvider);
             if (lines == null || lines.isEmpty()) {
                 return;
@@ -1655,7 +1674,7 @@ public final class LyricSource {
         long started = android.os.SystemClock.uptimeMillis();
         HttpURLConnection conn = null;
         try {
-            if (!LyricSourcePolicy.current.allowNetwork) return new Answer(UNREACHABLE, null);
+            if (!LyricSourcePolicy.current().allowNetwork) return new Answer(UNREACHABLE, null);
             conn = (HttpURLConnection) new URL(url).openConnection();
             // Short on purpose. A lyric that arrives after the lock screen has been put away is
             // worth nothing, and four mirrors running at once means the slow one is never waited

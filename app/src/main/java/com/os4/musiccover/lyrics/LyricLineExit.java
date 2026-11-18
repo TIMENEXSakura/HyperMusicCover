@@ -4,8 +4,6 @@ import java.util.List;
 
 /** The last drawn pose of a genuinely finished lyric group, independent of the next row's scroll. */
 final class LyricLineExit {
-    static final long DURATION_MS = 300L;
-    static final float END_SCALE = 0.85f;
     // Line-timed lyrics wake at most every 500ms. Returning from sleep must not replay old exits.
     private static final int MAX_END_LAG_MS = 600;
 
@@ -20,11 +18,9 @@ final class LyricLineExit {
         boolean departing() { return startedAt >= 0L; }
         boolean waitingForTop() { return readyAt >= 0L && !departing(); }
         float amount(long now) {
-            float t = Math.max(0f, Math.min(1f, (now - startedAt) / (float) DURATION_MS));
-            return t * t * (3f - 2f * t);
+            return Math.max(0f, Math.min(1f, (now - startedAt) / (float) LyricExitWipe.DURATION_MS));
         }
-        float alpha(long now) { return departing() ? 1f - amount(now) : 1f; }
-        float scale(long now) { return departing() ? 1f - (1f - END_SCALE) * amount(now) : 1f; }
+        boolean holdsAppearance() { return readyAt >= 0L && !finished; }
     }
 
     private Row[] rows = new Row[0];
@@ -80,7 +76,7 @@ final class LyricLineExit {
             if (i == rows.length - 1) continue;
             if (row.departing()) {
                 if (!row.finished) {
-                    row.finished = !animate || now - row.startedAt >= DURATION_MS;
+                    row.finished = !animate || now - row.startedAt >= LyricExitWipe.DURATION_MS;
                     changed = true;
                 }
                 continue;

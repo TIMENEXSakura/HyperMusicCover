@@ -1,4 +1,5 @@
 package com.os4.musiccover.app
+import com.os4.musiccover.SettingSpec
 import com.os4.musiccover.transit.MetroCodeIsland
 import com.os4.musiccover.island.MiniPlayerConfig
 import com.os4.musiccover.HotReloadPolicy
@@ -51,9 +52,9 @@ object ModuleBridge {
         val cover: Boolean = false,
         val auto: Boolean = false,
         /** 启用音乐锁屏封面. On for a module too old to report it: it had no way to turn off. */
-        val coverFeature: Boolean = true,
-        val bias: Float = 0.34f,
-        val coverStyle: Int = 0,
+        val coverFeature: Boolean = SettingSpec.COVER_FEATURE.defBool,
+        val bias: Float = SettingSpec.BIAS.defFloat,
+        val coverStyle: Int = SettingSpec.COVER_STYLE.defInt,
         /**
          * The square's side as a share of the room between the clock and the media card, and
          * where it sits in the height that leaves. Both fixed on the module side and neither
@@ -63,8 +64,8 @@ object ModuleBridge {
          * The corners are not here: they are the media card's own radius now, which the preview
          * already has in [Preview.cardRadius].
          */
-        val coverCardFill: Float = 1f,
-        val coverCardPos: Float = 0.5f,
+        val coverCardFill: Float = SettingSpec.COVER_CARD_FILL.defFloat,
+        val coverCardPos: Float = SettingSpec.COVER_CARD_POS.defFloat,
         /**
          * How tall the collapsed clock's digits are, in dp.
          *
@@ -74,7 +75,7 @@ object ModuleBridge {
          * different screen. A height is the same clock everywhere: the module divides it by the
          * glyphs it measures and scales by what comes out.
          */
-        val clockHeightDp: Float = 36f,
+        val clockHeightDp: Float = SettingSpec.CLOCK_HEIGHT.defFloat,
         /**
          * The collapsed clock's size as a fraction of the style's full clock, 1 = unchanged.
          * The module reports what the clock is at whether or not anything has set it; 0 = the
@@ -83,7 +84,7 @@ object ModuleBridge {
          */
         val clockSize: Float = 0f,
         /** How far the date and clock are moved together, in dp. Positive is down. */
-        val clockOffsetDp: Float = 0f,
+        val clockOffsetDp: Float = SettingSpec.CLOCK_OFFSET.defFloat,
         /**
          * The cover transition's spring response, in seconds - how long the clock takes to
          * travel. Larger is slower.
@@ -92,9 +93,9 @@ object ModuleBridge {
          * the number means the same thing on every style and screen, and the card and wallpaper
          * fades are derived from it too. 0.38 is the OEM's own preset for this transition.
          */
-        val clockResponse: Float = 0.38f,
+        val clockResponse: Float = SettingSpec.SPRING.defFloat,
         /** The glass clock's end in the OEM's own terms; 0 is fully transparent glass. */
-        val glassEnd: Float = 0f,
+        val glassEnd: Float = SettingSpec.GLASS_END.defFloat,
         val cardShowing: Boolean = false,
         val lockWallpaperOk: Boolean = false,
         /**
@@ -111,65 +112,73 @@ object ModuleBridge {
         val player: String = "",
         /**
          * Whether the media card's thumbnail is hidden. On, and not a setting on either side any
-         * more - see Main.sMcHideArt. Reported because the preview draws the card with the OEM's
+         * more - see Settings.MC_HIDE_ART. Reported because the preview draws the card with the OEM's
          * own picture of it, and what that picture contains depends on this.
          */
-        val mcHideArt: Boolean = true,
+        val mcHideArt: Boolean = SettingSpec.MC_HIDE_ART.defBool,
         /** With [mcHideArt] on, show the thumbnail anyway while the lyrics are up. Also fixed on. */
-        val mcArtInLyrics: Boolean = true,
-        val mcTitleTap: Boolean = false,
+        val mcArtInLyrics: Boolean = SettingSpec.MC_ART_IN_LYRICS.defBool,
+        val mcTitleTap: Boolean = SettingSpec.MC_TITLE_TAP.defBool,
         /** The card's cover/lyrics page button. Off by default. */
-        val mcPageButton: Boolean = false,
-        val hideFingerprint: Boolean = false,
+        val mcPageButton: Boolean = SettingSpec.MC_PAGE_BUTTON.defBool,
+        val hideFingerprint: Boolean = SettingSpec.HIDE_FP.defBool,
         /** Apple Music motion artwork in place of the still cover. Off by default. */
-        val motionCover: Boolean = false,
-        val motionOnData: Boolean = false,
+        val motionCover: Boolean = SettingSpec.MOTION.defBool,
+        val motionOnData: Boolean = SettingSpec.MOTION_ON_DATA.defBool,
         /** Draw the big clock's colon on the styles that drop it. */
-        val forceColon: Boolean = false,
+        val forceColon: Boolean = SettingSpec.COLON.defBool,
         /** Light the media card's progress bar the way the island's is lit (#49). On by default. */
-        val mediaBarGlow: Boolean = true,
+        val mediaBarGlow: Boolean = SettingSpec.SEEK_GLOW.defBool,
         /**
          * Lock screen lyrics, between the collapsed clock and the card. The master switch; the
          * two-finger tap on the lock screen swaps cover and lyrics only while it is on.
          */
-        val lyrics: Boolean = true,
+        val lyrics: Boolean = SettingSpec.LYRICS.defBool,
         /** Keep the screen lit while lock screen lyrics are playing. */
-        val lyricsKeepOn: Boolean = false,
+        val lyricsKeepOn: Boolean = SettingSpec.LYRIC_KEEP_ON.defBool,
         /** Draw the singing words brighter than white on an HDR screen. */
-        val lyricsHdr: Boolean = false,
-        /** Keep capsule lyric animation independent of the moving clock's clipping edge. */
+        val lyricsHdr: Boolean = SettingSpec.LYRIC_HDR.defBool,
         val lyricClockIndependent: Boolean = true,
         val lyricFlexibleDuet: Boolean = true,
-        /** Estimated Bluetooth audio latency; positive offsets advance displayed lyrics. */
         val lyricBtSync: Boolean = true,
         val lyricBtClassic: Int = 400,
         val lyricBtLe: Int = 100,
         /** Draw each line's translation under it. On unless the user turns it off. */
-        val lyricsTrans: Boolean = true,
+        val lyricsTrans: Boolean = SettingSpec.LYRIC_TRANS.defBool,
         /**
          * The full-screen AOD shows the OEM's own clock instead of the cover's small one. The
          * wire says it the other way round - `aodsmall`, "keep the small clock" - so this is the
          * module's flag inverted, once, in the two places that name the key.
          */
-        val aodBigClock: Boolean = false,
+        val aodBigClock: Boolean = !SettingSpec.AOD_SMALL.defBool,
         /** Draw each line's romanisation under it, over the translation. Off by default. */
-        val lyricsRoma: Boolean = false,
+        val lyricsRoma: Boolean = SettingSpec.LYRIC_ROMA.defBool,
+        /** Whether lyrics may be looked up on the network. On by default. */
+        val lyricsOnline: Boolean = SettingSpec.LYRIC_ONLINE.defBool,
         /** Where the lines settle in their column: 0 left, 1 centre, 2 right. */
-        val lyricsAlign: Int = 0,
+        val lyricsAlign: Int = SettingSpec.LYRIC_ALIGN.defInt,
         val lyricsMaxLines: Int = 3,
-        val lyricBgSizeSp: Float = 17f,
-        val lyricAppearance: String = "{}",
         val lyricSourceCustom: Boolean = false,
         val lyricNetwork: Boolean = false,
         val lyricSourceOrder: String = com.os4.musiccover.lyrics.LyricSourcePolicy.DEFAULT_SOURCES,
         val lyricLocalFormat: String = com.os4.musiccover.lyrics.LocalLyricFormat.TTML,
         /** The lyric band's height as a share of the room between the clock and the card. */
-        val lyricFill: Float = 1f,
+        val lyricFill: Float = SettingSpec.LYRIC_FILL.defFloat,
         /** Where the band sits in the height it leaves: 0 top, 0.5 centre, 1 bottom. */
-        val lyricPos: Float = 0.5f,
-        val lyricSideDp: Float = 30f,
-        val lyricSizeSp: Float = 25f,
-        val lyricWeight: Int = 500,
+        val lyricPos: Float = SettingSpec.LYRIC_POS.defFloat,
+        val lyricSideDp: Float = SettingSpec.LYRIC_SIDE.defFloat,
+        val lyricSizeSp: Float = SettingSpec.LYRIC_SIZE.defFloat,
+        val lyricWeight: Int = SettingSpec.LYRIC_WEIGHT.defInt,
+        /** The backing vocal's and the translation's weights, beside lyricWeight. */
+        val lyricBgWeight: Int = SettingSpec.LYRIC_BG_WEIGHT.defInt,
+        val lyricTransWeight: Int = SettingSpec.LYRIC_TRANS_WEIGHT.defInt,
+        /** The backing vocal's size, beside lyricSizeSp. */
+        val lyricBgSizeSp: Float = SettingSpec.LYRIC_BG_SIZE.defFloat,
+        /** The translation's (and romanisation's) size, which used to be a fixed share of the lead. */
+        val lyricTransSizeSp: Float = SettingSpec.LYRIC_TRANS_SIZE.defFloat,
+        /** Colours and opacity of the lead and the backing vocal, as LyricAppearance's JSON. */
+        val lyricAppearance: String = SettingSpec.LYRIC_APPEARANCE.defString,
+        val lyricPreviewSeed: Int = 0,
         /**
          * A session has actually carried its own lyric since SystemUI started.
          *
@@ -198,11 +207,11 @@ object ModuleBridge {
         /** Live subscriber connection and active-provider feedback from SystemUI. */
         val lyriconState: String = "not started",
         /** 0 system default, 1 never avoid the fingerprint icon, 2 always avoid it. */
-        val fpAvoid: Int = 0,
-        /** 「高德公交地铁」: the trip's island and lock screen page (AmapTransitScene.sOn). */
-        val transit: Boolean = true,
-        /** 取餐码: a 微信 order page's pickup code on the island (PickupCodeIsland.sOn). */
-        val pickup: Boolean = true,
+        val fpAvoid: Int = SettingSpec.FP_AVOID.defInt,
+        /** 「高德公交地铁」: the trip's island and lock screen page (Settings.TRANSIT). */
+        val transit: Boolean = SettingSpec.TRANSIT.defBool,
+        /** 取餐码: a 微信 order page's pickup code on the island (Settings.PICKUP). */
+        val pickup: Boolean = SettingSpec.PICKUP.defBool,
         /**
          * 取餐码云端名单的状态：ColorOS 那一份自己的更新日期（空字符串＝从未同步过），
          * 和它有几个小程序。设置页那行「手动刷新取餐码云端规则」的副标题读的就是它。
@@ -215,6 +224,32 @@ object ModuleBridge {
         val fpQuickSystem: Boolean = true,
         /** Whether the module found the quick-open menu on this phone. */
         val fpQuickOk: Boolean = false,
+        /**
+         * The ids (`feature:xxx`) of what did not go into SystemUI at start: failed, hooked
+         * nothing, or skipped for a missing clock container. Empty from a module too old to say.
+         */
+        val featuresMissing: List<String> = emptyList(),
+        /**
+         * Whether the module reads the app's preferences at all (stage 5.2). Null from a module
+         * older than that - it does not answer the key - and that is what keeps the app sending
+         * ops instead of writing a group nothing will read.
+         */
+        val settingsPrefs: Boolean? = null,
+        /**
+         * Whether the module answers that key at all - what it *can* do, where [settingsPrefs]
+         * says what it is doing. A module that supports the group answers false until the app has
+         * migrated it; reading that as "cannot" would stop the app writing the group the moment
+         * it had finished migrating.
+         */
+        val canReadPrefs: Boolean = false,
+        /** The last write of the app's group the module applied, for the page's confirmation. */
+        val settingsRev: Long = 0L,
+        /**
+         * The installation this host's files belong to (stage 5.5); empty from a host that has
+         * never seen one. A different id from the app's own means its data was wiped and the
+         * host still holds the old installation.
+         */
+        val hostInstallId: String = "",
         /**
          * The notification-shade settings, keyed exactly as the module's own CFG_KEYS.
          *
@@ -390,6 +425,13 @@ object ModuleBridge {
      */
     fun lastAnswer(): State? = lastQuery
 
+    /**
+     * A page's starting point before its query lands. Once the app's copy is the source this is
+     * that copy, so a page opened while SystemUI is away shows the settings it will apply when
+     * SystemUI returns instead of every control at its default.
+     */
+    fun initialState(): State = SettingsStore.overlay(State())
+
     /** When SystemUI was last restarted from here, or seen to go; see [queryAlive]. */
     @Volatile private var restartingSince = 0L
 
@@ -426,20 +468,41 @@ object ModuleBridge {
         return any
     }
 
+    /**
+     * A setting that has a row: the app's copy takes it (stage 5.3), or the op goes out as it
+     * always did when the group cannot carry it yet. The op is also what a failed confirmation
+     * replays, so it has to stay here rather than being deleted for the new path.
+     */
+    private fun setting(context: Context, spec: SettingSpec, value: Any, replay: () -> Unit) {
+        if (SettingsStore.put(context, spec, value, replay)) return
+        replay()
+    }
+
     fun setAuto(context: Context, on: Boolean) = send(context, "auto") { putExtra("on", on) }
 
     fun setCoverFeature(context: Context, on: Boolean) =
-        send(context, "coverfeature") { putExtra("on", on) }
+        setting(context, SettingSpec.COVER_FEATURE, on) {
+            send(context, "coverfeature") { putExtra("on", on) }
+        }
 
     fun setCover(context: Context, on: Boolean) = send(context, "pushart") { putExtra("on", on) }
 
-    fun setBias(context: Context, v: Float) = send(context, "bias") { putExtra("v", v) }
+    fun setBias(context: Context, v: Float) =
+        setting(context, SettingSpec.BIAS, v) { send(context, "bias") { putExtra("v", v) } }
 
-    fun setCoverStyle(context: Context, key: String, value: Float) =
-        send(context, "coverstyle") {
-            putExtra("key", key)
-            putExtra("v", value)
+    fun setCoverStyle(context: Context, key: String, value: Float) {
+        val replay = {
+            send(context, "coverstyle") {
+                putExtra("key", key)
+                putExtra("v", value)
+            }
         }
+        // Only the mode is a setting; the rest of the style is fixed. A key this app does not
+        // send today would otherwise be stored as if it were the mode.
+        if (key != "mode" || !SettingsStore.put(context, SettingSpec.COVER_STYLE, value.toInt(), replay)) {
+            replay()
+        }
+    }
 
 
     /**
@@ -454,10 +517,14 @@ object ModuleBridge {
      * pages and [SettingsBackup] between them no longer offer the values.
      */
     fun setClockHeight(context: Context, dp: Float) =
-        send(context, "clockscale") { putExtra("v", dp) }
+        setting(context, SettingSpec.CLOCK_HEIGHT, dp) {
+            send(context, "clockscale") { putExtra("v", dp) }
+        }
 
     fun setClockSize(context: Context, fraction: Float) =
-        send(context, "clocksize") { putExtra("v", fraction) }
+        setting(context, SettingSpec.CLOCK_SIZE, fraction) {
+            send(context, "clocksize") { putExtra("v", fraction) }
+        }
 
     fun setClockOffset(context: Context, dp: Float) =
         send(context, "clockoffset") { putExtra("v", dp) }
@@ -474,100 +541,197 @@ object ModuleBridge {
         send(context, "mediacard") { putExtra("hideart", on) }
 
     fun setCardTitleTap(context: Context, on: Boolean) =
-        send(context, "mediacard") { putExtra("titletap", on) }
+        setting(context, SettingSpec.MC_TITLE_TAP, on) {
+            send(context, "mediacard") { putExtra("titletap", on) }
+        }
 
     fun setCardPageButton(context: Context, on: Boolean) =
-        send(context, "mediacard") { putExtra("pagebtn", on) }
+        setting(context, SettingSpec.MC_PAGE_BUTTON, on) {
+            send(context, "mediacard") { putExtra("pagebtn", on) }
+        }
 
     // Its own op rather than a third extra on "mediacard": the switch sits under the card
     // options on screen, but it has nothing to do with the card, and grouping it there on the
     // wire would make moving it later a protocol change.
     fun setHideFingerprint(context: Context, on: Boolean) =
-        send(context, "hidefp") { putExtra("on", on) }
+        setting(context, SettingSpec.HIDE_FP, on) {
+            send(context, "hidefp") { putExtra("on", on) }
+        }
 
     fun setMotionCover(context: Context, on: Boolean) =
-        send(context, "motion") { putExtra("on", on) }
+        setting(context, SettingSpec.MOTION, on) {
+            send(context, "motion") { putExtra("on", on) }
+        }
 
     fun setMotionOnData(context: Context, on: Boolean) =
-        send(context, "motion") { putExtra("data", on) }
+        setting(context, SettingSpec.MOTION_ON_DATA, on) {
+            send(context, "motion") { putExtra("data", on) }
+        }
 
     /** See the note above [setClockHeight]: no row offers this any more, the op still works. */
     fun setAodSmall(context: Context, on: Boolean) =
-        send(context, "aodclock") { putExtra("small", on) }
+        setting(context, SettingSpec.AOD_SMALL, on) {
+            send(context, "aodclock") { putExtra("small", on) }
+        }
 
     fun setForceColon(context: Context, on: Boolean) =
-        send(context, "colon") { putExtra("on", on) }
+        setting(context, SettingSpec.COLON, on) {
+            send(context, "colon") { putExtra("on", on) }
+        }
 
     fun setMediaBarGlow(context: Context, on: Boolean) =
-        send(context, "seekglow") { putExtra("on", on) }
+        setting(context, SettingSpec.SEEK_GLOW, on) {
+            send(context, "seekglow") { putExtra("on", on) }
+        }
 
     /** 启用锁屏歌词, the lyrics' master switch. Saved by the module as lyricmaster. */
     fun setLyrics(context: Context, on: Boolean) =
-        send(context, "lyrics") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRICS, on) {
+            send(context, "lyrics") { putExtra("on", on) }
+        }
 
     fun setLyricsHdr(context: Context, on: Boolean) =
-        send(context, "lyrichdr") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRIC_HDR, on) {
+            send(context, "lyrichdr") { putExtra("on", on) }
+        }
 
     fun setLyricClockIndependent(context: Context, on: Boolean) =
-        send(context, "lyricclockindependent") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRIC_CLOCK_INDEPENDENT, on) {
+            send(context, "lyricclockindependent") { putExtra("on", on) }
+        }
 
     fun setLyricFlexibleDuet(context: Context, on: Boolean) =
-        send(context, "lyricflexduet") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRIC_FLEX_DUET, on) {
+            send(context, "lyricflexduet") { putExtra("on", on) }
+        }
 
-    fun setLyricBluetoothSync(context: Context, on: Boolean, classic: Int, le: Int) =
-        send(context, "lyricbtsync") {
+    fun setLyricBluetoothSync(context: Context, on: Boolean, classic: Int, le: Int) {
+        val replay = { send(context, "lyricbtsync") {
             putExtra("on", on)
             putExtra("classic", classic.coerceIn(-500, 500))
             putExtra("le", le.coerceIn(-500, 500))
-        }
+        } }
+        val sent = listOf(
+            SettingsStore.put(context, SettingSpec.LYRIC_BT_SYNC, on, replay),
+            SettingsStore.put(context, SettingSpec.LYRIC_BT_CLASSIC, classic.coerceIn(-500, 500), replay),
+            SettingsStore.put(context, SettingSpec.LYRIC_BT_LE, le.coerceIn(-500, 500), replay))
+        if (sent.any { !it }) replay()
+    }
 
     fun setLyricsKeepOn(context: Context, on: Boolean) =
-        send(context, "lyrickeep") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRIC_KEEP_ON, on) {
+            send(context, "lyrickeep") { putExtra("on", on) }
+        }
 
     fun setLyricsTrans(context: Context, on: Boolean) =
-        send(context, "lyrictrans") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRIC_TRANS, on) {
+            send(context, "lyrictrans") { putExtra("on", on) }
+        }
 
     fun setAodBigClock(context: Context, on: Boolean) =
-        send(context, "aodclock") { putExtra("small", !on) }
+        setting(context, SettingSpec.AOD_SMALL, !on) {
+            send(context, "aodclock") { putExtra("small", !on) }
+        }
     fun setLyricsRoma(context: Context, on: Boolean) =
-        send(context, "lyricroma") { putExtra("on", on) }
+        setting(context, SettingSpec.LYRIC_ROMA, on) {
+            send(context, "lyricroma") { putExtra("on", on) }
+        }
+    fun setLyricsOnline(context: Context, on: Boolean) =
+        setting(context, SettingSpec.LYRIC_ONLINE, on) {
+            send(context, "lyriconline") { putExtra("on", on) }
+        }
 
     fun setLyricsAlign(context: Context, mode: Int) =
-        send(context, "lyricalign") { putExtra("v", mode) }
+        setting(context, SettingSpec.LYRIC_ALIGN, mode) {
+            send(context, "lyricalign") { putExtra("v", mode) }
+        }
 
     fun setLyricsMaxLines(context: Context, count: Int) =
-        send(context, "lyricmaxlines") { putExtra("v", count.coerceIn(0, 4)) }
+        setting(context, SettingSpec.LYRIC_MAX_LINES, count.coerceIn(0, 4)) {
+            send(context, "lyricmaxlines") { putExtra("v", count.coerceIn(0, 4)) }
+        }
 
     fun setLyricAppearance(context: Context, json: String) =
-        send(context, "lyricappearance") { putExtra("json", json) }
+        setting(context, SettingSpec.LYRIC_APPEARANCE, json) {
+            send(context, "lyricappearance") { putExtra("json", json) }
+        }
 
-    fun setLyricSourcePolicy(context: Context, state: State) =
-        send(context, "lyricsourcepolicy") {
+    fun setLyricSourcePolicy(context: Context, state: State) {
+        val replay = { send(context, "lyricsourcepolicy") {
             putExtra("custom", state.lyricSourceCustom)
             putExtra("network", state.lyricNetwork)
             putExtra("sources", state.lyricSourceOrder)
             putExtra("localformat", state.lyricLocalFormat)
-        }
+        } }
+        val sent = listOf(
+            SettingsStore.put(context, SettingSpec.LYRIC_SOURCE_CUSTOM, state.lyricSourceCustom, replay),
+            SettingsStore.put(context, SettingSpec.LYRIC_ONLINE, state.lyricNetwork, replay),
+            SettingsStore.put(context, SettingSpec.LYRIC_SOURCE_ORDER, state.lyricSourceOrder, replay),
+            SettingsStore.put(context, SettingSpec.LYRIC_LOCAL_FORMAT, state.lyricLocalFormat, replay))
+        if (sent.any { !it }) replay()
+    }
 
     /**
+     * One of the values the lyric band and its type are made of. "size", "bgsize" and "transsize"
+     * are the 歌词外观 page's and saved; the rest are fixed and move only for the session.
+     *
      * The module validates every value, including imported settings and adb broadcasts.
      */
-    fun setLyricStyle(context: Context, key: String, value: Float) =
-        send(context, "lyricstyle") {
-            putExtra("key", key)
-            putExtra("v", value)
+    fun setLyricStyle(context: Context, key: String, value: Float) {
+        val replay = {
+            send(context, "lyricstyle") {
+                putExtra("key", key)
+                putExtra("v", value)
+            }
         }
+        val spec = when (key) {
+            "fill" -> SettingSpec.LYRIC_FILL
+            "size" -> SettingSpec.LYRIC_SIZE
+            "bgsize" -> SettingSpec.LYRIC_BG_SIZE
+            "transsize" -> SettingSpec.LYRIC_TRANS_SIZE
+            else -> null
+        }
+        // The three sizes are the entry's kept keys; the band's other three values are fixed and
+        // move only this session, so they keep the op path.
+        if (spec == null || !SettingsStore.put(context, spec, value, replay)) replay()
+    }
+
+    /**
+     * One of the three weights. Kept in the app's copy as the Int it is, and sent as the Float
+     * the lyricstyle op's one extra carries - the module rounds it back to the hundreds.
+     */
+    fun setLyricWeight(context: Context, key: String, value: Int) {
+        val replay = {
+            send(context, "lyricstyle") {
+                putExtra("key", key)
+                putExtra("v", value.toFloat())
+            }
+        }
+        val spec = when (key) {
+            "weight" -> SettingSpec.LYRIC_WEIGHT
+            "bgweight" -> SettingSpec.LYRIC_BG_WEIGHT
+            "transweight" -> SettingSpec.LYRIC_TRANS_WEIGHT
+            else -> null
+        }
+        if (spec == null || !SettingsStore.put(context, spec, value, replay)) replay()
+    }
 
     fun setFingerprintAvoid(context: Context, mode: Int) =
-        send(context, "fpavoid") { putExtra("mode", mode) }
+        setting(context, SettingSpec.FP_AVOID, mode) {
+            send(context, "fpavoid") { putExtra("mode", mode) }
+        }
 
     /** 「高德公交地铁」. SystemUI holds it and tells 高德, whose process posts the island. */
     fun setTransit(context: Context, on: Boolean) =
-        send(context, "transitcfg") { putExtra("on", on) }
+        setting(context, SettingSpec.TRANSIT, on) {
+            send(context, "transitcfg") { putExtra("on", on) }
+        }
 
     /** 取餐码. SystemUI reads the page and posts the island itself. */
     fun setPickup(context: Context, on: Boolean) =
-        send(context, "pickup") { putExtra("on", on) }
+        setting(context, SettingSpec.PICKUP, on) {
+            send(context, "pickup") { putExtra("on", on) }
+        }
 
     /**
      * 取餐码的云端名单，去 OPPO 那儿拉一次（settings 页那个按钮）。
@@ -653,16 +817,81 @@ object ModuleBridge {
             }
         }
         if (wasSendingMini || sendSeq != before) b = ask(context, "query")
-        var state = fromBundle(b)
+        var state = answered(b)
         if (!state.alive) return state.also { lastQuery = it }
-        moduleAcks = b?.getBoolean("acks", false) == true
         // Whatever was set while it was away goes first, and the answer is asked for again so
         // the page shows those settings rather than the values they replaced.
         if (pending.isNotEmpty() && flush(context.applicationContext)) {
-            state = fromBundle(ask(context, "query"))
+            state = answered(ask(context, "query"))
         }
         lastQuery = state
         return state
+    }
+
+    /**
+     * One query's answer as a page sees it: the app's copy over the settings half once it is the
+     * source (stage 5.3), and the module's own report of what it can do with the group.
+     */
+    private fun answered(b: Bundle?): State {
+        val state = SettingsStore.overlay(fromBundle(b))
+        if (state.alive) {
+            moduleAcks = b?.getBoolean("acks", false) == true
+            SettingsStore.onModuleAnswered(state)
+        }
+        return state
+    }
+
+    /**
+     * Whether the module reads the group, and the last counter it applied; null on a timeout.
+     * [capable] is null when the module did not answer: a process that is merely away keeps
+     * whatever it could do, and signing it off as an old build would send every later change
+     * down the op path for as long as SystemUI is restarting.
+     */
+    internal class SettingsProbe(val alive: Boolean, val capable: Boolean?, val rev: Long)
+
+    internal suspend fun settingsProbe(context: Context): SettingsProbe? {
+        val b = ask(context, "query") ?: return null
+        if (!b.getBoolean("alive", false)) return SettingsProbe(false, null, 0L)
+        val capable = b.containsKey("settings_prefs")
+        return SettingsProbe(true, capable, if (capable) b.getLong("settings_rev", 0L) else 0L)
+    }
+
+    /**
+     * Every setting the module holds, for the migration (stage 5.4). The query answers each one
+     * under the group's own key, so the copy the app takes is the one the module will read back.
+     *
+     * Two keys can be left out. A module that cannot say whether the clock size was ever set
+     * writes none; the size it reports is the one the clock is at right now, and writing that
+     * back would fix the clock to this wallpaper's height instead of following it.
+     */
+    internal suspend fun settingsSnapshot(
+        context: Context,
+        includeUnset: Boolean = false,
+    ): SettingsSnapshot? {
+        val b = ask(context, "query") ?: return null
+        if (!b.getBoolean("alive", false)) return null
+        if (!b.containsKey("settings_prefs")) return null
+        val values = LinkedHashMap<String, Any>()
+        for (spec in SettingsPlan.specs) {
+            val key = spec.key
+            values[key] = when (spec.kind) {
+                SettingSpec.Kind.BOOL -> b.getBoolean(key, spec.defBool)
+                SettingSpec.Kind.FLOAT -> b.getFloat(key, spec.defFloat)
+                SettingSpec.Kind.INT -> b.getInt(key, spec.defInt)
+                SettingSpec.Kind.STRING -> b.getString(key) ?: spec.defString
+            }
+        }
+        // The migration keeps the clock size out when the module cannot say it was chosen; the
+        // test build's resync takes everything, because it is putting back what the module has.
+        if (!includeUnset && !b.getBoolean("clocksizeset", false)) {
+            values.remove(SettingSpec.CLOCK_SIZE.key)
+        }
+        return SettingsSnapshot(
+            capable = true,
+            rev = b.getLong("settings_rev", 0L),
+            values = values,
+            hostInstallId = b.getString("install_id") ?: "",
+        )
     }
 
     /**
@@ -961,17 +1190,17 @@ object ModuleBridge {
         return State(
             alive = true,
             cover = b.getBoolean("cover", false),
-            auto = b.getBoolean("auto", false),
-            coverFeature = b.getBoolean("coverfeature", true),
-            bias = b.getFloat("bias", 0.34f),
-            coverStyle = b.getInt("coverstyle", 0),
-            coverCardFill = b.getFloat("covercardfill", 1f),
-            coverCardPos = b.getFloat("covercardpos", 0.5f),
-            clockHeightDp = b.getFloat("clock", 36f),
+            auto = b.getBoolean(SettingSpec.AUTO.key, false),
+            coverFeature = b.bool(SettingSpec.COVER_FEATURE),
+            bias = b.real(SettingSpec.BIAS),
+            coverStyle = b.int(SettingSpec.COVER_STYLE),
+            coverCardFill = b.real(SettingSpec.COVER_CARD_FILL),
+            coverCardPos = b.real(SettingSpec.COVER_CARD_POS),
+            clockHeightDp = b.real(SettingSpec.CLOCK_HEIGHT),
             clockSize = sizeOf(b),
-            clockOffsetDp = b.getFloat("clockoff", 0f),
-            clockResponse = b.getFloat("spring", 0.38f),
-            glassEnd = b.getFloat("glass", 0f),
+            clockOffsetDp = b.real(SettingSpec.CLOCK_OFFSET),
+            clockResponse = b.real(SettingSpec.SPRING),
+            glassEnd = b.real(SettingSpec.GLASS_END),
             cardShowing = b.getBoolean("card", false),
             lockWallpaperOk = b.getBoolean("lockwp", false),
             clockHasGlass = b.getBoolean("clockglass", false),
@@ -980,52 +1209,64 @@ object ModuleBridge {
             // The three fixed-on ones fall back to their fixed value here too: the defaults in
             // the bundle are for a module too old to send the key, and there is no longer a
             // version of this that would have them off by choice.
-            mcHideArt = b.getBoolean("mcart", true),
-            mcArtInLyrics = b.getBoolean("mclyricart", true),
-            mcTitleTap = b.getBoolean("mctap", false),
-            mcPageButton = b.getBoolean("mcpage", false),
-            hideFingerprint = b.getBoolean("hidefp", false),
-            motionCover = b.getBoolean("motion", false),
-            motionOnData = b.getBoolean("motiondata", false),
-            forceColon = b.getBoolean("colon", false),
-            mediaBarGlow = b.getBoolean("seekglow", true),
-            lyrics = b.getBoolean("lyrics", true),
-            lyricsKeepOn = b.getBoolean("lyrickeep", false),
-            lyricsHdr = b.getBoolean("lyrichdr", false),
+            mcHideArt = b.bool(SettingSpec.MC_HIDE_ART),
+            mcArtInLyrics = b.bool(SettingSpec.MC_ART_IN_LYRICS),
+            mcTitleTap = b.bool(SettingSpec.MC_TITLE_TAP),
+            mcPageButton = b.bool(SettingSpec.MC_PAGE_BUTTON),
+            hideFingerprint = b.bool(SettingSpec.HIDE_FP),
+            motionCover = b.bool(SettingSpec.MOTION),
+            motionOnData = b.bool(SettingSpec.MOTION_ON_DATA),
+            forceColon = b.bool(SettingSpec.COLON),
+            mediaBarGlow = b.bool(SettingSpec.SEEK_GLOW),
+            lyrics = b.bool(SettingSpec.LYRICS),
+            lyricsKeepOn = b.bool(SettingSpec.LYRIC_KEEP_ON),
+            lyricsHdr = b.bool(SettingSpec.LYRIC_HDR),
             lyricClockIndependent = b.getBoolean("lyricclockindependent", true),
             lyricFlexibleDuet = b.getBoolean("lyricflexduet", true),
             lyricBtSync = b.getBoolean("lyricbtsync", true),
             lyricBtClassic = b.getInt("lyricbtclassic", 400).coerceIn(-500, 500),
             lyricBtLe = b.getInt("lyricbtle", 100).coerceIn(-500, 500),
             // Defaults the other way: this one is on for anyone whose module predates the key.
-            lyricsTrans = b.getBoolean("lyrictrans", true),
+            lyricsTrans = b.bool(SettingSpec.LYRIC_TRANS),
             // The module says whether it keeps its own clock; the row says whether the big one
             // is wanted, so the answer is inverted here (see State.aodBigClock).
-            aodBigClock = !b.getBoolean("aodsmall", true),
-            lyricsRoma = b.getBoolean("lyricroma", false),
-            lyricsAlign = b.getInt("lyricalign", 0),
+            aodBigClock = !b.bool(SettingSpec.AOD_SMALL),
+            lyricsRoma = b.bool(SettingSpec.LYRIC_ROMA),
+            lyricsOnline = b.networkEnabled(),
+            lyricsAlign = b.int(SettingSpec.LYRIC_ALIGN),
+            lyricFill = b.real(SettingSpec.LYRIC_FILL),
+            lyricPos = b.real(SettingSpec.LYRIC_POS),
+            lyricSideDp = b.real(SettingSpec.LYRIC_SIDE),
+            lyricSizeSp = b.real(SettingSpec.LYRIC_SIZE),
+            lyricWeight = b.int(SettingSpec.LYRIC_WEIGHT),
+            lyricBgWeight = b.int(SettingSpec.LYRIC_BG_WEIGHT),
+            lyricTransWeight = b.int(SettingSpec.LYRIC_TRANS_WEIGHT),
+            lyricBgSizeSp = b.real(SettingSpec.LYRIC_BG_SIZE),
+            lyricTransSizeSp = b.real(SettingSpec.LYRIC_TRANS_SIZE),
+            lyricPreviewSeed = b.getInt("lyricpreviewseed", 0),
+            lyricAppearance = b.getString(SettingSpec.LYRIC_APPEARANCE.key) ?: SettingSpec.LYRIC_APPEARANCE.defString,
             lyricsMaxLines = b.getInt("lyricmaxlines", 3).coerceIn(0, 4),
-            lyricBgSizeSp = b.getFloat("lyricbgsize", 17f).coerceIn(10f, 30f),
-            lyricAppearance = b.getString("lyricappearance") ?: "{}",
             lyricSourceCustom = b.getBoolean("lyricsourcecustom", false),
-            lyricNetwork = b.getBoolean("lyricnetwork", false),
+            lyricNetwork = b.networkEnabled(),
             lyricSourceOrder = com.os4.musiccover.lyrics.LyricSourcePolicy.normalizeSources(b.getString("lyricsourceorder")),
             lyricLocalFormat = com.os4.musiccover.lyrics.LocalLyricFormat.normalize(b.getString("lyriclocalformat")),
-            lyricFill = b.getFloat("lyricfill", 1f),
-            lyricPos = b.getFloat("lyricpos", 0.5f),
-            lyricSideDp = b.getFloat("lyricside", 30f),
-            lyricSizeSp = b.getFloat("lyricsize", 25f),
-            lyricWeight = b.getInt("lyricweight", 500),
             sessionLyric = b.getBoolean("sessionlyric", false),
             lyricSource = b.getString("lyricsrc") ?: "none",
             lyriconInstalled = b.getBoolean("lyricon", false),
+            fpAvoid = b.int(SettingSpec.FP_AVOID),
+            transit = b.bool(SettingSpec.TRANSIT),
             lyriconState = b.getString("lyriconstate") ?: "not started",
-            fpAvoid = b.getInt("fpavoid", 0),
-            transit = b.getBoolean("transit", true),
             fpQuick = b.getString("fpquick") ?: "{}",
             fpQuickSystem = b.getBoolean("fpquicksys", true),
             fpQuickOk = b.getBoolean("fpquickok", false),
-            pickup = b.getBoolean("pickup", true),
+            featuresMissing = b.getStringArray("features_missing")?.toList().orEmpty(),
+            // Null from a module that predates stage 5.2, which is what tells the app to keep
+            // sending ops instead of writing a group nothing reads.
+            settingsPrefs = if (b.containsKey("settings_prefs")) b.getBoolean("settings_prefs") else null,
+            canReadPrefs = b.containsKey("settings_prefs"),
+            settingsRev = b.getLong("settings_rev", 0L),
+            hostInstallId = b.getString("install_id") ?: "",
+            pickup = b.bool(SettingSpec.PICKUP),
             rulesDate = b.getString("rulesdate") ?: "",
             rulesCount = b.getInt("rulescount", 0),
             shade = b.keySet()
@@ -1052,8 +1293,22 @@ object ModuleBridge {
         )
     }
 
+    /**
+     * A setting's answer under its query key, or the module's own default for a module too old to
+     * send the key. Both from SettingSpec, the one list the module answers from too.
+     */
+    /** The installed Plus build used lyricnetwork before upstream added lyriconline. */
+    private fun Bundle.networkEnabled(): Boolean = if (containsKey(SettingSpec.LYRIC_ONLINE.key))
+        bool(SettingSpec.LYRIC_ONLINE) else getBoolean("lyricnetwork", SettingSpec.LYRIC_ONLINE.defBool)
+
+    private fun Bundle.bool(s: SettingSpec): Boolean = getBoolean(s.key, s.defBool)
+
+    private fun Bundle.real(s: SettingSpec): Float = getFloat(s.key, s.defFloat)
+
+    private fun Bundle.int(s: SettingSpec): Int = getInt(s.key, s.defInt)
+
     /** The module sends NaN for a size it could not work out; that is 0 here. */
-    private fun sizeOf(b: Bundle): Float = b.getFloat("clocksize", 0f).let { if (it > 0f) it else 0f }
+    private fun sizeOf(b: Bundle): Float = b.getFloat(SettingSpec.CLOCK_SIZE.key, 0f).let { if (it > 0f) it else 0f }
 
     private fun fullOf(b: Bundle): Float = b.getFloat("clockfull", 0f).let { if (it > 0f) it else 0f }
 

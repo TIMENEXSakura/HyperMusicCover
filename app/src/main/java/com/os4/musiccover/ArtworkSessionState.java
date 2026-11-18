@@ -3,13 +3,13 @@ package com.os4.musiccover;
 import java.util.Objects;
 
 /** A single published snapshot for selecting and validating artwork across threads. */
-final class ArtworkSessionState<C, T> {
-    static final class Snapshot<C, T> {
-        final boolean capsule;
-        final C owner, fallback;
-        final T ownerToken, cardToken, fallbackToken;
-        final String ownerKey, cardKey, fallbackKey;
-        final long version, cardVersion;
+public final class ArtworkSessionState<C, T> {
+    public static final class Snapshot<C, T> {
+        public final boolean capsule;
+        public final C owner, fallback;
+        public final T ownerToken, cardToken, fallbackToken;
+        public final String ownerKey, cardKey, fallbackKey;
+        public final long version, cardVersion;
         Snapshot(boolean capsule, C owner, T ownerToken, String ownerKey,
                  T cardToken, String cardKey, C fallback, T fallbackToken, String fallbackKey,
                  long version, long cardVersion) {
@@ -22,27 +22,27 @@ final class ArtworkSessionState<C, T> {
 
     private volatile Snapshot<C, T> current = new Snapshot<>(false, null, null, "", null, "",
             null, null, "", 0, 0);
-    Snapshot<C, T> snapshot() { return current; }
-    boolean isCurrent(Snapshot<C, T> captured) { return captured != null && captured.version == current.version; }
-    boolean isCardCurrent(Snapshot<C, T> captured) {
+    public Snapshot<C, T> snapshot() { return current; }
+    public boolean isCurrent(Snapshot<C, T> captured) { return captured != null && captured.version == current.version; }
+    public boolean isCardCurrent(Snapshot<C, T> captured) {
         Snapshot<C, T> now = current;
         return captured != null && captured.version == now.version && captured.cardVersion == now.cardVersion;
     }
 
     /** A different selected session takes precedence over the stale media card. */
-    static boolean preferFallback(Snapshot<?, ?> snapshot) {
+    public static boolean preferFallback(Snapshot<?, ?> snapshot) {
         return snapshot.fallback != null && snapshot.fallbackToken != null
                 && !Objects.equals(snapshot.fallbackToken, snapshot.cardToken);
     }
 
-    static boolean ordinaryCardMatches(Snapshot<?, ?> snapshot, Object liveCardToken) {
+    public static boolean ordinaryCardMatches(Snapshot<?, ?> snapshot, Object liveCardToken) {
         return snapshot.cardToken != null && Objects.equals(snapshot.cardToken, liveCardToken)
                 && (snapshot.fallbackToken == null
                     || Objects.equals(snapshot.fallbackToken, snapshot.cardToken));
     }
 
     /** A missing metadata title is not evidence that two tracks are the same. */
-    static boolean hasTrackTitle(String key) {
+    public static boolean hasTrackTitle(String key) {
         if (key == null) return false;
         int first = key.indexOf('|');
         if (first < 0) return false;
@@ -51,7 +51,7 @@ final class ArtworkSessionState<C, T> {
         return !title.isEmpty() && !"null".equalsIgnoreCase(title);
     }
 
-    synchronized void capsule(boolean active, C owner, T token, String key) {
+    public synchronized void capsule(boolean active, C owner, T token, String key) {
         Snapshot<C, T> old = current;
         String k = active && key != null ? key : "";
         T t = active ? token : null;
@@ -61,7 +61,7 @@ final class ArtworkSessionState<C, T> {
                 old.fallback, old.fallbackToken, old.fallbackKey, old.version + (changed ? 1 : 0), old.cardVersion);
     }
 
-    synchronized void card(T token, String key) {
+    public synchronized void card(T token, String key) {
         Snapshot<C, T> old = current;
         String k = key == null ? "" : key;
         boolean changed = !Objects.equals(old.cardToken, token) || !Objects.equals(old.cardKey, k);
@@ -70,7 +70,7 @@ final class ArtworkSessionState<C, T> {
                 old.version + (changed && !old.capsule ? 1 : 0), old.cardVersion + (changed ? 1 : 0));
     }
 
-    synchronized void fallback(C controller, T token, String key) {
+    public synchronized void fallback(C controller, T token, String key) {
         Snapshot<C, T> old = current;
         String k = key == null ? "" : key;
         boolean changed = !Objects.equals(old.fallbackToken, token) || !Objects.equals(old.fallbackKey, k);

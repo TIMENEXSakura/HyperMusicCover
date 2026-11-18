@@ -43,7 +43,7 @@ public class LyricFocusTest {
 
     @Test public void backingVoiceExtendsParentWithoutTakingSlot() {
         LyricLine parent = line(100, 200);
-        parent.bg = line(0, 900);
+        parent.addBackground(line(0, 900));
         LyricFocus focus = new LyricFocus();
         List<LyricLine> lines = Arrays.asList(parent, line(300, 800));
         focus.update(lines, 50, 2, 0, -1);
@@ -120,7 +120,7 @@ public class LyricFocusTest {
         LyricLine first = line(0, 10000);
         LyricLine middle = line(2000, 4000);
         LyricLine last = line(3000, 8000);
-        last.bg = line(1000, 8000); // voice three starts before the second lead
+        last.addBackground(line(1000, 8000)); // voice three starts before the second lead
         List<LyricLine> lines = Arrays.asList(first, middle, last);
         LyricFocus focus = new LyricFocus();
         float[] heights = {100, 300, 160}; // middle includes its translation/backing rows
@@ -159,7 +159,7 @@ public class LyricFocusTest {
 
     @Test public void enteringVoiceAndUnequalSpringFramesDoNotCrossOnScreen() {
         LyricLine third = line(3000, 8000);
-        third.bg = line(1000, 8000);
+        third.addBackground(line(1000, 8000));
         List<LyricLine> lines = Arrays.asList(line(0, 10000), line(2000, 4000), third);
         float[] base = {0, 120, 440};
         float[] heights = {100, 300, 160};
@@ -222,4 +222,18 @@ public class LyricFocusTest {
         assertEquals(1, focus.count);
         assertTrue(focus.contains(0));
     }
+    @org.junit.Test public void departingHarmonyKeepsSpaceThenReleasesWithoutAJump() {
+        float held = 600f;
+        assertEquals(held, LyricFocus.releaseSeparation(held, held, 1f / 120f), 0f);
+        float first = LyricFocus.releaseSeparation(held, 0f, 1f / 120f);
+        assertTrue(first > 500f && first < held);
+        float at60 = held, at120 = held;
+        for (int i = 0; i < 30; i++) at60 = LyricFocus.releaseSeparation(at60, 0f, 1f / 60f);
+        for (int i = 0; i < 60; i++) at120 = LyricFocus.releaseSeparation(at120, 0f, 1f / 120f);
+        assertEquals(at60, at120, 0.01f);
+        assertEquals(700f, LyricFocus.releaseSeparation(at120, 700f, 1f / 120f), 0f);
+        for (int i = 0; i < 120; i++) at120 = LyricFocus.releaseSeparation(at120, 0f, 1f / 120f);
+        assertEquals(0f, at120, 0f);
+    }
+
 }

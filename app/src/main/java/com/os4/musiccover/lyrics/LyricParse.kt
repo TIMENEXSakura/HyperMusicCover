@@ -1,4 +1,5 @@
 package com.os4.musiccover.lyrics
+import com.os4.musiccover.Settings
 import com.os4.musiccover.Xp
 import com.mocharealm.accompanist.lyrics.core.model.ISyncedLine
 import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeAlignment
@@ -64,7 +65,7 @@ object LyricParse {
      * The same again with a romanisation beside the translation - QQ Music, NetEase and Kuwo
      * ship one for Japanese and Korean songs, as a third timed text joined by time like the
      * translation. Kept on the line as its own field, drawn above the translation under a
-     * switch of its own (LockLyrics.sRoma).
+     * switch of its own (Settings.LYRIC_ROMA).
      */
     @JvmStatic
     fun parse(body: String, translation: String?, roma: String?): List<LyricLine> {
@@ -336,7 +337,7 @@ object LyricParse {
 
     @JvmStatic
     fun parse(body: String): List<LyricLine> {
-        val flexibleDuet = LockLyrics.sFlexibleDuet
+        val flexibleDuet = Settings.LYRIC_FLEX_DUET.on()
         // lyrics-core throws on lyrics it cannot make sense of - EnhancedLrcParser's
         // rearrangeUncheckedLineTime trips SyncedLine's require() on NetEase 2057709543 (邓紫棋
         // Pasión). Uncaught on a worker thread that is the whole of SystemUI going down, once per
@@ -344,14 +345,14 @@ object LyricParse {
         // no lyric.
         val prepared = bracketWords(body)
         val lyrics = try {
-            AutoParser().parse(prepared.body)
+            AutoParser().parse(TtmlVoices.parserBody(prepared.body, flexibleDuet))
         } catch (t: Throwable) {
             // The log is SystemUI's; on the JVM the tests run on it is not there to write to.
             runCatching { Xp.log("[MCLyric] the parser gave up on a lyric (" + body.length + " chars): " + t) }
             return emptyList()
         }
         val src = unswallow(lyrics.lines, prepared.body)
-        val ttmlSides = ttmlSides(prepared.body, src, flexibleDuet)
+        val ttmlSides = TtmlVoices.resolve(prepared.body, src, flexibleDuet)
         val out = ArrayList<LyricLine>(src.size)
         // Where the tail of a line may run to when the file left it without an end of its own:
         // the arrival of the line after it. Looked up by time and not read off the list: the list
@@ -360,38 +361,46 @@ object LyricParse {
         // the last word down to the few milliseconds before the echo.
         val mains = src.filter { it !is KaraokeLine.AccompanimentKaraokeLine }
             .map { it.start }.sorted().toIntArray()
+        // In time order: "the last one started by then" below is read off what is already out,
+        // and the parser does not promise its lines in order.
         for (line in src.sortedBy { it.start }) {
             try {
-                val nextStart = nextAfter(mains, line.start, line.end)
-                when (line) {
-                    // Background vocals overlap the main line in time, so they are not lines of their
-                    // own - the renderer finds the singing line by start time, and one would steal
-                    // the focus for the length of an echo. They hang under the main line they belong
-                    // to (the last one started by then), and stretch it if they outlast it.
-                    is KaraokeLine.AccompanimentKaraokeLine -> {
-                        val b = karaoke(line, nextStart)?.let { unwrapBackground(it) } ?: continue
-                        val owner = out.lastOrNull { it.start <= b.start } ?: continue
-                        owner.addBackground(b)
+            val nextStart = nextAfter(mains, line.start, line.end)
+            when (line) {
+                // Background vocals overlap the main line in time, so they are not lines of their
+                // own - the renderer finds the singing line by start time, and one would steal
+                // the focus for the length of an echo. They hang under the main line they belong
+                // to (the last one started by then), and stretch it if they outlast it.
+                is KaraokeLine.AccompanimentKaraokeLine -> {
+                    val b = karaoke(line, nextStart)?.let { ttmlSides[line]?.let { side -> relabel(it, 0, side) } ?: it }?.let { unwrapBackground(it) } ?: continue
+                    val owner = out.lastOrNull { it.start <= b.start }
+                    if (owner == null) out.add(b) else owner.addBackground(b)
+                }
+                is KaraokeLine -> {
+                    // Where the accompaniment actually arrives. The branch above is written
+                    // for a parser that hands background vocals back as lines of their own,
+                    // and lyrics-core 0.4.7 does not: it hangs them on the main line as a
+                    // property, so that branch never fires and every background vocal was
+                    // being dropped. Both are kept - which shape comes back is the library's
+                    // business, and a version that goes back to separate lines still works.
+                    // Every one of them: a TTML line can carry several x-bg spans (PR #106).
+                    val backs = (line as? KaraokeLine.MainKaraokeLine)?.accompanimentLines
+                        .orEmpty().mapNotNull { acc -> karaoke(acc, nextStart)?.let { ttmlSides[acc]?.let { side -> relabel(it, 0, side) } ?: it }?.let { unwrapBackground(it) } }
+                    val lead = karaoke(line, nextStart)?.let { ttmlSides[line]?.let { side -> relabel(it, 0, side) } ?: it }
+                    // A line with nothing but a background vocal in it - a TTML <p> holding only
+                    // an x-bg - is that vocal, sung as a line of its own. Hung under an empty
+                    // lead it would leave a blank row of full-size text above it.
+                    val main = lead ?: backs.firstOrNull()?.let { b ->
+                        if (b.translation == null && line.translation != null) {
+                            withTranslation(b, line.translation!!)
+                        } else b
                     }
-                    is KaraokeLine -> {
-                        val parsed = karaoke(line, nextStart)
-                        val main = parsed?.let { ttmlSides[line]?.let { side -> relabel(it, 0, side) } ?: it } ?: if (
-                            (line as? KaraokeLine.MainKaraokeLine)?.accompanimentLines.isNullOrEmpty()
-                        ) null else LyricLine("", null, line.start, line.end, false, null, null, null)
-                        if (main != null) {
-                            out.add(main)
-                            // Where the accompaniment actually arrives. The branch above is written
-                            // for a parser that hands background vocals back as lines of their own,
-                            // and lyrics-core 0.4.7 does not: it hangs them on the main line as a
-                            // property, so that branch never fires and every background vocal was
-                            // being dropped. Both are kept - which shape comes back is the library's
-                            // business, and a version that goes back to separate lines still works.
-                            for (acc in (line as? KaraokeLine.MainKaraokeLine)?.accompanimentLines.orEmpty()) {
-                                karaoke(acc, nextStart)?.let { main.addBackground(unwrapBackground(it)) }
-                            }
-                        }
+                    if (main != null) {
+                        out.add(main)
+                        for (b in if (lead == null) backs.drop(1) else backs) main.addBackground(b)
                     }
-                    is SyncedLine -> {
+                }
+                is SyncedLine -> {
                         // Instrumental breaks arrive as empty lines; a row of nothing would take a
                         // slot in the stack for its whole duration.
                         if (line.content.isBlank()) continue
@@ -405,78 +414,6 @@ object LyricParse {
         }
         out.sortBy { it.start }
         return speakers(withLanes(out, prepared.lanes), flexibleDuet)
-    }
-
-    /** lyrics-core drops agent alignment when a TTML paragraph has no timed words. Recover it
-     * from the original paragraphs, matching duplicate timestamps in document order. If rows
-     * cannot be matched unambiguously, leave that timestamp untouched. */
-    private fun ttmlSides(body: String, lines: List<ISyncedLine>, flexible: Boolean): Map<ISyncedLine, Boolean> {
-        val hasAgent = body.contains("ttm:agent")
-        val hasRoles = flexible && body.contains("<tt") && body.contains("role")
-        if (!hasAgent && !hasRoles) return emptyMap()
-        return try {
-            val root = TtmlXml.parse(body)
-            val paragraphs = ArrayList<TtmlXml.Node>()
-            val groups = HashSet<String>()
-            fun attr(e: TtmlXml.Node, name: String) = e.attr(name)
-            fun collect(e: TtmlXml.Node) {
-                if (e.name() == "p") paragraphs.add(e)
-                if (e.name() == "ttm:agent" && attr(e, "type") == "group") {
-                    (attr(e, "xml:id") ?: attr(e, "id"))?.let { groups.add(it) }
-                }
-                e.children().forEach(::collect)
-            }
-            collect(root)
-            fun time(s: String?): Int? {
-                val parts = s?.split(':') ?: return null
-                if (parts.size !in 1..3) return null
-                val seconds = parts.last().split('.')
-                if (seconds.size > 2) return null
-                val sec = seconds[0].toIntOrNull() ?: return null
-                val millis = if (seconds.size == 2) seconds[1].padEnd(3, '0').take(3).toIntOrNull() ?: return null else 0
-                val min = if (parts.size >= 2) parts[parts.size - 2].toIntOrNull() ?: return null else 0
-                val hour = if (parts.size == 3) parts[0].toIntOrNull() ?: return null else 0
-                return (hour * 3600000L + min * 60000L + sec * 1000L + millis).toInt()
-            }
-            val sorted = paragraphs.sortedBy { time(attr(it, "begin")) ?: Int.MAX_VALUE }
-            val firstAgent = sorted.asSequence().mapNotNull { attr(it, "ttm:agent") }
-                .firstOrNull { it !in groups }
-            val firstRight = firstAgent?.takeLastWhile { it.isDigit() }?.toIntOrNull()
-                ?.let { it % 2 == 0 } ?: false
-            var right = firstRight
-            val agentSides = LinkedHashMap<String, Boolean>()
-            val grouped = LinkedHashMap<Pair<Int, Int>, MutableList<Boolean>>()
-            for (p in sorted) {
-                val agent = attr(p, "ttm:agent")
-                var side = if (agent != null && agent in groups) false else {
-                    if (agent != null) right = agentSides.getOrPut(agent) {
-                        if (agentSides.size % 2 == 0) firstRight else !firstRight
-                    }
-                    right
-                }
-                if (flexible) {
-                    val roles = (attr(p, "ttm:role") ?: attr(p, "role")).orEmpty()
-                        .lowercase().split(Regex("\\s+"))
-                    if (roles.any { it in setOf("harmony", "x-harmony", "backing", "x-backing") }) side = true
-                    if (roles.any { it in setOf("duet", "x-duet") }) side = false
-                }
-                val start = time(attr(p, "begin")) ?: continue
-                val end = time(attr(p, "end")) ?: continue
-                grouped.getOrPut(start to end) { ArrayList() }.add(side)
-            }
-            val byTime = lines.filter { it !is KaraokeLine.AccompanimentKaraokeLine }
-                .groupBy { it.start to it.end }
-            val result = java.util.IdentityHashMap<ISyncedLine, Boolean>()
-            for ((key, entries) in byTime) {
-                val sides = grouped[key] ?: continue
-                if (sides.size != entries.size) continue
-                entries.forEachIndexed { i, line -> result[line] = sides[i] }
-            }
-            result
-        } catch (_: Exception) {
-            // A malformed document is handled by AutoParser; do not risk SystemUI for alignment.
-            emptyMap()
-        }
     }
 
     /**
@@ -939,6 +876,7 @@ object LyricParse {
      * by another. The last line of a song has nothing after it, and gets the fallback.
      */
     internal fun nextAfter(sorted: IntArray, t: Int, fallback: Int): Int {
+        // Nothing starts later than the last Int, and t + 1 would wrap round to the first line.
         if (t == Int.MAX_VALUE) return fallback
         val i = sorted.binarySearch(t + 1)
         val at = if (i >= 0) i else -i - 1
@@ -1121,12 +1059,12 @@ object LyricParse {
     /** Labels that mean everyone at once. Drawn on the first singer's side. */
     private val TOGETHER = setOf("合", "合唱", "全", "All", "ALL", "all")
     private val BACKING_SINGER = setOf("和声", "和聲", "和音", "伴唱", "harmony", "backing")
-    private val DUET_TOGETHER = setOf("对唱", "對唱", "二重唱", "duet")
+    private val DUET_SINGER = setOf("对唱", "對唱", "二重唱", "duet")
     private val CREDITS = setOf("作词", "作詞", "作曲", "编曲", "編曲", "制作", "製作", "演唱")
     private fun singerLabel(label: String?): String? = when (label) {
         "男声", "男唱" -> "男"
         "女声", "女唱" -> "女"
-        else -> if (label?.lowercase() in BACKING_SINGER || label?.lowercase() in DUET_TOGETHER)
+        else -> if (label?.lowercase() in BACKING_SINGER || label?.lowercase() in DUET_SINGER)
             label?.lowercase() else label
     }
 
@@ -1164,10 +1102,10 @@ object LyricParse {
         }
         val counts = labels.filterNotNull().groupingBy { it }.eachCount()
         val explicitDuet = flexible && "男" in counts && "女" in counts
-        val hasRole = flexible && labels.any { it != null && (it in BACKING_SINGER || it in DUET_TOGETHER) }
+        val hasRole = flexible && labels.any { it != null && (it in BACKING_SINGER || it in DUET_SINGER) }
         val singers = LinkedHashSet<String>()
         for (l in labels) {
-            if (l != null && l !in CREDITS && l !in TOGETHER && l !in BACKING_SINGER && l !in DUET_TOGETHER &&
+            if (l != null && l !in CREDITS && l !in TOGETHER && l !in BACKING_SINGER && l !in DUET_SINGER &&
                 ((counts[l] ?: 0) >= 2 || (explicitDuet && (l == "男" || l == "女")))) singers.add(l)
         }
         if (singers.size < 2 && !hasRole) return lines
@@ -1176,8 +1114,8 @@ object LyricParse {
         var right = false
         for ((i, line) in lines.withIndex()) {
             val label = labels[i]
-            val backing = flexible && label != null && label in BACKING_SINGER
-            val together = label != null && (label in TOGETHER || (flexible && label in DUET_TOGETHER))
+            val backing = flexible && label != null && (label in BACKING_SINGER || label in DUET_SINGER)
+            val together = label != null && label in TOGETHER
             val known = label != null && (together || backing || label in singers)
             if (known) right = backing || (!together && order.indexOf(label) % 2 == 1)
             val cut = if (known) LABEL.find(line.text)!!.range.last + 1 else 0

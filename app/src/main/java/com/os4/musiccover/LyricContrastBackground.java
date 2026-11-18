@@ -1,5 +1,9 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.clock.ClockCollapse;
+import com.os4.musiccover.clock.ClockViews;
+import com.os4.musiccover.cover.CoverCompose;
+
 import android.app.WallpaperColors;
 import android.app.WallpaperManager;
 import android.content.Context;
@@ -69,7 +73,7 @@ public final class LyricContrastBackground {
         NavigationSurfaceContrast.stop();
         if (Main.coverModeOn() && !Main.keepsWallpaper()) {
             CoverSample sample = sCover;
-            int mode = Main.sCoverCardStyle.mode;
+            int mode = Settings.COVER_STYLE.get().mode;
             boolean frost = LockLyrics.blurWanted();
             if (sample == null || sample.mode != mode) {
                 return remember("cover:pending:" + mode + ":" + frost, 0, "cover-pending");
@@ -137,7 +141,7 @@ public final class LyricContrastBackground {
     }
 
     /** Publish the composition identity before its pixels are ready; one stable pending key. */
-    static synchronized void beginCover(String identity, int mode) {
+    public static synchronized void beginCover(String identity, int mode) {
         CoverSample old = sCover;
         if (old == null || !identity.equals(old.identity) || mode != old.mode) {
             sCover = new CoverSample(identity, mode, 0, 0, false);
@@ -145,7 +149,7 @@ public final class LyricContrastBackground {
     }
 
     /** Worker only. Samples an already composed picture, never allocates another bitmap. */
-    static void measureCover(Bitmap sharp, Bitmap frost, String identity, int mode) {
+    public static void measureCover(Bitmap sharp, Bitmap frost, String identity, int mode) {
         try {
             int region = average(sharp);
             if (region == 0) return;
@@ -163,7 +167,7 @@ public final class LyricContrastBackground {
         }
     }
 
-    static synchronized void clearCover() { sCover = null; }
+    public static synchronized void clearCover() { sCover = null; }
 
     /** The central/lower lyric area, excluding the top clock and bottom controls. */
     private static int average(Bitmap image) {

@@ -1,5 +1,6 @@
 package com.os4.musiccover.lyrics
 
+import com.os4.musiccover.Settings
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 
 internal object LyriconBackground {
@@ -8,7 +9,7 @@ internal object LyriconBackground {
         owner.addBackground(background)
     }
 
-    fun convert(line: RichLyricLine, nextStart: Int): LyricLine? {
+    fun convert(line: RichLyricLine, nextStart: Int, flexible: Boolean = Settings.LYRIC_FLEX_DUET.on()): LyricLine? {
         val plain = visible(line.secondary.orEmpty())
         val words = line.secondaryWords.orEmpty().filter { !it.text.isNullOrEmpty() }
         val joined = words.joinToString("") { it.text.orEmpty() }
@@ -26,8 +27,7 @@ internal object LyriconBackground {
                 val token = joined.substring(from, until)
                 if (token.isNotBlank()) {
                     if (word.begin !in 0L..Int.MAX_VALUE.toLong()
-                        || word.end !in 0L..Int.MAX_VALUE.toLong()
-                        || (starts.isNotEmpty() && word.begin < starts.last())) {
+                        || word.end !in 0L..Int.MAX_VALUE.toLong()) {
                         valid = false
                         break
                     }
@@ -48,13 +48,13 @@ internal object LyriconBackground {
             val fallbackEnd = line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
             LyricParse.closeUntimedTail(startArray, endArray, fallbackEnd, nextStart)
             return LyricLine(text, null, startArray.first(), endArray.maxOrNull()!!,
-                line.isAlignedRight, startArray, endArray, chars)
+                (line.isAlignedRight || flexible), startArray, endArray, chars)
         }
         val text = plain.ifEmpty { visible(joined) }
         if (text.isEmpty()) return null
         return LyricLine(text, null, line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
             line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
-            line.isAlignedRight, null, null, null)
+            (line.isAlignedRight || flexible), null, null, null)
     }
 
     private fun mapWords(text: String, tokens: List<String>): IntArray? {

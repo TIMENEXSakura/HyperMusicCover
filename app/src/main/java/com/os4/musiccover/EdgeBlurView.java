@@ -1,5 +1,7 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.cover.CoverCardLayer;
+
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;

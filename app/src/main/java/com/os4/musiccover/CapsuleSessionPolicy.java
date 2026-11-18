@@ -1,9 +1,9 @@
 package com.os4.musiccover;
 
 /** Session tokens, rather than controller instances, identify one capsule owner. */
-final class CapsuleSessionPolicy {
+public final class CapsuleSessionPolicy {
     private CapsuleSessionPolicy() {}
-    static boolean blocksReload(boolean capsuleRequest, boolean navigationOverlay) {
+    public static boolean blocksReload(boolean capsuleRequest, boolean navigationOverlay) {
         return capsuleRequest || navigationOverlay;
     }
     /** The visible media notification chooses the source; keep the existing owner only

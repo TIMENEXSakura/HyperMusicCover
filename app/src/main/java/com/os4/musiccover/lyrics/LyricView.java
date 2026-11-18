@@ -1,5 +1,10 @@
 package com.os4.musiccover.lyrics;
-import com.os4.musiccover.ClockCollapse;
+
+import com.os4.musiccover.cover.CoverCardLayer;
+import com.os4.musiccover.cover.CoverPush;
+import com.os4.musiccover.Settings;
+import com.os4.musiccover.card.MediaCard;
+import com.os4.musiccover.clock.ClockCollapse;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
@@ -58,13 +63,10 @@ final class LyricView extends View {
 
     // ---- the look. Sizes are sp/dp; nothing here is a pixel.
     private static final float TEXT_SP = 25f;
-    private static final float TRANS_SP = 15f;
     /** The background vocal under a line: smaller, dimmer, and lifting less than the lead. */
     private static final float BG_SP = 17f;
-    private static final int BG_WEIGHT = 500;
     private static final float BG_GAP_DP = 3f;
     private static final float BG_LIFT = 0.6f;
-    private static final int TRANS_WEIGHT = 500;
     /** Between one line's last row (or its translation) and the next line. */
     private static final float GAP_DP = 22f;
     private static final float TRANS_GAP_DP = 5f;
@@ -80,7 +82,6 @@ final class LyricView extends View {
     private static final float ABOVE_ALPHA = 0.6f;
     /** How saturated the dim text's tint may be; Apple's reads as a pale version of the cover. */
     private static final float TINT_SAT = 0.28f;
-    private static final float TRANS_ALPHA = 0.62f;
     private static final float INACTIVE_SCALE = 0.97f;
     private static final float ACTIVE_SCALE = 1.025f;
     /** Half the width of the soft edge between sung and unsung, in text sizes. */
@@ -259,6 +260,7 @@ final class LyricView extends View {
     private int mainDim = -1, mainLit = -1, bgDim = -1, bgLit = -1;
     private int baseMainDim = -1, baseMainLit = -1, baseBgDim = -1, baseBgLit = -1;
     private int baseTranslation = -1, translationDim = -1, translationLit = -1;
+    private int baseTranslationLit = -1;
     private volatile int blurGeneration;
     /** Most recently queued focus, read by the worker to bound texture preparation. */
     private volatile int blurWarmFocus = -1;
@@ -324,7 +326,7 @@ final class LyricView extends View {
     private LyricStyle wantStyle;
     /** The translation and romanisation switches the layout now in use was made under. */
     private int builtTrans = LockLyrics.BELOW_TRANS;
-    /** The alignment pref the layout now in use was made under; see LockLyrics.sAlign. */
+    /** The alignment pref the layout now in use was made under; see Settings.LYRIC_ALIGN. */
     private int builtAlign = LockLyrics.ALIGN_LEFT;
     /** Diagnostics: how long the last layout took on its thread. */
     private long layoutMs;
@@ -335,6 +337,8 @@ final class LyricView extends View {
 
     // ---- per-line animated state
     private float[] scroll = new float[0];
+    private float[] rowSeparation = new float[0];
+    private long separationAt;
     private float[] vel = new float[0];
     /** What the line is springing to, what it will spring to, and when it switches. */
     private float[] aim = new float[0];
@@ -353,6 +357,7 @@ final class LyricView extends View {
     private final LyricFocus singing = new LyricFocus();
     private final LyricTransition transition = new LyricTransition();
     private final LyricLineExit lineExits = new LyricLineExit();
+    private LyricExitMask[] exitMasks = new LyricExitMask[0];
     private int dotsFor = -1;
     /** The scroll spring for the current move, set per move like AMLL's policy. */
     private float springK = K_SLOW, springC = C_SLOW;
@@ -432,39 +437,45 @@ final class LyricView extends View {
 
     private long lastStep;
 
-    private boolean looping;
     private final int[] loc = new int[2];
     private final int[] rootLoc = new int[2];
 
-    private final Runnable frame = new Runnable() {
+    private final LyricFrameLoop frame = new LyricFrameLoop(new LyricFrameLoop.Host() {
         @Override
-        public void run() {
+        public void enqueue(Runnable next) {
+            postOnAnimation(next);
+        }
+
+        @Override
+        public void cancel(Runnable next) {
+            removeCallbacks(next);
+        }
+
+        @Override
+        public boolean frame() {
+            if (!isAttachedToWindow() || LyricWindow.parked(LyricView.this)) return false;
             noteFrameGap(now());
-            looping = false;
             if (step()) {
                 invalidate();
                 // In its own window: synced now, ahead of the lock screen's. See drawFirst.
+                // Its traversal re-enters preDraw; the frame stays active through that call.
                 if (LyricWindow.owns(LyricView.this)) LyricWindow.drawFirst(LyricView.this);
             }
-            if (needsFrames()) {
-                // step() can synchronously kick another frame. Do not post a second copy:
-                // both would run and each could otherwise multiply the callback queue.
-                if (!looping) {
-                    looping = true;
-                    postOnAnimation(this);
-                }
-            } else if (!looping) {
-                lastLoopFrame = 0L;
-            }
+            return needsFrames();
         }
-    };
+
+        @Override
+        public void idle() {
+            lastLoopFrame = 0L;
+        }
+    });
 
     private final ViewTreeObserver.OnPreDrawListener preDraw =
             new ViewTreeObserver.OnPreDrawListener() {
                 @Override
                 public boolean onPreDraw() { android.os.Trace.beginSection("MC lyricPreDraw"); try {
                     if (step()) invalidate();
-                    if (!looping && needsFrames()) kick();
+                    if (!frame.active() && needsFrames()) kick();
                     return true;
                 } finally { android.os.Trace.endSection(); } }
             };
@@ -483,7 +494,7 @@ final class LyricView extends View {
         paint.setColor(0xFFFFFFFF);
         transPaint.setColor(0xFFFFFFFF);
         bgPaint.setColor(0xFFFFFFFF);
-        applyPaintStyle(LockLyrics.sStyle);
+        applyPaintStyle(Settings.LYRIC_STYLE.get());
         // No frame rate is asked for here. The keyguard window renders at 60Hz on this 120Hz
         // panel unless the screen is touched, and neither setRequestedFrameRate on this view nor
         // a 120Hz vote on the window's own layer moved HyperOS off that (SurfaceFlinger dumps,
@@ -508,11 +519,12 @@ final class LyricView extends View {
         sidePx = style.sidePx(getWidth(), shortSide(), density, textPx);
         paint.setTextSize(textPx);
         paint.setTypeface(Typeface.create(Typeface.DEFAULT, style.weight, false));
-        transPaint.setTextSize(textPx * TRANS_SP / TEXT_SP);
-        transPaint.setTypeface(Typeface.create(Typeface.DEFAULT, TRANS_WEIGHT, false));
+        transPaint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                style.transSizeSp, getResources().getDisplayMetrics()));
+        transPaint.setTypeface(Typeface.create(Typeface.DEFAULT, style.transWeight, false));
         bgPaint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
                 style.bgSizeSp, getResources().getDisplayMetrics()));
-        bgPaint.setTypeface(Typeface.create(Typeface.DEFAULT, BG_WEIGHT, false));
+        bgPaint.setTypeface(Typeface.create(Typeface.DEFAULT, style.bgWeight, false));
     }
 
     /**
@@ -553,9 +565,13 @@ final class LyricView extends View {
 
     /** Something outside changed - a line start, the song, the setting. Wakes the loop. */
     void kick() {
-        if (looping) return;
-        looping = true;
-        postOnAnimation(frame);
+        if (!isAttachedToWindow() || LyricWindow.parked(this)) return;
+        frame.request();
+    }
+
+    /** Parked windows stay attached; stop their callback explicitly, just as on detach. */
+    void stopFrames() {
+        frame.stop();
     }
 
     /**
@@ -629,6 +645,9 @@ final class LyricView extends View {
         appearance = null;
         tintFrameAt = Long.MIN_VALUE;
         lineExits.reset(lines.size());
+        java.util.Arrays.fill(exitMasks, null);
+        java.util.Arrays.fill(rowSeparation, 0f);
+        separationAt = 0L;
         finalHold.reset();
         overflowMoving = false;
         navigationContrast.clear();
@@ -649,9 +668,7 @@ final class LyricView extends View {
         paletteWork = null;
         appearance = null;
         Gen.unpreDraw(this, preDraw);
-        removeCallbacks(frame);
-        looping = false;
-        lastLoopFrame = 0L;
+        stopFrames();
         super.onDetachedFromWindow();
     }
 
@@ -716,8 +733,8 @@ final class LyricView extends View {
                 || LockLyrics.below() != builtTrans
                 // The alignment is in the layout too, and asked for the same way: against what
                 // the layout in use was built with, not against the field.
-                || LockLyrics.sAlign != builtAlign
-                || !LockLyrics.sStyle.sameLayout(layoutStyle))
+                || Settings.LYRIC_ALIGN.get() != builtAlign
+                || !Settings.LYRIC_STYLE.get().sameLayout(layoutStyle))
                 && (LockLyrics.wantsAttached() || show == 0f)) {
             if (layOut()) {
                 changed = true;
@@ -733,7 +750,7 @@ final class LyricView extends View {
 
         float showTo = showTarget();
         if (capsulePresentation()) {
-            boolean requested = LockLyrics.sEnabled && !LockLyrics.sTapHidden
+            boolean requested = Settings.LYRICS.on() && !LockLyrics.sTapHidden
                     && (LockLyrics.capsulePageRequested() || Main.coverModeOn());
             changed |= entryMotion.step(requested, showTo > 0f, dt, still || gone);
         } else entryMotion.reset();
@@ -797,9 +814,10 @@ final class LyricView extends View {
         LyricLine finalLine = lines.get(lines.size() - 1);
         changed |= finalHold.step(ms, LyricFocus.startOf(finalLine), LyricFocus.endOf(finalLine),
                 dt, still || gone || startingPage);
-        changed |= lineExits.step(lines, ms, now, LockLyrics.playing(),
-                LyricTransition.recentSeek(now, jumpedAt, SEEK_WINDOW_MS),
+        boolean recentSeek = LyricTransition.recentSeek(now, jumpedAt, SEEK_WINDOW_MS);
+        changed |= lineExits.step(lines, ms, now, LockLyrics.playing(), recentSeek,
                 !still && !gone && show > 0.02f);
+        if (recentSeek || still) java.util.Arrays.fill(rowSeparation, 0f);
         int n = lines.size();
         int idx = indexAt(ms);
 
@@ -824,7 +842,7 @@ final class LyricView extends View {
             }
         }
         int previousCount = singing.count;
-        boolean groupChanged = singing.update(lines, ms, LockLyrics.sMaxLines, sf, idx);
+        boolean groupChanged = singing.update(lines, ms, Settings.LYRIC_MAX_LINES.get(), sf, idx);
         boolean slotChanged = updateOverlapSlots(true);
         if (groupChanged || slotChanged || focus < 0) {
             singing.layout(base, height, lyricGap(GAP_DP), overlapSlots);
@@ -970,7 +988,7 @@ final class LyricView extends View {
             float centeredTop = LyricBandGeometry.singingTop(bandTop, bandBottom, height[focus], musicCardProgress);
             float targetOffset = retainFinal
                     ? LyricOverflowFollow.scaledOffset(rowY, layout.getHeight(), height[focus],
-                            scale[focus] * finalHold.scale(), clipBandTop, clipBandBottom,
+                            scale[focus], clipBandTop, clipBandBottom,
                             centeredTop, musicCardProgress)
                     : LyricOverflowFollow.offset(rowY, layout.getHeight(), clipBandTop,
                             clipBandBottom, centeredTop, musicCardProgress);
@@ -1048,6 +1066,9 @@ final class LyricView extends View {
                 why |= 32;
             }
 
+            // Scroll to the edge in the last sung pose. A single scale/blur/brightness
+            // transition here would already fade every field before its own exit starts.
+            if (lineExits.row(i).holdsAppearance() || i == n - 1 && finalHold.completed()) continue;
             LyricLine l = lines.get(i);
             boolean focused = dotsFor < 0 && singing.contains(i);
             boolean on = focused;
@@ -1149,7 +1170,7 @@ final class LyricView extends View {
         // Clock entry can animate this container's alpha independently of keyguard visibility.
         // Actual shade/AOD/unlock visibility remains handled by wantsWindow and dimTarget.
         return LyricEntryMotion.opacity(v, c == null ? 1f : c.getAlpha(),
-                capsulePresentation() && LockLyrics.sClockIndependentMotion);
+                capsulePresentation() && Settings.LYRIC_CLOCK_INDEPENDENT.on());
     }
 
     /** The lyrics went out for the control centre and have not come all the way back yet. */
@@ -1623,13 +1644,13 @@ final class LyricView extends View {
         for (int i = lo; i <= hi; i++) {
             if ((i < singing.first - 6 || i > focus + 12)
                     && !rowOnScreen(i)) continue;
-            if (moving(i)) return true;
+            if (moving(i) || now() < aimAt[i]) return true;
+            if (lineExits.row(i).holdsAppearance() || i == n - 1 && finalHold.completed()) continue;
             float e = emph[i];
             if (e != 0f && e != 1f) return true;
             float lv = lit[i];
             if (lv != 0f && lv != 1f) return true;
             if (scale[i] != ACTIVE_SCALE && scale[i] != INACTIVE_SCALE) return true;
-            if (now() < aimAt[i]) return true;
             if (blur[i] != blurTarget(i)) return true;
         }
         // The words move every frame while they are being sung - the fill, the lift, a held
@@ -1804,8 +1825,8 @@ final class LyricView extends View {
         final int v = LockLyrics.version();
         final int width = getWidth();
         final int transOn = LockLyrics.below();
-        final int alignOn = LockLyrics.sAlign;
-        final LyricStyle style = LockLyrics.sStyle;
+        final int alignOn = Settings.LYRIC_ALIGN.get();
+        final LyricStyle style = Settings.LYRIC_STYLE.get();
         final List<LyricLine> ls = LockLyrics.lines();
         if (!ls.isEmpty() && v == wantVersion && width == wantWidth && transOn == wantTrans
                 && alignOn == wantAlign && style.sameLayout(wantStyle)) return false;
@@ -1821,11 +1842,16 @@ final class LyricView extends View {
         final TextPaint p = new TextPaint(paint);
         p.setTextSize(buildTextPx);
         p.setTypeface(Typeface.create(Typeface.DEFAULT, style.weight, false));
+        // The paints' sizes and weights are set here rather than inherited: the copies below are
+        // made from the paints of the layout in use, whose style is not necessarily this one.
         final TextPaint bp = new TextPaint(bgPaint);
         bp.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
                 style.bgSizeSp, getResources().getDisplayMetrics()));
+        bp.setTypeface(Typeface.create(Typeface.DEFAULT, style.bgWeight, false));
         final TextPaint tp = new TextPaint(transPaint);
-        tp.setTextSize(buildTextPx * TRANS_SP / TEXT_SP);
+        tp.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                style.transSizeSp, getResources().getDisplayMetrics()));
+        tp.setTypeface(Typeface.create(Typeface.DEFAULT, style.transWeight, false));
         if (ls.isEmpty()) {
             wantVersion = wantWidth = -1;
             wantTrans = transOn;
@@ -1861,8 +1887,8 @@ final class LyricView extends View {
                         // being switched off: the next step asks again when it is due.
                         if (v != LockLyrics.version() || width != getWidth()
                                 || transOn != LockLyrics.below()
-                                || alignOn != LockLyrics.sAlign
-                                || !style.sameLayout(LockLyrics.sStyle)
+                                || alignOn != Settings.LYRIC_ALIGN.get()
+                                || !style.sameLayout(Settings.LYRIC_STYLE.get())
                                 || !LockLyrics.wantsAttached()) {
                             return;
                         }
@@ -1896,7 +1922,7 @@ final class LyricView extends View {
         LyricStyle style;
         /** The translation and romanisation switches this layout was made under; see LockLyrics.below(). */
         int transOn;
-        /** The alignment pref this layout was made under; see LockLyrics.sAlign. */
+        /** The alignment pref this layout was made under; see Settings.LYRIC_ALIGN. */
         int align;
         List<LyricLine> lines;
         StaticLayout[] main, trans;
@@ -1972,7 +1998,7 @@ final class LyricView extends View {
             for (int k = 0; k < backing.length; k++) {
                 LyricLine bg = backing[k];
                 b.bgLay[i][k] = StaticLayout.Builder.obtain(bg.text, 0, bg.text.length(), bp, w)
-                        .setAlignment(align).setIncludePad(false)
+                        .setAlignment(alignFor(bg.opposite, alignOn)).setIncludePad(false)
                         .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED).build();
                 h += BG_GAP_DP * density + b.bgLay[i][k].getHeight();
                 if (bg.hasWords()) b.charXBg[i][k] = charXOf(b.bgLay[i][k], bg);
@@ -2019,6 +2045,7 @@ final class LyricView extends View {
         blurPending.clear();
         int n = lines.size();
         glowMasks = new LyricGlowMask[n];
+        exitMasks = new LyricExitMask[n];
         main = b.main;
         trans = b.trans;
         bgLay = b.bgLay;
@@ -2028,7 +2055,7 @@ final class LyricView extends View {
         charX = b.charX;
         dotsTop = b.dotsTop;
         if (overlapSlots.length != n) overlapSlots = new boolean[n];
-        singing.update(lines, ms, LockLyrics.sMaxLines, Math.max(0, focus), indexAt(ms));
+        singing.update(lines, ms, Settings.LYRIC_MAX_LINES.get(), Math.max(0, focus), indexAt(ms));
         singing.layout(base, height, lyricGap(GAP_DP), overlapSlots);
         blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
         if (preserve) {
@@ -2049,6 +2076,8 @@ final class LyricView extends View {
         finalHold.reset();
         jumpedAt = Long.MIN_VALUE;
         scroll = new float[n];
+        rowSeparation = new float[n];
+        separationAt = 0L;
         vel = new float[n];
         aim = new float[n];
         nextAim = new float[n];
@@ -2173,7 +2202,7 @@ final class LyricView extends View {
             // Insets are window-relative; translate to the unzoomed screen coordinates used
             // by the band. A missing inset still leaves the root's screen edge as the limit.
             float safeTop = 0f;
-            if (LockLyrics.sClockIndependentMotion) {
+            if (Settings.LYRIC_CLOCK_INDEPENDENT.on()) {
                 View root = getRootView();
                 if (root != null) {
                     root.getLocationOnScreen(rootLoc);
@@ -2185,8 +2214,8 @@ final class LyricView extends View {
                 }
                 safeTop = ClockCollapse.unzoomY(this, safeTop);
             }
-            float obstacle = LockLyrics.sClockIndependentMotion && capsule ? measuredObstacle : Float.NaN;
-            boolean bandUnstable = capsule && LockLyrics.sClockIndependentMotion
+            float obstacle = Settings.LYRIC_CLOCK_INDEPENDENT.on() && capsule ? measuredObstacle : Float.NaN;
+            boolean bandUnstable = capsule && Settings.LYRIC_CLOCK_INDEPENDENT.on()
                     && com.os4.musiccover.island.MiniPlayerRuntime.lyricBandUnstable();
             boolean navigation = Main.capsuleLyricsOverNavigation()
                     || com.os4.musiccover.immersive.ImmersiveHost.requestedNavigationKey() != null;
@@ -2201,12 +2230,12 @@ final class LyricView extends View {
             diagnosticUnstable = bandUnstable;
             diagnosticReferenceTop = diagnosticReferenceBottom = Float.NaN;
             diagnosticReferenceSource = "none";
-            if (navFoldStyle != LockLyrics.sStyle || navFoldWidth != getWidth() || navFoldHeight != getHeight()) {
+            if (navFoldStyle != Settings.LYRIC_STYLE.get() || navFoldWidth != getWidth() || navFoldHeight != getHeight()) {
                 navFoldClipBottom = Float.NaN;
                 navMorphEndpointKnown = false;
                 navMorphHandoff.reset();
                 navMorphWaiting = navFallbackBand = false;
-                navFoldStyle = LockLyrics.sStyle;
+                navFoldStyle = Settings.LYRIC_STYLE.get();
                 navFoldWidth = getWidth();
                 navFoldHeight = getHeight();
             }
@@ -2215,18 +2244,18 @@ final class LyricView extends View {
                 navFoldClipBottom = Float.NaN;
             }
             float morph = com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphProgress();
-            if (!morphIndependentKnown || morphIndependent != LockLyrics.sClockIndependentMotion) {
+            if (!morphIndependentKnown || morphIndependent != Settings.LYRIC_CLOCK_INDEPENDENT.on()) {
                 morphMiniBand.clear();
                 morphCardBand.clear();
                 navMorphMiniBand.clear();
                 navMorphCardBand.clear();
-                morphIndependent = LockLyrics.sClockIndependentMotion;
+                morphIndependent = Settings.LYRIC_CLOCK_INDEPENDENT.on();
                 morphIndependentKnown = true;
             }
             boolean realMusicMorph = capsule
-                    && LockLyrics.sEnabled && !LockLyrics.sTapHidden && Float.isFinite(morph);
+                    && Settings.LYRICS.on() && !LockLyrics.sTapHidden && Float.isFinite(morph);
             float previousCardProgress = musicCardProgress;
-            boolean bridgeNavigation = navigation && capsule && LockLyrics.sEnabled
+            boolean bridgeNavigation = navigation && capsule && Settings.LYRICS.on()
                     && !LockLyrics.sTapHidden && LockLyrics.capsulePageRequested()
                     && bandOk && focus >= 0 && show > 0.02f && !LockLyrics.still()
                     && !com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicSceneTransition();
@@ -2257,40 +2286,40 @@ final class LyricView extends View {
                 float miniEdge = realMusicMorph
                         ? com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphMiniTop() : Float.NaN;
                 boolean ordinary = ordinaryLyricBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                        Settings.LYRIC_STYLE.get(), show > 0.003f, Float.NaN, Float.NaN);
                 boolean estimated = !ordinary && navigationClipBand.update(LockLyrics.contrastRequestId(),
-                        getWidth(), getHeight(), LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                        getWidth(), getHeight(), Settings.LYRIC_STYLE.get(), show > 0.003f, Float.NaN, Float.NaN);
                 float miniTop = ordinary ? ordinaryLyricBand.top() : estimated ? navigationClipBand.top() : Float.NaN;
                 float miniBottom = ordinary ? ordinaryLyricBand.bottom() : estimated ? navigationClipBand.bottom() : Float.NaN;
                 boolean miniScreen = !ordinary || ordinaryScreenBand;
                 if (!ordinary && !estimated) {
-                    boolean bottomMini = LockLyrics.sClockIndependentMotion && Float.isFinite(miniEdge)
+                    boolean bottomMini = Settings.LYRIC_CLOCK_INDEPENDENT.on() && Float.isFinite(miniEdge)
                             && miniEdge >= Main.screenHeight() * 0.5f && miniEdge < Main.screenHeight();
-                    if (bottomMini && LockLyrics.sStyle.writeBand(safeTop,
+                    if (bottomMini && Settings.LYRIC_STYLE.get().writeBand(safeTop,
                             ClockCollapse.unzoomY(this, miniEdge), density, textPx, navigationBounds)) {
                         miniTop = navigationBounds[0];
                         miniBottom = navigationBounds[1];
                         miniScreen = true;
-                    } else if (!LockLyrics.sClockIndependentMotion && Float.isFinite(clock)
-                            && LockLyrics.sStyle.writeBand(clock, cardFloor, density, textPx, navigationBounds)) {
+                    } else if (!Settings.LYRIC_CLOCK_INDEPENDENT.on() && Float.isFinite(clock)
+                            && Settings.LYRIC_STYLE.get().writeBand(clock, cardFloor, density, textPx, navigationBounds)) {
                         miniTop = navigationBounds[0];
                         miniBottom = navigationBounds[1];
                         miniScreen = false;
                     }
                 }
                 boolean miniAlready = navMorphMiniBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                        Settings.LYRIC_STYLE.get(), show > 0.003f, Float.NaN, Float.NaN);
                 boolean miniReady = navMorphMiniBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f, miniTop, miniBottom);
+                        Settings.LYRIC_STYLE.get(), show > 0.003f, miniTop, miniBottom);
                 if (!miniAlready && miniReady) navMorphMiniScreen = miniScreen;
                 boolean settledCard = !fixedCapsuleScreenBand && fixedCapsuleBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f, Float.NaN, Float.NaN);
+                        Settings.LYRIC_STYLE.get(), show > 0.003f, Float.NaN, Float.NaN);
                 boolean canCard = settledCard || Float.isFinite(clock) && Float.isFinite(cardFloor)
-                        && LockLyrics.sStyle.writeBand(clock, cardFloor, density, textPx, bandBounds);
+                        && Settings.LYRIC_STYLE.get().writeBand(clock, cardFloor, density, textPx, bandBounds);
                 float cardTop = settledCard ? fixedCapsuleBand.top() : canCard ? bandBounds[0] : Float.NaN;
                 float cardBottom = settledCard ? fixedCapsuleBand.bottom() : canCard ? bandBounds[1] : Float.NaN;
                 boolean cardReady = navMorphCardBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f, cardTop, cardBottom);
+                        Settings.LYRIC_STYLE.get(), show > 0.003f, cardTop, cardBottom);
                 if (miniReady && cardReady && !navMorphEndpointKnown) {
                     float foldedClip = navFoldClipBottom;
                     if (!Float.isFinite(foldedClip) && Float.isFinite(miniEdge)) {
@@ -2317,13 +2346,13 @@ final class LyricView extends View {
                     navFallbackBand = false;
                     float navFloor = LyricBandGeometry.visibleBottom(navMorphCardBand.top(),
                             navMorphCardBand.bottom(), cardFloor, floor);
-                    float miniClip = LockLyrics.sClockIndependentMotion
+                    float miniClip = Settings.LYRIC_CLOCK_INDEPENDENT.on()
                             ? (navMorphMiniScreen ? Math.max(safeTop, navMorphMiniBand.top()) : safeTop)
                             : LyricBandGeometry.visibleTop(false, navMorphCardBand.top(), clock,
                                     ClockCollapse.contentBottomFor(this), safeTop);
-                    float cardClip = LyricBandGeometry.visibleTop(LockLyrics.sClockIndependentMotion,
+                    float cardClip = LyricBandGeometry.visibleTop(Settings.LYRIC_CLOCK_INDEPENDENT.on(),
                             navMorphCardBand.top(), clock,
-                            LockLyrics.sClockIndependentMotion ? Float.NaN : ClockCollapse.contentBottomFor(this), safeTop);
+                            Settings.LYRIC_CLOCK_INDEPENDENT.on() ? Float.NaN : ClockCollapse.contentBottomFor(this), safeTop);
                     LyricBandGeometry.navigationMorph(navMorphUseMini ? navMorphMiniBand.top() : navMorphCardBand.top(),
                             navMorphUseMini ? navMorphMiniBand.bottom() : navMorphCardBand.bottom(),
                             navMorphUseMini ? miniClip : cardClip,
@@ -2361,29 +2390,29 @@ final class LyricView extends View {
                 float miniEdge = com.os4.musiccover.island.MiniPlayerRuntime.lyricMusicMorphMiniTop();
                 float miniFloor = ClockCollapse.unzoomY(this, miniEdge);
                 float cardFloor = ClockCollapse.unzoomY(this, LockLyrics.capsuleLayoutBottomOnScreen());
-                boolean screenMini = LockLyrics.sClockIndependentMotion && Float.isFinite(miniEdge)
+                boolean screenMini = Settings.LYRIC_CLOCK_INDEPENDENT.on() && Float.isFinite(miniEdge)
                         && miniEdge >= Main.screenHeight() * 0.5f && miniEdge < Main.screenHeight();
-                boolean canMini = (!LockLyrics.sClockIndependentMotion || screenMini)
-                        && LockLyrics.sStyle.writeBand(screenMini ? safeTop : clock,
+                boolean canMini = (!Settings.LYRIC_CLOCK_INDEPENDENT.on() || screenMini)
+                        && Settings.LYRIC_STYLE.get().writeBand(screenMini ? safeTop : clock,
                                 screenMini ? miniFloor : cardFloor, density, textPx, bandBounds);
                 boolean miniReady = morphMiniBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f,
+                        Settings.LYRIC_STYLE.get(), show > 0.003f,
                         canMini ? bandBounds[0] : Float.NaN, canMini ? bandBounds[1] : Float.NaN);
                 boolean canCard = Float.isFinite(clock) && Float.isFinite(cardFloor)
-                        && LockLyrics.sStyle.writeBand(clock, cardFloor, density, textPx, bandBounds);
+                        && Settings.LYRIC_STYLE.get().writeBand(clock, cardFloor, density, textPx, bandBounds);
                 boolean cardReady = morphCardBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f,
+                        Settings.LYRIC_STYLE.get(), show > 0.003f,
                         canCard ? bandBounds[0] : Float.NaN, canCard ? bandBounds[1] : Float.NaN);
                 if (miniReady && cardReady) {
                     top = LyricBandGeometry.morphEdge(morphMiniBand.top(), morphCardBand.top(), musicCardProgress) - me;
                     bottom = LyricBandGeometry.morphEdge(morphMiniBand.bottom(), morphCardBand.bottom(), musicCardProgress) - me;
-                    clipTop = LockLyrics.sClockIndependentMotion
+                    clipTop = Settings.LYRIC_CLOCK_INDEPENDENT.on()
                             ? LyricBandGeometry.morphEdge(morphMiniBand.top(), safeTop, musicCardProgress) - me
                             : LyricBandGeometry.visibleTop(false, top + me, clock,
                                     ClockCollapse.contentBottomFor(this), safeTop) - me;
                     // Match both resting clips exactly, including card-space overflow when the
                     // chosen height is below 100%. The live obstacle still follows the morph.
-                    float miniClip = LockLyrics.sClockIndependentMotion
+                    float miniClip = Settings.LYRIC_CLOCK_INDEPENDENT.on()
                             ? Math.max(morphMiniBand.top(), Math.min(morphMiniBand.bottom(),
                                     floor - LyricStyle.GAP_DP * density))
                             : LyricBandGeometry.visibleBottom(morphMiniBand.top(),
@@ -2401,12 +2430,12 @@ final class LyricView extends View {
                 }
             }
             boolean screenBand = LyricBandGeometry.useScreenCapsuleBand(
-                    LockLyrics.sClockIndependentMotion, capsule, LockLyrics.capsulePageRequested(),
-                    LockLyrics.sEnabled && !LockLyrics.sTapHidden, Main.capsuleKeepsMini(),
+                    Settings.LYRIC_CLOCK_INDEPENDENT.on(), capsule, LockLyrics.capsulePageRequested(),
+                    Settings.LYRICS.on() && !LockLyrics.sTapHidden, Main.capsuleKeepsMini(),
                     navigation,
                     bandUnstable,
                     obstacle, Main.screenHeight());
-            if (screenBand && !LockLyrics.sStyle.writeBand(safeTop,
+            if (screenBand && !Settings.LYRIC_STYLE.get().writeBand(safeTop,
                     ClockCollapse.unzoomY(this, obstacle), density, textPx, bandBounds)) {
                 screenBand = false;
             }
@@ -2422,13 +2451,13 @@ final class LyricView extends View {
                 fixedCapsuleScreenBand = screenBand;
             }
             boolean measured = Float.isFinite(clock)
-                    && LockLyrics.sStyle.writeBand(clock, layoutFloor, density, textPx, bandBounds)
+                    && Settings.LYRIC_STYLE.get().writeBand(clock, layoutFloor, density, textPx, bandBounds)
                     && bandBounds[1] - bandBounds[0] >= MIN_BAND_ROWS * textPx - 0.01f;
             if (capsule) {
                 // Pin the reading area, including through clock target updates and temporary
                 // missing measurements. Only the real card edge below keeps moving.
                 measured = fixedCapsuleBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                        LockLyrics.sStyle, show > 0.003f,
+                        Settings.LYRIC_STYLE.get(), show > 0.003f,
                         measured ? bandBounds[0] : Float.NaN, measured ? bandBounds[1] : Float.NaN);
                 if (measured) {
                     bandBounds[0] = fixedCapsuleBand.top();
@@ -2437,7 +2466,7 @@ final class LyricView extends View {
                         // Keep the real resting obstacle, including any adjacent capsule, for
                         // both the outgoing gesture and a later return from the card.
                         morphMiniBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                                LockLyrics.sStyle, show > 0.003f, bandBounds[0], bandBounds[1]);
+                                Settings.LYRIC_STYLE.get(), show > 0.003f, bandBounds[0], bandBounds[1]);
                     }
                 }
             } else fixedCapsuleBand.clear();
@@ -2445,8 +2474,8 @@ final class LyricView extends View {
                 top = bandBounds[0] - me;
                 bottom = bandBounds[1] - me;
                 clipTop = (screenBand ? bandBounds[0] : LyricBandGeometry.visibleTop(
-                        LockLyrics.sClockIndependentMotion, bandBounds[0], clock,
-                        capsule && !LockLyrics.sClockIndependentMotion
+                        Settings.LYRIC_CLOCK_INDEPENDENT.on(), bandBounds[0], clock,
+                        capsule && !Settings.LYRIC_CLOCK_INDEPENDENT.on()
                                 ? ClockCollapse.contentBottomFor(this) : Float.NaN, safeTop)) - me;
                 float visibleBottom = capsule ? LyricBandGeometry.visibleBottom(bandBounds[0],
                         bandBounds[1], layoutFloor, floor) : bandBounds[1];
@@ -2456,18 +2485,18 @@ final class LyricView extends View {
                         layoutFloor - LyricStyle.GAP_DP * density)) : visibleBottom) - me;
                 if (navigation && !followMusic && Main.capsuleKeepsMini())
                     navFoldClipBottom = clipBottom + me;
-                if (!navigation && !followMusic && LockLyrics.sClockIndependentMotion && capsule
-                        && LockLyrics.capsulePageRequested() && LockLyrics.sEnabled
+                if (!navigation && !followMusic && Settings.LYRIC_CLOCK_INDEPENDENT.on() && capsule
+                        && LockLyrics.capsulePageRequested() && Settings.LYRICS.on()
                         && !LockLyrics.sTapHidden && Main.capsuleKeepsMini()) {
                     // Remember what the ordinary page actually used, including a clock band
                     // when a group owns the capsule frame. Do not invent a full-screen band.
                     if (ordinaryScreenBand != screenBand) ordinaryLyricBand.clear();
                     ordinaryScreenBand = screenBand;
                     ordinaryLyricBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                            LockLyrics.sStyle, show > 0.003f, top + me, bottom + me);
+                            Settings.LYRIC_STYLE.get(), show > 0.003f, top + me, bottom + me);
                 }
-                if (navigation && LockLyrics.sClockIndependentMotion && capsule
-                        && LockLyrics.capsulePageRequested() && LockLyrics.sEnabled
+                if (navigation && Settings.LYRIC_CLOCK_INDEPENDENT.on() && capsule
+                        && LockLyrics.capsulePageRequested() && Settings.LYRICS.on()
                         && !LockLyrics.sTapHidden && Main.capsuleKeepsMini()) {
                     // The normal folded page clips at its configured screen band, not the
                     // bare status-bar inset. Use the same measured obstacle and style, without
@@ -2477,7 +2506,7 @@ final class LyricView extends View {
                             && obstacle < screen;
                     if (hasObstacle) {
                         boolean actualOrdinary = ordinaryLyricBand.update(LockLyrics.contrastRequestId(),
-                                getWidth(), getHeight(), LockLyrics.sStyle, show > 0.003f,
+                                getWidth(), getHeight(), Settings.LYRIC_STYLE.get(), show > 0.003f,
                                 Float.NaN, Float.NaN);
                         boolean unstable = bandUnstable;
                         float normalTop = actualOrdinary ? ordinaryLyricBand.top() : Float.NaN;
@@ -2489,10 +2518,10 @@ final class LyricView extends View {
                         if (!actualOrdinary && LyricBandGeometry.canUseNavigationReference(false, unstable)) {
                             // When entered directly into navigation, estimate only if the
                             // ordinary capsule would currently be eligible for its screen band.
-                            boolean valid = LockLyrics.sStyle.writeBand(safeTop,
+                            boolean valid = Settings.LYRIC_STYLE.get().writeBand(safeTop,
                                     ClockCollapse.unzoomY(this, obstacle), density, textPx, navigationBounds);
                             if (navigationClipBand.update(LockLyrics.contrastRequestId(), getWidth(), getHeight(),
-                                    LockLyrics.sStyle, show > 0.003f,
+                                    Settings.LYRIC_STYLE.get(), show > 0.003f,
                                     valid ? navigationBounds[0] : Float.NaN,
                                     valid ? navigationBounds[1] : Float.NaN)) {
                                 normalTop = navigationClipBand.top();
@@ -2682,7 +2711,7 @@ final class LyricView extends View {
                     + " groupScale=" + r2(presentationScale())
                     + " windowY=" + loc[1] + " viewY=" + r2(getTranslationY())
                     + " viewScale=" + r2(getScaleY()) + " viewAlpha=" + r2(getAlpha())
-                    + " clock=" + layoutClockSource + " clockIndependent=" + LockLyrics.sClockIndependentMotion);
+                    + " clock=" + layoutClockSource + " clockIndependent=" + Settings.LYRIC_CLOCK_INDEPENDENT.on());
         } catch (Throwable ignored) {
             // Diagnostics must never disturb a SystemUI draw or its animation callbacks.
         }
@@ -2811,6 +2840,8 @@ final class LyricView extends View {
             canvas.scale(presentationScale, presentationScale, getWidth() / 2f, homeY());
         float center = (bandTop + bandBottom) / 2f;
         long drawAt = now();
+        float separationDt = separationAt == 0L ? 0f : Math.min(0.05f, Math.max(0f, (drawAt - separationAt) / 1000f));
+        separationAt = drawAt;
         // A layout rebase preserves each row's old screen position and every row has its own
         // spring. The target slots can therefore be separate while their current poses cross.
         // Constrain the actual drawn bounds as well, including frozen departing rows.
@@ -2819,28 +2850,26 @@ final class LyricView extends View {
             LyricLineExit.Row exit = lineExits.row(i);
             if (exit != null && exit.departing()) {
                 if (!exit.finished) {
-                    // Freeze the lyric scroll, not the whole page's closing movement. The
-                    // media card can also rise into this row while its own exit is running.
+                    float progress = exit.amount(drawAt);
                     float y = exit.y + floatOffset;
-                    float sc = exit.scale * exit.scale(drawAt);
+                    float sc = exit.scale;
                     float top = LyricTransition.scaledTop(y, height[i], sc);
                     float shift = LyricFocus.separationOffset(top, previousBottom);
                     y += shift;
                     top += shift;
-                    float shownTop = LyricBandGeometry.presentedY(top, center, presentationOffset, presentationScale);
-                    float shownBottom = LyricBandGeometry.presentedY(top + height[i] * sc, center,
-                            presentationOffset, presentationScale);
-                    float a = LyricLineExit.edgeAlpha(exit.alpha, shownTop, shownBottom,
-                            clipBandTop, clipBandBottom, fade);
-                    if (a * exit.alpha(drawAt) <= 0.003f) continue;
-                    previousBottom = top + height[i] * sc;
-                    int rowSave = canvas.save();
-                    drawLine(canvas, i, exit.x, y, vis * a * exit.alpha(drawAt),
-                            sc, exit.emphasis, exit.blur, exit.lit);
-                    canvas.restoreToCount(rowSave);
+                    float bottom = top + height[i] * sc;
+                    // Some fields are still visible until the last frame. Keep their space
+                    // until it clears; the following row then eases out its held separation.
+                    previousBottom = Math.max(previousBottom, bottom);
+                    drawFadingFields(canvas, i, exit.x, y, vis * exit.alpha,
+                            sc, exit.emphasis, exit.blur, exit.lit, progress, false);
+                } else {
+                    exitMasks[i] = null;
                 }
                 continue;
             }
+            boolean finishingLast = i == n - 1 && finalHold.progress() > 0f && finalHold.progress() < 1f;
+            if (!finishingLast) exitMasks[i] = null;
             boolean unfinished = ms >= LyricFocus.startOf(lines.get(i))
                     && ms < LyricFocus.endOf(lines.get(i));
             boolean waitingForTop = exit != null && exit.waitingForTop();
@@ -2848,7 +2877,7 @@ final class LyricView extends View {
             float rowTransitionAlpha = unfinished || waitingForTop || heldFinal ? 1f : transition.alpha(i);
             if (rowTransitionAlpha <= 0.003f) continue;
             float y = anchor + transition.position(i) - scroll[i];
-            float rowScale = scale[i] * (i == n - 1 ? finalHold.scale() : 1f);
+            float rowScale = scale[i];
             float screenY = LyricTransition.scaledTop(y, height[i], rowScale);
             float shift = LyricFocus.separationOffset(screenY, previousBottom);
             boolean hasDots = !Float.isNaN(dotsTop[i])
@@ -2861,6 +2890,9 @@ final class LyricView extends View {
                 if (shownBottom > clipBandTop && shownTop < clipBandBottom)
                     shift = Math.max(shift, LyricFocus.separationOffset(dotsY, previousBottom));
             }
+            float needed = shift;
+            shift = rowSeparation[i] = LyricFocus.releaseSeparation(rowSeparation[i], needed, separationDt);
+            if (shift > needed) kick();
             y += shift;
             screenY += shift;
             // The interlude slot above this line, if it has one: its dots move with the line, and
@@ -2892,7 +2924,7 @@ final class LyricView extends View {
             // offscreen. Finished rows retain the normal edge treatment.
             float edge = LyricBandGeometry.rowAlphaWhilePlaying(shownY, shownBottom, clipBandTop,
                     clipBandBottom, fade, unfinished || waitingForTop || heldFinal);
-            float a = vis * edge * rowTransitionAlpha * (i == n - 1 ? finalHold.alpha() : 1f);
+            float a = vis * edge * rowTransitionAlpha;
             if (a <= 0.003f) {
                 lineExits.forgetWaitingPose(i);
                 continue;
@@ -2903,10 +2935,18 @@ final class LyricView extends View {
                     y - floatOffset,
                     scale[i], edge * rowTransitionAlpha, emph[i], lit[i], blur[i]);
             // Until now the completed line scrolls with the rest; only at the safe upper
-            // boundary does its existing 300ms fade/shrink take ownership of the pose.
+            // boundary does the spatial wipe take ownership of the pose.
             if (lineExits.startAtTop(i, shownY, clipBandTop, fade, drawAt, musicBandMorph,
-                    transition.position(i) - scroll[i] + shift)) kick();
-            drawLine(canvas, i, side, y, a, rowScale, emph[i], blur[i], lit[i]);
+                    transition.position(i) - scroll[i] + shift)) {
+                kick();
+                drawFadingFields(canvas, i, side, y, a, rowScale, emph[i], blur[i], lit[i], 0f, false);
+            } else if (finishingLast) {
+                drawFadingFields(canvas, i, side, y, a, rowScale, emph[i], blur[i], lit[i],
+                        finalHold.progress(), true);
+            } else {
+                drawLine(canvas, i, side, y, i == n - 1 ? a * finalHold.alpha() : a,
+                        rowScale, emph[i], blur[i], lit[i]);
+            }
         }
         canvas.restoreToCount(save);
     }
@@ -2976,6 +3016,55 @@ final class LyricView extends View {
             dotPaint.setColor(ink(alpha, litK));
             c.drawCircle(cx + (k - 1) * gap, cy, r, dotPaint);
         }
+    }
+
+    private final android.graphics.Rect exitClip = new android.graphics.Rect();
+    private final Paint exitEraser = new Paint();
+
+    private void drawFadingFields(Canvas canvas, int i, float x, float y, float alpha,
+                                   float sc, float emphasis, float rowBlur, float lineLit, float progress,
+                                  boolean retainLast) {
+        if (alpha <= 0.003f || sc <= 0f || progress >= 1f) return;
+        int pose = canvas.save();
+        canvas.translate(x, y);
+        canvas.scale(sc, sc, linePivotX(i), height[i] / 2f);
+        if (canvas.getClipBounds(exitClip)) {
+            float top = Math.max(-blurPad, exitClip.top);
+            float bottom = Math.min(height[i] + blurPad, exitClip.bottom);
+            if (bottom > top) {
+                LyricExitMask mask = exitMasks[i];
+                // Leaving rows keep only the fragment visible on their first frame. A moving
+                // media card cannot uncover fresh text outside the captured mask. The held
+                // final row stays live; give its moving viewport a small lookahead margin.
+                if (mask == null || retainLast && (top < mask.clipTop || bottom > mask.clipBottom)) {
+                    float lookahead = retainLast ? textPx * 2f : 0f;
+                    mask = exitMasks[i] = new LyricExitMask(top - lookahead, bottom + lookahead);
+                    float bgGap = lyricGap(BG_GAP_DP), transGap = lyricGap(TRANS_GAP_DP);
+                    LyricLine line = lines.get(i);
+                    LyricLine[] backing = line.backgrounds();
+                    float below = main[i].getHeight();
+                    mask.add(main[i], line.charEnd, 0f, blurPad,
+                            backing.length > 0 ? bgGap / 2f : trans[i] != null ? transGap / 2f : blurPad);
+                    for (int k = 0; k < backing.length; k++) {
+                        below += bgGap;
+                        mask.add(bgLay[i][k], backing[k].charEnd, below, bgGap / 2f,
+                                k + 1 < backing.length ? bgGap / 2f : trans[i] != null ? transGap / 2f : blurPad);
+                        below += bgLay[i][k].getHeight();
+                    }
+                    mask.add(trans[i], null, transTop(i), transGap / 2f, blurPad);
+                }
+                top = Math.max(top, mask.clipTop);
+                bottom = Math.min(bottom, mask.clipBottom);
+                if (canvas.clipRect(exitClip.left, top, exitClip.right, bottom)) {
+                    int layer = canvas.saveLayer(exitClip.left, top, exitClip.right, bottom, null);
+                    drawLine(canvas, i, 0f, 0f, alpha, 1f, emphasis, rowBlur, lineLit);
+                    exitEraser.setBlendMode(android.graphics.BlendMode.DST_OUT);
+                    mask.erase(canvas, exitEraser, progress, retainLast ? LyricFinalHold.FADE_FRACTION : 1f);
+                    canvas.restoreToCount(layer);
+                }
+            }
+        }
+        canvas.restoreToCount(pose);
     }
 
     private float linePivotX(int i) {
@@ -3079,8 +3168,8 @@ final class LyricView extends View {
         long frameAt = now();
         if (tintFrameAt == frameAt) return false;
         tintFrameAt = frameAt;
-        int src = com.os4.musiccover.CoverPush.lyricCoverTint();
-        LyricAppearance next = LockLyrics.sAppearance;
+        int src = com.os4.musiccover.cover.CoverPush.lyricCoverTint();
+        LyricAppearance next = Settings.LYRIC_APPEARANCE.get();
         boolean withNavigation = (LockLyrics.wantsAttached() || show > 0.003f)
                 && com.os4.musiccover.immersive.ImmersiveHost.presentedNavigationKey() != null;
         com.os4.musiccover.LyricContrastBackground.Reading background = withNavigation
@@ -3109,7 +3198,7 @@ final class LyricView extends View {
             // Keep the saved palette current underneath the temporary transform. Navigation
             // ending can then restore the actual current cover/settings without a color jump.
             boolean needsCover = next.mainMode == LyricAppearance.COVER
-                    || next.bgMode == LyricAppearance.COVER;
+                    || next.bgMode == LyricAppearance.COVER || next.transMode == LyricAppearance.COVER;
             if (needsCover && (coverPalette == null || coverPalette.seed != src)) requestPalette(src);
             else if (paletteWork != null) {
                 paletteRequest++;
@@ -3126,19 +3215,21 @@ final class LyricView extends View {
             }
             int oldMainDim = baseMainDim, oldBgDim = baseBgDim;
             // HCT solving stays off the draw thread; until ready, retain the last palette.
-            baseMainDim = resolveColor(next.mainMode, next.mainColor, ti, false, false);
-            baseMainLit = resolveColor(next.mainMode, next.mainColor, -1, false, true);
-            baseBgDim = resolveColor(next.bgMode, next.bgColor, ti, true, false);
-            baseBgLit = resolveColor(next.bgMode, next.bgColor, -1, true, true);
-            baseTranslation = ti;
+            baseMainDim = resolveColor(next.mainMode, next.mainColor, ti, false, false, next.mainIntensity);
+            baseMainLit = resolveColor(next.mainMode, next.mainColor, -1, false, true, next.mainIntensity);
+            baseBgDim = resolveColor(next.bgMode, next.bgColor, ti, true, false, next.bgIntensity);
+            baseBgLit = resolveColor(next.bgMode, next.bgColor, -1, true, true, next.bgIntensity);
+            baseTranslation = resolveColor(next.transMode, next.transColor, ti, true, false, next.transIntensity);
+            baseTranslationLit = resolveColor(next.transMode, next.transColor, -1, true, true, next.transIntensity);
             // Blur pictures always contain saved colors and role-specific alpha. Only an
             // actual base change rebuilds them, never the 300ms navigation color animation.
             if (oldMainDim != baseMainDim || oldBgDim != baseBgDim ||
                     builtMainOpacity != next.mainOpacity || builtBgOpacity != next.bgOpacity ||
-                    builtTranslationTint != ti) {
+                    builtTransDim != baseTranslation || builtTransOpacity != next.transOpacity) {
                 builtMainOpacity = next.mainOpacity;
                 builtBgOpacity = next.bgOpacity;
-                builtTranslationTint = ti;
+                builtTransDim = baseTranslation;
+                builtTransOpacity = next.transOpacity;
                 blurGeneration++;
                 blurBmp = new Bitmap[lines.size()][BLUR_MAX_ROWS];
                 blurPending.clear();
@@ -3149,7 +3240,7 @@ final class LyricView extends View {
         bgDim = navigationColor.apply(baseBgDim);
         bgLit = navigationColor.apply(baseBgLit);
         translationDim = navigationColor.apply(baseTranslation);
-        translationLit = navigationColor.apply(-1);
+        translationLit = navigationColor.apply(baseTranslationLit);
         if (colorChanged) {
             if (navigationColor.identity()) bmpPaint.setColorFilter(null);
             else {
@@ -3160,8 +3251,8 @@ final class LyricView extends View {
         return true;
     }
 
-    private float builtMainOpacity = -1f, builtBgOpacity = -1f;
-    private int builtTranslationTint;
+    private float builtMainOpacity = -1f, builtBgOpacity = -1f, builtTransOpacity = -1f;
+    private int builtTransDim;
 
     private void requestPalette(final int seed) {
         if (paletteWork != null) blurHandler().removeCallbacks(paletteWork);
@@ -3172,7 +3263,7 @@ final class LyricView extends View {
             post(() -> {
                 if (!Gen.live() || request != paletteRequest) return;
                 paletteWork = null;
-                if (seed != com.os4.musiccover.CoverPush.lyricCoverTint()) return;
+                if (seed != com.os4.musiccover.cover.CoverPush.lyricCoverTint()) return;
                 coverPalette = result;
                 appearance = null;
                 invalidate();
@@ -3184,19 +3275,19 @@ final class LyricView extends View {
     }
 
     private int resolveColor(int mode, int custom, int official,
-                                    boolean backing, boolean active) {
+                                    boolean backing, boolean active, float intensity) {
         if (mode == LyricAppearance.CUSTOM) return custom;
         if (mode == LyricAppearance.SYSTEM) {
             try {
-                return getResources().getColor(active ? android.R.color.system_accent1_100
-                        : android.R.color.system_accent1_200, null);
+                return LyricAppearance.soften(getResources().getColor(active ? android.R.color.system_accent1_100
+                        : android.R.color.system_accent1_200, null), intensity);
             } catch (android.content.res.Resources.NotFoundException ignored) {
                 return official;
             }
         }
         if (mode == LyricAppearance.COVER && coverPalette != null) {
-            return backing ? (active ? coverPalette.bgLit : coverPalette.bgDim)
-                    : (active ? coverPalette.mainLit : coverPalette.mainDim);
+            return LyricAppearance.soften(backing ? (active ? coverPalette.bgLit : coverPalette.bgDim)
+                    : (active ? coverPalette.mainLit : coverPalette.mainDim), intensity);
         }
         return official;
     }
@@ -3220,8 +3311,10 @@ final class LyricView extends View {
         return android.graphics.Color.pack(r * gain, g * gain, b * gain, clamp01(alpha), EXTENDED);
     }
 
+    /** The translation's ink: its own colour and opacity, white as it fades in and out. */
     private long translationInk(float alpha, float whiteness) {
-        return blendInk(translationDim, translationLit, whiteness, alpha, 1f);
+        LyricAppearance a = appearance == null ? LyricAppearance.DEFAULT : appearance;
+        return blendInk(translationDim, translationLit, whiteness, alpha * a.transOpacity, 1f);
     }
 
     /** The distance a blur radius belongs to. */
@@ -3366,7 +3459,7 @@ final class LyricView extends View {
                         }
                         blurBmp[i][rows - 1] = b;
                         // While the loop runs its next frame draws it anyway.
-                        if (!looping) invalidate();
+                        if (!frame.active()) invalidate();
                     }
                 });
             }
@@ -3397,7 +3490,7 @@ final class LyricView extends View {
         bp.setColor(android.graphics.Color.toArgb(
                 blendInk(baseBgDim, baseBgDim, 0f, a.bgOpacity, 1f)));
         tp.setColor(android.graphics.Color.toArgb(
-                blendInk(baseTranslation, baseTranslation, 0f, TRANS_ALPHA, 1f)));
+                blendInk(baseTranslation, baseTranslation, 0f, a.transOpacity, 1f)));
         return blurPaintSnapshot = new BlurPaints(buildGen, blurGeneration, p, tp, bp);
     }
 
@@ -3433,7 +3526,7 @@ final class LyricView extends View {
                 bp.setMaskFilter(mf);
                 StaticLayout bl = StaticLayout.Builder.obtain(bg.text, 0, bg.text.length(),
                                 bp, width)
-                        .setAlignment(align)
+                        .setAlignment(alignFor(bg.opposite, alignOn))
                         .setIncludePad(false)
                         .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED)
                         .build();
@@ -3578,7 +3671,7 @@ final class LyricView extends View {
         if (t == null) return;
         int save = c.save();
         c.translate(0f, transTop(i));
-        t.getPaint().setColor(translationInk(a * TRANS_ALPHA * transReveal(), 0f));
+        t.getPaint().setColor(translationInk(a * transReveal(), 0f));
         t.draw(c);
         t.getPaint().setColor(0xFFFFFFFF);
         c.restoreToCount(save);
@@ -3914,7 +4007,7 @@ final class LyricView extends View {
 
     private String geometryDiagnostic() {
         return " build=" + com.os4.musiccover.BuildConfig.VERSION_CODE
-                + " nav=" + diagnosticNavigation + " independent=" + LockLyrics.sClockIndependentMotion
+                + " nav=" + diagnosticNavigation + " independent=" + Settings.LYRIC_CLOCK_INDEPENDENT.on()
                 + " keptMini=" + Main.capsuleKeepsMini() + " unstable=" + diagnosticUnstable
                 + " anchor=" + diagCoordinate(anchorY()) + " obstacle=" + diagCoordinate(diagnosticObstacle)
                 + " viewOffset=" + diagCoordinate(diagnosticViewOffset) + " normalRef=" + diagnosticReferenceSource
@@ -3953,7 +4046,7 @@ final class LyricView extends View {
                         + "(" + LockLyrics.bandSource() + ")" : "none")
                 + " layoutClock=" + layoutClockSource + " clipTop=" + Math.round(clipBandTop)
                 + " clipBottom=" + Math.round(clipBandBottom)
-                + " looping=" + looping + " parent=" + (getParent() instanceof ViewGroup) + geometryDiagnostic()
+                + " looping=" + frame.active() + " parent=" + (getParent() instanceof ViewGroup) + geometryDiagnostic()
                 // The last few frames that moved, oldest first: what the page did while the lock
                 // screen was leaving, and which reading was late with it. Only frames that move
                 // are in it, so a burst is one event. See trace().

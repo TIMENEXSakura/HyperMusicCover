@@ -404,8 +404,7 @@ internal object NumState {
         if (!folding || !LockIslands.foldsToCount()) return@Runnable
         // The list the spread opened, passing through the pile on its way: not folded back.
         if (LockIslands.spreadingNow()) { trace("pile check skipped: spread ($foldWhy)"); return@Runnable }
-        // Never carry an initialization check across a user gesture and fold its result.
-        if (busy()) { trace("pile check skipped: moving ($foldWhy)"); return@Runnable }
+        if (busy()) { foldIfPiled(foldWhy); return@Runnable }
         if (state() == "STACK") goTo("NUMBER", anim = true, why = "piled ($foldWhy)")
     }
 

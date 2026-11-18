@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">HyperMusicCover</string>
     <string name="about_source_code_summary">https://github.com/zyl6932/HyperMusicCover</string>
@@ -40,10 +40,6 @@
     <string name="lyrics_bg_font_size">Backing vocal font size</string>
     <string name="lyrics_main_color">Lead lyric color</string>
     <string name="lyrics_bg_color">Backing vocal color</string>
-    <string name="lyrics_color_official">Official default</string>
-    <string name="lyrics_color_cover">Album cover Monet palette</string>
-    <string name="lyrics_color_custom">Custom color</string>
-    <string name="lyrics_color_cover_summary">Generate soft colors from the current album cover. Use white when no cover color is available.</string>
     <string name="lyrics_color_choose">Choose color and opacity</string>
     <string name="lyrics_main_opacity">Lead lyric opacity</string>
     <string name="lyrics_bg_opacity">Backing vocal opacity</string>
@@ -57,13 +53,14 @@
     <string name="restart_wallpaper">Restart wallpaper</string>
     <string name="restart_confirm_summary">Restart now?</string>
     <string name="restart_stale">Restart the outdated apps</string>
-
     <string name="tab_home">Home</string>
     <string name="tab_settings">Settings</string>
     <string name="tab_about">About</string>
     <string name="settings_interface">Interface</string>
     <string name="settings_theme">Theme</string>
     <string name="settings_theme_summary">Theme mode, navigation bar style and background blur</string>
+    <string name="welcome_show_again">Show welcome page</string>
+    <string name="welcome_show_again_summary">Replay the splash animation shown on first launch</string>
     <string name="settings_language">Language</string>
     <string name="settings_data">Data Management</string>
     <string name="theme_mode">Theme Mode</string>
@@ -146,6 +143,12 @@
     <string name="home_status_active">Module active</string>
     <string name="home_status_inactive">Module not active</string>
     <string name="home_status_inactive_hint">Enable it in LSPosed and restart System UI</string>
+    <string name="settings_notice_offline">System UI is not connected; changes are kept here and synced when it returns</string>
+    <string name="settings_notice_other_user">System UI cannot read settings from this user; changes stay on this device</string>
+    <string name="settings_notice_unconfirmed">Some settings were not confirmed by System UI</string>
+    <string name="home_install_restart">Restart System UI to finish cleaning up</string>
+    <string name="home_install_restart_summary">This is a new installation; the lock screen still uses the last one\'s settings and cover</string>
+    <string name="home_install_restart_confirm">Restarting clears the files and settings the last installation left, and puts the settings back to their defaults.</string>
     <string name="home_stale_title">Module updated</string>
     <string name="home_stale_summary">%1$d processes are still running the old version</string>
     <string name="home_stale_action">Tap to restart them</string>
@@ -172,7 +175,6 @@
     <string name="card_page_button_summary">Hides the player button to the right of Next</string>
     <string name="media_bar_glow">Progress bar glow</string>
     <string name="lyrics_two_finger_tap">Two-finger tap the cover to switch to the lyrics</string>
-    <!-- Three states rather than two; see the default strings for what they mean. -->
     <string name="lyrics_provider_title_missing">No lyric module installed</string>
     <string name="lyrics_provider_missing">No lyric framework has responded. Check that your lyric module is enabled; other lyric sources remain available.</string>
     <string name="lyrics_provider_ready">Apps outside its scope can still fail to match.</string>
@@ -203,16 +205,32 @@
     <string name="lyrics_clock_independent">Animate lyrics independently of the clock</string>
     <string name="lyrics_clock_independent_summary">Keep clock movement from clipping the capsule lyric animation</string>
     <string name="lyrics_roma">Show romanisations</string>
+    <string name="lyrics_style_title">Adjust lyric appearance</string>
+    <string name="lyrics_style_general">General</string>
+    <string name="lyrics_style_text">Text</string>
+    <string name="lyrics_size">Size</string>
+    <string name="lyrics_weight">Weight</string>
+    <string name="lyrics_style_main">Lead</string>
+    <string name="lyrics_style_trans">Translation</string>
+    <string name="lyrics_style_backing">Backing vocal</string>
+    <string name="lyrics_color">Colour</string>
+    <string name="lyrics_color_official">Official</string>
+    <string name="lyrics_color_cover">From the cover</string>
+    <string name="lyrics_color_custom">Custom</string>
+    <string name="lyrics_color_cover_summary">Soft colours taken from the current cover; white when there are none</string>
+    <string name="lyrics_opacity">Opacity</string>
+    <string name="lyrics_style_reset">Restore defaults</string>
+    <string name="lyrics_style_reset_summary">Everything on this page goes back to its default</string>
+    <string name="lyrics_style_done">Done</string>
+    <string name="lyrics_online">Fill in from online</string>
     <string name="lyrics_align">Lyric alignment</string>
     <string name="lyrics_align_left">Left</string>
     <string name="lyrics_align_center">Center</string>
     <string name="lyrics_align_right">Right</string>
-    <string name="lyrics_hdr">HDR highlight (experimental)</string>
-    <string name="lyrics_hdr_summary">May drop frames</string>
+    <string name="lyrics_hdr">HDR highlight</string>
     <string name="lyrics_hdr_unsupported">This screen does not support HDR</string>
     <string name="lyrics_keep_on">Keep the screen on for lyrics</string>
     <string name="hide_fingerprint">Hide lock screen fingerprint icon</string>
-    <!-- See the default strings for how the items map onto the module's fpavoid values. -->
     <string name="fp_sink">Notifications sink</string>
     <string name="fp_sink_system">Follow system</string>
     <string name="fp_sink_always">Always sink</string>
@@ -238,8 +256,6 @@
     <string name="update_percent">%1$d%%</string>
     <string name="update_downloading">Updating</string>
     <string name="restart_scope">Restart all scoped apps</string>
-
-    <!-- The features page is a list of cards, each opening a page of its own. -->
     <string name="features_cover_title">Lockscreen music cover</string>
     <string name="features_cover_summary">Cover, clock, media card</string>
     <string name="features_shade_title">Shade and control centre (experimental)</string>
@@ -260,14 +276,11 @@
     <string name="commute_forget_confirm">Forget the commutes?</string>
     <string name="commute_forget_confirm_summary">All %1$d trips it has learned are deleted; they are learned again only by riding</string>
     <string name="commute_forget_do">Forget</string>
-
     <string name="shade_enabled">Enable flowing light</string>
     <string name="shade_section_behaviour">Behaviour</string>
     <string name="shade_mode">When it applies</string>
     <string name="shade_mode_restore">System default</string>
     <string name="shade_mode_keep">Keep the album cover</string>
-
-    <!-- The islands' page, which the features page opens. -->
     <string name="mini_page_title">Lock screen super island</string>
     <string name="mini_enabled">Enable the lock screen super island</string>
     <string name="mini_section_look">Appearance</string>
@@ -280,22 +293,18 @@
     <string name="mini_group_by_app">Group ordinary notifications by app</string>
     <string name="mini_group_by_app_summary">In stacked layout, ordinary notifications from the same app share one layer. Tap to expand that app’s notifications</string>
     <string name="mini_media_collapsed">Keep music artwork collapsed</string>
-    <string name="mini_media_collapsed_summary">Show the island when playback starts. Tap it to expand the music artwork</string>
+    <string name="mini_media_collapsed_summary">Show the lock screen island on playback</string>
     <string name="mini_height">Island height</string>
     <string name="mini_height_summary">Also resize the lock screen quick function icons on either side</string>
-    <string name="mini_widen">Widen when lock screen quick functions are off</string>
-    <string name="mini_widen_summary">The island fills the space left by disabled lock screen quick functions</string>
+    <string name="mini_widen">Widen the lock screen island when quick functions are off</string>
     <string name="mini_normals_in_stack">Keep ordinary notifications off islands</string>
     <string name="mini_haptic_feedback">Capsule tap feedback</string>
     <string name="mini_haptic_feedback_summary">A light tap for capsule actions, two taps when lyrics are unavailable; follows the system haptic setting</string>
     <string name="mini_nav_keep_on">Keep the screen on while navigating</string>
-    <string name="mini_status_at_date">Status info after the date</string>
+    <string name="mini_status_at_date">Bottom status info shown after the date</string>
     <string name="mini_status_at_date_summary">Off: back at the bottom</string>
-    <string name="mini_fod_lift">Clear of the fingerprint sensor</string>
-    <string name="mini_fod_lift_summary">On phones with a low optical sensor, lifts the pill above it</string>
+    <string name="mini_fod_lift">Keep the lock screen island clear of the under-display short-focus fingerprint sensor</string>
     <string name="mini_nav_keep_on_summary">While an Amap navigation or transit page is up</string>
-
-    <!-- What the two demonstrations are called, page by page; see the default strings for the rule. -->
     <string name="demo_cover_takeover_title">The cover takes the lock screen</string>
     <string name="demo_cover_lyrics_title">Lyrics on the lock screen</string>
     <string name="demo_cover_aod_title">Kept on the always-on display</string>
@@ -311,7 +320,6 @@
     <string name="pickup_cloud_never">Not synced yet</string>
     <string name="pickup_cloud_syncing">Syncing…</string>
     <string name="pickup_enabled">Pickup code on the island</string>
-    <!-- 指纹快捷功能 (FpQuickActivity) -->
     <string name="features_fpquick_title">Fingerprint shortcuts</string>
     <string name="features_fpquick_summary">Keep your finger on the sensor after unlocking to open apps and actions</string>
     <string name="fpquick_enabled">Customise fingerprint shortcuts</string>
@@ -373,4 +381,46 @@
     <string name="lyricon_waiting">Waiting for framework feedback</string>
     <string name="lyrics_height">Lyric display height</string>
     <string name="lyrics_height_summary">Adjusts the lyric area height. With the clock independent and the bottom capsule collapsed, the percentage uses the available screen height.</string>
+    <string name="home_features_missing">%1$d features not installed</string>
+    <string name="home_features_missing_summary">What they hook is not on this system. Tap to see which</string>
+    <string name="home_features_missing_dialog">Features not installed</string>
+    <string name="home_features_missing_ok">OK</string>
+    <string name="feature_tweaks">System tweaks (depth, soft glass, colon, progress glow, unlock fade)</string>
+    <string name="feature_pass_blur_scale">Home screen zoom behind the shade</string>
+    <string name="feature_mini_player">Lock screen islands and mini player</string>
+    <string name="feature_palette_throttle">Clock colour extraction throttle</string>
+    <string name="feature_date_status">Do-not-disturb and charging after the date</string>
+    <string name="feature_amap_focus">Amap ride card focus notification</string>
+    <string name="feature_ride_code_exit">Ride code arrival</string>
+    <string name="feature_pickup_code">Pickup code island</string>
+    <string name="feature_notif_presence">Notification presence for the clock</string>
+    <string name="feature_unlock_swipe">Swipe up on the blank to unlock</string>
+    <string name="feature_cover_palette">Lock screen palette on cover change</string>
+    <string name="feature_clock_container">Clock container (cover mode, clock squeeze)</string>
+    <string name="feature_sleep_wake">Screen on/off and lyrics leaving</string>
+    <string name="feature_transport_controls">Early response to track skips</string>
+    <string name="feature_aod_handover">Clock handover to and from the AOD</string>
+    <string name="feature_depth">Depth wallpaper cut-out</string>
+    <string name="feature_aod_shrink">Full-screen AOD shrink</string>
+    <string name="feature_wallpaper_black">AOD wallpaper dim</string>
+    <string name="feature_fingerprint">Fingerprint icon and avoidance</string>
+    <string name="feature_fingerprint_quick">Fingerprint quick open</string>
+    <string name="feature_keyguard_wallpaper_manager">Lock wallpaper type</string>
+    <string name="feature_media_card">Lock screen media card</string>
+    <string name="feature_lock_taps">Lock screen taps</string>
+    <string name="feature_charge_anim">Charging animation</string>
+    <string name="feature_shade_layer">Shade cover background</string>
+    <string name="feature_notif_state_change">Clock squeeze on other clock styles</string>
+    <string name="feature_time_view">Clock glyph scaling</string>
+    <string name="feature_clock_interactor">Clock position control</string>
+    <string name="feature_plugin">Control centre plugin</string>
+    <string name="lyrics_preview_title">Lyric preview</string>
+    <string name="lyrics_preview_hint">Tap the lead, translation or backing vocal to adjust its appearance below</string>
+    <string name="lyrics_preview_sample">Sample cover colours</string>
+    <string name="lyrics_preview_cover">Current cover colours</string>
+    <string name="lyrics_color_intensity">Monet colour intensity</string>
+    <string name="lyrics_preview_lead">Every voice finds a place of its own</string>
+    <string name="lyrics_preview_trans">让每一种声音，都找到自己的位置</string>
+    <string name="lyrics_preview_backing">Hear the echo, hear you on the other side</string>
+    <string name="lyrics_preview_next">The next line unfolds in the light</string>
 </resources>

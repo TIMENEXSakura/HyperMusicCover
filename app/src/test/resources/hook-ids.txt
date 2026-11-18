@@ -110,13 +110,17 @@ sysui.island.removed
 sysui.lyrics.leave.exit
 sysui.lyrics.leave.inj
 sysui.media_bar.ctor
+sysui.media_bar.material
 sysui.media_bar.touch
 sysui.mediacard.ctor
 sysui.mediacard.top_data
 sysui.mini.apply
 sysui.mini.glass*
 sysui.mini.header_visibility
+sysui.mini.material_state
 sysui.mini.remove_transient
+sysui.mini.row_apply
+sysui.mini.row_clear
 sysui.mini.scene.dozing
 sysui.mini.scene.editor
 sysui.mini.scene.expand
@@ -152,6 +156,8 @@ sysui.shade.scale
 sysui.taps.shade_dispatch
 sysui.transport.next
 sysui.transport.previous
+sysui.unlock_region.content_bounds
+sysui.unlock_region.scrollable
 sysui.wallpaper.black
 sysui.wallpaper.manager_ctor
 sysui.wallpaper.unlock_fade

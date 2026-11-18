@@ -23,7 +23,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.core.content.edit
 import com.os4.musiccover.app.CoverActivity
 import com.os4.musiccover.island.MiniPlayerConfig
 import com.os4.musiccover.app.ModuleBridge
@@ -32,6 +31,9 @@ import com.os4.musiccover.app.ShadeActivity
 import com.os4.musiccover.app.MiniPlayerActivity
 import com.os4.musiccover.app.TransitActivity
 import com.os4.musiccover.app.FpQuickActivity
+import com.os4.musiccover.app.LyricStyleActivity
+import com.os4.musiccover.app.SettingsStore
+import com.os4.musiccover.ui.component.SettingsNotices
 import com.os4.musiccover.ui.util.PageScaffold
 import kotlinx.coroutines.delay
 import org.json.JSONObject
@@ -40,14 +42,11 @@ import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SliderDefaults
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TabRow
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
-import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
 
@@ -177,8 +176,11 @@ internal fun CoverPageView(
 ) {
     val context = LocalContext.current
 
-    var module by remember { mutableStateOf(ModuleBridge.State()) }
+    // Once the app's copy is the source (stage 5.3) the page starts from it rather than from
+    // defaults: a page opened while SystemUI is away has to show the settings it will apply.
+    var module by remember { mutableStateOf(ModuleBridge.initialState()) }
     var group by remember { mutableIntStateOf(0) }
+    val migrated by SettingsStore.migratedState.collectAsState()
 
     // Re-asked until it answers: this screen is reached straight after "重启全部作用域" as often
     // as not, and a single query then lands before SystemUI has a receiver - leaving every
@@ -237,7 +239,9 @@ internal fun CoverPageView(
         }
     }
 
-    val enabled = module.alive
+    // Editable on the app's copy alone once it is the source; the module being away only means
+    // the values wait for it. Before the migration the module is the only source, as it was.
+    val enabled = module.alive || migrated
     // The lyrics tab greys out with the cover's master switch: they only exist inside the cover,
     // but they are a tab away from the switch, and a tab that empties itself reads as broken.
     // The card's rows and the colon stay: they are the OEM's card and clock in every mode.
@@ -284,34 +288,41 @@ internal fun CoverPageView(
         }
         item(key = "settings") {
             Card(modifier = Modifier.nextCard()) {
-                when (group) {
-                    0 -> Column {
-                        // miuix's own pattern (example SwitchSection): the master switch is the
-                        // first row of its card, and what hangs off it folds away under it
-                        // rather than greying out.
-                        SwitchPreference(
-                            title = stringResource(R.string.cover_enabled),
-                            // Why the whole page is grey, said where the eye goes first - as the
-                            // other pages' master switches say it.
-                            summary = if (asked && !module.alive) {
-                                stringResource(R.string.home_status_inactive_hint)
-                            } else {
-                                null
-                            },
-                            checked = module.coverFeature,
-                            enabled = enabled,
-                            onCheckedChange = {
-                                module = module.copy(coverFeature = it)
-                                ModuleBridge.setCoverFeature(context, it)
-                            },
-                        )
-                        FoldUnder(module.coverFeature, settled = module.alive) {
-                            CoverGroup(enabled, module) { module = it }
+                Column {
+                    SettingsNotices(alive = module.alive)
+                    when (group) {
+                        0 -> Column {
+                            // miuix's own pattern (example SwitchSection): the master switch is the
+                            // first row of its card, and what hangs off it folds away under it
+                            // rather than greying out.
+                            SwitchPreference(
+                                title = stringResource(R.string.cover_enabled),
+                                // Why the whole page is grey, said where the eye goes first - as the
+                                // other pages' master switches say it. Not once the app's copy is
+                                // the source: the page is not grey then, only waiting.
+                                summary = if (asked && !module.alive && !migrated) {
+                                    stringResource(R.string.home_status_inactive_hint)
+                                } else {
+                                    null
+                                },
+                                checked = module.coverFeature,
+                                enabled = enabled,
+                                onCheckedChange = {
+                                    module = module.copy(coverFeature = it)
+                                    ModuleBridge.setCoverFeature(context, it)
+                                },
+                            )
+                            FoldUnder(module.coverFeature, settled = enabled) {
+                                CoverGroup(enabled, module) { module = it }
+                            }
+                            ClockGroup(enabled, module.coverFeature, module) { module = it }
                         }
-                        ClockGroup(enabled, module.coverFeature, module) { module = it }
+                        1 -> CardGroup(enabled, module) { module = it }
+                        else -> ArrowPreference(
+                            title = stringResource(R.string.lyrics_style_title),
+                            onClick = { context.startActivity(Intent(context, LyricStyleActivity::class.java)) },
+                        )
                     }
-                    1 -> CardGroup(enabled, module) { module = it }
-                    else -> LyricsGroup(enabled, module) { module = it }
                 }
             }
         }
@@ -436,21 +447,15 @@ private fun ClockGroup(
                 },
             )
         }
-        // Three rows were here and are gone: how far the date and the clock are moved together,
-        // how solid the liquid-glass styles go, and the spring the whole transition runs on. All
-        // three are fixed now - the first at the value cover mode has always been tuned to, the
-        // second at the OEM's own ramp end, and the spring at the OEM's preset for this
-        // transition, which is also what the wallpaper's crossfade is derived from. A fourth, the
-        // full-screen AOD keeping cover mode's small clock, is fixed on. See Main and LyricStyle
-        // for each value.
-        //
-        // Not a cover setting and not tied to cover mode: it is the clock the lock screen always
-        // has. It sits here because this is the page about the clock, and it is a switch rather
-        // than something always on because it changes what the clock looks like - which the
-        // other restrictions this module lifts do not.
-        //
-        // The summary is the switch's own caveat, asked for by the user: the hook is on the
-        // clock's isColonShow, so it can only speak for a style that has a colon to show.
+        SwitchPreference(
+            title = stringResource(R.string.clock_aod_big),
+            checked = module.aodBigClock,
+            enabled = enabled,
+            onCheckedChange = {
+                onChange(module.copy(aodBigClock = it))
+                ModuleBridge.setAodBigClock(context, it)
+            },
+        )
         SwitchPreference(
             title = stringResource(R.string.clock_force_colon),
             summary = stringResource(R.string.clock_force_colon_summary),
@@ -465,7 +470,7 @@ private fun ClockGroup(
 }
 
 @Composable
-private fun LyricsGroup(
+internal fun LyricPlaybackSettings(
     enabled: Boolean,
     module: ModuleBridge.State,
     onChange: (ModuleBridge.State) -> Unit,
@@ -491,51 +496,6 @@ private fun LyricsGroup(
     val title = source?.let { stringResource(R.string.lyrics_source, it) }
         ?: stringResource(R.string.lyrics_source_none)
     val summary = if (missingModule) R.string.lyrics_provider_missing else R.string.lyrics_provider_ready
-    var showNotice by remember { mutableStateOf(false) }
-    var countdown by remember { mutableIntStateOf(PROVIDER_NOTICE_SECONDS) }
-    LaunchedEffect(missingModule, module.alive) {
-        // Only once the module has answered: before that every field reads as its default, and
-        // "there is no provider on this phone" would be the state of one that had simply not
-        // been asked yet.
-        if (missingModule && module.alive && !LyricsNotice.seen(context)) {
-            showNotice = true
-        }
-    }
-    LaunchedEffect(showNotice) {
-        if (!showNotice) return@LaunchedEffect
-        countdown = PROVIDER_NOTICE_SECONDS
-        while (countdown > 0) {
-            delay(1_000)
-            countdown--
-        }
-    }
-    WindowDialog(
-        show = showNotice,
-        title = title,
-        summary = stringResource(summary),
-        // Held for fifteen seconds, and held means held: an outside tap and the back gesture
-        // both come through here, so there is no way out of it before the button unlocks. A
-        // notice asking for a module to be installed is read by nobody if it can be flicked
-        // away, and on most phones this one has already been flicked away once.
-        onDismissRequest = {
-            if (countdown == 0) {
-                showNotice = false
-                LyricsNotice.markSeen(context)
-            }
-        },
-    ) {
-        val dismiss = LocalDismissState.current
-        TextButton(
-            modifier = Modifier.fillMaxWidth(),
-            text = if (countdown > 0) {
-                stringResource(R.string.lyrics_provider_got_it_wait, countdown)
-            } else {
-                stringResource(R.string.lyrics_provider_got_it)
-            },
-            enabled = countdown == 0,
-            onClick = { dismiss?.invoke() },
-        )
-    }
     Column {
         SwitchPreference(
             title = stringResource(R.string.lyrics_enabled),
@@ -546,9 +506,6 @@ private fun LyricsGroup(
                 ModuleBridge.setLyrics(context, it)
             },
         )
-        // The standing half of the same statement. It never goes away and it never asks to be
-        // dismissed, which is what makes it useful on the visit after the notice was flicked
-        // away - or on a phone where the module had not answered yet when the notice was due.
         BasicComponent(
             title = title,
             titleColor = BasicComponentDefaults.titleColor(
@@ -581,18 +538,6 @@ private fun LyricsGroup(
                         ModuleBridge.setLyricsMaxLines(context, count)
                     },
                 )
-                ValueSlider(
-                    title = stringResource(R.string.lyrics_font_size),
-                    value = module.lyricSizeSp.coerceIn(18f, 36f),
-                    valueRange = 18f..36f,
-                    enabled = enabled,
-                    label = { "${it.roundToInt()} sp" },
-                    onValueChange = {
-                        val size = it.roundToInt().toFloat()
-                        onChange(module.copy(lyricSizeSp = size))
-                        ModuleBridge.setLyricStyle(context, "size", size)
-                    },
-                )
                 var heightDraft by remember(module.lyricFill) { mutableIntStateOf((module.lyricFill * 100).roundToInt()) }
                 ValueSlider(
                     title = stringResource(R.string.lyrics_height),
@@ -610,7 +555,6 @@ private fun LyricsGroup(
                         }
                     },
                 )
-                LyricAppearanceSettings(enabled, module, onChange)
                 SwitchPreference(
                     title = stringResource(R.string.lyrics_clock_independent),
                     summary = stringResource(R.string.lyrics_clock_independent_summary),
@@ -669,30 +613,6 @@ private fun LyricsGroup(
                         },
                     )
                 }
-                val alignModes = listOf(
-                    stringResource(R.string.lyrics_align_left),
-                    stringResource(R.string.lyrics_align_center),
-                    stringResource(R.string.lyrics_align_right),
-                )
-                WindowDropdownPreference(
-                    title = stringResource(R.string.lyrics_align),
-                    items = alignModes,
-                    selectedIndex = module.lyricsAlign.coerceIn(0, alignModes.lastIndex),
-                    enabled = enabled,
-                    onSelectedIndexChange = {
-                        onChange(module.copy(lyricsAlign = it))
-                        ModuleBridge.setLyricsAlign(context, it)
-                    },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.lyrics_trans),
-                    checked = module.lyricsTrans,
-                    enabled = enabled,
-                    onCheckedChange = {
-                        onChange(module.copy(lyricsTrans = it))
-                        ModuleBridge.setLyricsTrans(context, it)
-                    },
-                )
                 SwitchPreference(
                     title = stringResource(R.string.lyrics_flexible_duet),
                     summary = stringResource(R.string.lyrics_flexible_duet_summary),
@@ -701,30 +621,6 @@ private fun LyricsGroup(
                     onCheckedChange = {
                         onChange(module.copy(lyricFlexibleDuet = it))
                         ModuleBridge.setLyricFlexibleDuet(context, it)
-                    },
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.lyrics_roma),
-                    checked = module.lyricsRoma,
-                    enabled = enabled,
-                    onCheckedChange = {
-                        onChange(module.copy(lyricsRoma = it))
-                        ModuleBridge.setLyricsRoma(context, it)
-                    },
-                )
-                // A screen with no HDR headroom gets nothing from the highlight and would still pay
-                // for its window; SystemUI ignores the switch there, and it is shown off here.
-                val hdrScreen = remember { com.os4.musiccover.lyrics.HdrDisplay.supported(context) }
-                SwitchPreference(
-                    title = stringResource(R.string.lyrics_hdr),
-                    summary = stringResource(
-                        if (hdrScreen) R.string.lyrics_hdr_summary else R.string.lyrics_hdr_unsupported
-                    ),
-                    checked = module.lyricsHdr && hdrScreen,
-                    enabled = enabled && hdrScreen,
-                    onCheckedChange = {
-                        onChange(module.copy(lyricsHdr = it))
-                        ModuleBridge.setLyricsHdr(context, it)
                     },
                 )
                 SwitchPreference(
@@ -738,17 +634,6 @@ private fun LyricsGroup(
                 )
             }
         }
-        // The cover's clock in the AOD, not the words: outside the fold, it follows the cover
-        // switch alone.
-        SwitchPreference(
-            title = stringResource(R.string.clock_aod_big),
-            checked = module.aodBigClock,
-            enabled = enabled,
-            onCheckedChange = {
-                onChange(module.copy(aodBigClock = it))
-                ModuleBridge.setAodBigClock(context, it)
-            },
-        )
     }
 }
 
@@ -768,7 +653,7 @@ private fun CardGroup(
         // Two switches were here and are gone: hiding the card's thumbnail, and bringing it back
         // while the lyrics are up. Both are on and neither is a setting - the artwork is the
         // wallpaper in this mode, so the thumbnail is a second copy of it, and the exception that
-        // shows it again is what the lyrics being up is for. See Main.sMcHideArt.
+        // shows it again is what the lyrics being up is for. See Settings.MC_HIDE_ART.
         //
         // Requested for a reason of its own: on this card the real play/pause button sits over
         // the fingerprint sensor, so a thumb aiming for it unlocks the phone instead. The title
@@ -783,7 +668,7 @@ private fun CardGroup(
             },
         )
         // A visible way to the switch the two-finger tap already is. Only drawn in cover mode
-        // for a track with lyrics - see Main.sMcPageBtn. The one row here with a summary: it
+        // for a track with lyrics - see Settings.MC_PAGE_BUTTON. The one row here with a summary: it
         // takes the player's own button to the right of "next", and that has to be said.
         SwitchPreference(
             title = stringResource(R.string.card_page_button),
@@ -870,6 +755,8 @@ internal fun ValueSlider(
     valueRange: ClosedFloatingPointRange<Float>,
     enabled: Boolean,
     detent: Float? = null,
+    /** Several key points, for a slider whose values are steps rather than a range of its own. */
+    keyPoints: List<Float>? = null,
     label: (Float) -> String = ::format,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: (() -> Unit)? = null,
@@ -900,9 +787,10 @@ internal fun ValueSlider(
             // Step is what makes a key point produce a tick at all; the default effect only fires
             // at the two ends of the track (SliderHapticEffect.Edge), and those ends keep firing
             // either way, because the edge haptic is played before the key point is looked at.
-            hapticEffect = if (detent != null) SliderDefaults.SliderHapticEffect.Step
+            hapticEffect = if (detent != null || keyPoints != null)
+                               SliderDefaults.SliderHapticEffect.Step
                            else SliderDefaults.DefaultHapticEffect,
-            keyPoints = detent?.let { listOf(it) },
+            keyPoints = keyPoints ?: detent?.let { listOf(it) },
             // The library's magnet would pull the value onto the key point from 2% of the range
             // away, which is a snap rather than a tick, and it would take the values just either
             // side of the detent out of what this slider can be set to. Off, deliberately: the
@@ -944,9 +832,6 @@ private val LYRIC_PROVIDERS = listOf(
     "com.lidesheng.lyricinfo.lite",
 )
 
-/** How long the provider notice holds its own dismiss button, in seconds. */
-private const val PROVIDER_NOTICE_SECONDS = 15
-
 /**
  * The route the module named, as something to read on the row - or null when it named none, or
  * named one this build has never heard of, which is what a newer module's new route looks like
@@ -970,28 +855,4 @@ private fun lyricSourceLabel(source: String): String? = when (source) {
     "kuwo" -> stringResource(R.string.lyrics_source_kuwo)
     "lrclib" -> stringResource(R.string.lyrics_source_lrclib)
     else -> null
-}
-
-/**
- * Remembers that the lyric-provider notice has been dismissed.
- *
- * Marked when the notice closes rather than when it opens, so a phone that was locked or a page
- * that was left before the button unlocked has not "been told" - the fifteen seconds it holds
- * for are the point, and cutting them short is not reading it.
- *
- * Belongs to the app rather than the module: it is about what this phone's owner has been told,
- * not about how the lock screen behaves, and it has to survive the module being restarted.
- */
-private object LyricsNotice {
-    private const val PREFS_NAME = "lyrics_notice"
-    private const val KEY_SEEN = "provider_seen"
-
-    fun seen(context: android.content.Context): Boolean =
-        context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
-            .getBoolean(KEY_SEEN, false)
-
-    fun markSeen(context: android.content.Context) {
-        context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
-            .edit { putBoolean(KEY_SEEN, true) }
-    }
 }

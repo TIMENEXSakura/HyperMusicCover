@@ -1,5 +1,7 @@
 package com.os4.musiccover.lyrics;
 
+import com.os4.musiccover.card.MediaCard;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;

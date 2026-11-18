@@ -1,4 +1,5 @@
 package com.os4.musiccover.lyrics;
+import com.os4.musiccover.Settings;
 
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
@@ -40,7 +41,7 @@ final class LyricBluetoothRoute {
 
     /** Called by the existing lyric tick; handles routing changes without permanent listeners. */
     static void refresh() {
-        if (!LockLyrics.sBluetoothSync || controller == null || Main.sAppCtx == null || pending || !Gen.live()) return;
+        if (!Settings.LYRIC_BT_SYNC.on() || controller == null || Main.sAppCtx == null || pending || !Gen.live()) return;
         long now = SystemClock.uptimeMillis();
         if (checkedAt != 0L && now - checkedAt < CHECK_MS) return;
         checkedAt = now;
@@ -77,7 +78,7 @@ final class LyricBluetoothRoute {
             }
             final int result = found;
             Main.main().post(() -> {
-                if (!Gen.live() || !LockLyrics.sBluetoothSync || request != epoch) return;
+                if (!Gen.live() || !Settings.LYRIC_BT_SYNC.on() || request != epoch) return;
                 pending = false;
                 if (route != result) {
                     route = result;

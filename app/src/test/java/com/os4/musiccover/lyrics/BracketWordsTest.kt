@@ -1,4 +1,5 @@
 package com.os4.musiccover.lyrics
+import com.os4.musiccover.Settings
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -109,16 +110,16 @@ class BracketWordsTest {
         val rows = arrayOf("[00:00.00]作词：甲", "[00:00.10]作曲：乙", "[00:00.20]和声：丙",
             "[00:03.00]主唱第一句", "[00:05.00]和声：回声", "[00:07.00]对唱：一起")
         try {
-            LockLyrics.sFlexibleDuet = true
+            Settings.LYRIC_FLEX_DUET.set(true)
             val lines = parse(*rows)
             assertEquals(listOf("作词：甲", "作曲：乙", "和声：丙", "主唱第一句", "回声", "一起"),
                 lines.map { it.text })
-            assertEquals(listOf(false, false, false, false, true, false), lines.map { it.opposite })
-            LockLyrics.sFlexibleDuet = false
+            assertEquals(listOf(false, false, false, false, true, true), lines.map { it.opposite })
+            Settings.LYRIC_FLEX_DUET.set(false)
             assertEquals(listOf("作词：甲", "作曲：乙", "和声：丙", "主唱第一句", "和声：回声", "对唱：一起"),
                 parse(*rows).map { it.text })
         } finally {
-            LockLyrics.sFlexibleDuet = true
+            Settings.LYRIC_FLEX_DUET.set(true)
         }
     }
 
@@ -130,14 +131,14 @@ class BracketWordsTest {
             <p begin="00:05.000" end="00:06.000" ttm:role="duet"><span begin="00:05.000" end="00:06.000">Together</span></p>
             </div></body></tt>"""
         try {
-            LockLyrics.sFlexibleDuet = true
-            assertEquals(listOf(false, true, false), LyricParse.parse(body).map { it.opposite })
-            assertEquals(listOf(false, true, false), parse("[00:01.00]Main", "[00:03.00]Harmony: Echo",
+            Settings.LYRIC_FLEX_DUET.set(true)
+            assertEquals(listOf(false, true, true), LyricParse.parse(body).map { it.opposite })
+            assertEquals(listOf(false, true, true), parse("[00:01.00]Main", "[00:03.00]Harmony: Echo",
                 "[00:05.00]Duet: Together").map { it.opposite })
-            LockLyrics.sFlexibleDuet = false
+            Settings.LYRIC_FLEX_DUET.set(false)
             assertEquals(listOf(false, false, false), LyricParse.parse(body).map { it.opposite })
         } finally {
-            LockLyrics.sFlexibleDuet = true
+            Settings.LYRIC_FLEX_DUET.set(true)
         }
     }
 
@@ -153,7 +154,7 @@ class BracketWordsTest {
             <p begin="00:09.000" end="00:10.000" ttm:agent="v2">Last</p>
             </div></body></tt>"""
         try {
-            LockLyrics.sFlexibleDuet = false
+            Settings.LYRIC_FLEX_DUET.set(false)
             val lines = LyricParse.parse(body)
             assertEquals(listOf("First", "Second", "Together", "Word", "Last"), lines.map { it.text })
             assertEquals(listOf(false, true, false, false, true), lines.map { it.opposite })
@@ -161,7 +162,7 @@ class BracketWordsTest {
             assertTrue(lines[3].hasWords())
             assertFalse(lines[1].hasWords())
         } finally {
-            LockLyrics.sFlexibleDuet = true
+            Settings.LYRIC_FLEX_DUET.set(true)
         }
     }
 

@@ -42,8 +42,8 @@ class LyriconDuetTest {
         val lines = LyricParse.flexibleSpeakers(listOf(ordinary, background,
             convert(RichLyricLine(begin = 4000, end = 5000, text = "男：再见"))), true)
         assertEquals(3, lines.size)
-        assertEquals("", lines[1].text)
-        assertEquals("echo", lines[1].backgrounds().single().text)
-        assertEquals(3500, lines[1].backgrounds().single().end)
+        assertEquals("echo", lines[1].text)
+        assertEquals(0, lines[1].backgrounds().size)
+        assertEquals(3500, lines[1].end)
     }
 }

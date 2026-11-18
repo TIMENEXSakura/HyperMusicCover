@@ -38,6 +38,13 @@ object SettingsBackup {
     private const val KEY_AOD_BIG_CLOCK = "aodBigClock"
     private const val KEY_LYRICS_ROMA = "lyricsRomanisation"
     private const val KEY_LYRICS_ALIGN = "lyricsAlignment"
+    private const val KEY_LYRICS_SIZE = "lyricsSize"
+    private const val KEY_LYRICS_BG_SIZE = "lyricsBackingSize"
+    private const val KEY_LYRICS_TRANS_SIZE = "lyricsTranslationSize"
+    private const val KEY_LYRICS_WEIGHT = "lyricsWeight"
+    private const val KEY_LYRICS_BG_WEIGHT = "lyricsBackingWeight"
+    private const val KEY_LYRICS_TRANS_WEIGHT = "lyricsTranslationWeight"
+    private const val KEY_LYRICS_APPEARANCE = "lyricsAppearance"
     private const val KEY_FP_AVOID = "fingerprintAvoid"
     private const val KEY_TRANSIT = "amapTransit"
     /** The whole notification-shade page, as one object keyed the way the module names them. */
@@ -48,13 +55,17 @@ object SettingsBackup {
         val json = JSONObject(AppSettings.load(context).toJson())
         // With the module not answering there are no real values to write down, and writing the
         // defaults would quietly turn an export into a reset for whoever imports it.
-        val module = ModuleBridge.query(context)
-        if (module.alive) {
+        // Settings come from the app's copy once it is the source (stage 5.3), so an export
+        // works with SystemUI away; the shade page and the mini player's config are still the
+        // module's own and are written only when it answers.
+        val module = SettingsStore.overlay(ModuleBridge.query(context))
+        val alive = module.alive
+        if (alive || SettingsStore.editable()) {
             // The settings that are no longer settings are not written, and not read back on
             // import either: the square's size and place, the clock's offset, the glass
             // end, the spring, the two media card switches, the small AOD clock, the lyrics
-            // switch and the five values the lyric band and its type were. Each is fixed where it
-            // is used now, so a backup that carries one is a backup of something that can no
+            // switch and the four values of the lyric band besides its three sizes. Each is fixed
+            // where it is used now, so a backup that carries one is a backup of something that can no
             // longer be set - see Main and LyricStyle. The keys are gone from this file rather
             // than kept for compatibility: importing a value nothing can hold is the one outcome
             // worse than not importing it.
@@ -80,18 +91,26 @@ object SettingsBackup {
             json.put(KEY_AOD_BIG_CLOCK, module.aodBigClock)
             json.put(KEY_LYRICS_ROMA, module.lyricsRoma)
             json.put(KEY_LYRICS_ALIGN, module.lyricsAlign)
+            json.put(KEY_LYRICS_SIZE, module.lyricSizeSp.toDouble())
+            json.put(KEY_LYRICS_BG_SIZE, module.lyricBgSizeSp.toDouble())
+            json.put(KEY_LYRICS_TRANS_SIZE, module.lyricTransSizeSp.toDouble())
+            json.put(KEY_LYRICS_WEIGHT, module.lyricWeight)
+            json.put(KEY_LYRICS_BG_WEIGHT, module.lyricBgWeight)
+            json.put(KEY_LYRICS_TRANS_WEIGHT, module.lyricTransWeight)
+            if (module.lyricAppearance.isNotEmpty()) {
+                json.put(KEY_LYRICS_APPEARANCE, JSONObject(module.lyricAppearance))
+            }
             json.put(KEY_FP_AVOID, module.fpAvoid)
             json.put(KEY_TRANSIT, module.transit)
-            // Written whole rather than key by key, because the map is built from the module's
-            // own list of keys - this file has no idea what is in it, which is the point.
-            if (module.shade.isNotEmpty()) {
-                json.put(KEY_SHADE, JSONObject(module.shade as Map<*, *>))
+            if (alive) {
+                // Written whole rather than key by key, because the map is built from the module's
+                // own list of keys - this file has no idea what is in it, which is the point.
+                if (module.shade.isNotEmpty()) {
+                    json.put(KEY_SHADE, JSONObject(module.shade as Map<*, *>))
+                }
+                json.put(KEY_MINI, JSONObject(module.miniConfig))
             }
-            json.put(KEY_MINI, JSONObject(module.miniConfig))
-            json.put("lyricAppearance", JSONObject(module.lyricAppearance))
             json.put("lyricFill", module.lyricFill.toDouble())
-            json.put("lyricSizeSp", module.lyricSizeSp.toDouble())
-            json.put("lyricBgSizeSp", module.lyricBgSizeSp.toDouble())
             json.put("lyricsMaxLines", module.lyricsMaxLines)
             json.put("lyricSourcePolicy", JSONObject()
                 .put("custom", module.lyricSourceCustom).put("network", module.lyricNetwork)
@@ -103,6 +122,16 @@ object SettingsBackup {
     /** Applies both halves. Returns the app settings so the caller can restart the UI with them. */
     fun import(context: Context, json: String): AppSettings {
         val settings = AppSettings.importFromJson(context, json)
+        importModule(context, json)
+        return settings
+    }
+
+    /**
+     * The module's half alone, through the same setters the pages use - so it lands in the app's
+     * copy and is delivered the same way. The test build's restore uses this: a backup taken for
+     * a test must not reset the app's own theme and language on the way in.
+     */
+    fun importModule(context: Context, json: String) {
         try {
             val obj = JSONObject(json)
             obj.optJSONObject(KEY_LYRIC_BT_SYNC)?.let { sync ->
@@ -183,6 +212,28 @@ object SettingsBackup {
             if (obj.has(KEY_LYRICS_ALIGN)) {
                 ModuleBridge.setLyricsAlign(context, obj.getInt(KEY_LYRICS_ALIGN))
             }
+            if (obj.has(KEY_LYRICS_SIZE)) {
+                ModuleBridge.setLyricStyle(context, "size", obj.getDouble(KEY_LYRICS_SIZE).toFloat())
+            }
+            if (obj.has(KEY_LYRICS_BG_SIZE)) {
+                ModuleBridge.setLyricStyle(context, "bgsize", obj.getDouble(KEY_LYRICS_BG_SIZE).toFloat())
+            }
+            if (obj.has(KEY_LYRICS_TRANS_SIZE)) {
+                ModuleBridge.setLyricStyle(context, "transsize",
+                    obj.getDouble(KEY_LYRICS_TRANS_SIZE).toFloat())
+            }
+            if (obj.has(KEY_LYRICS_WEIGHT)) {
+                ModuleBridge.setLyricWeight(context, "weight", obj.getInt(KEY_LYRICS_WEIGHT))
+            }
+            if (obj.has(KEY_LYRICS_BG_WEIGHT)) {
+                ModuleBridge.setLyricWeight(context, "bgweight", obj.getInt(KEY_LYRICS_BG_WEIGHT))
+            }
+            if (obj.has(KEY_LYRICS_TRANS_WEIGHT)) {
+                ModuleBridge.setLyricWeight(context, "transweight", obj.getInt(KEY_LYRICS_TRANS_WEIGHT))
+            }
+            if (obj.has(KEY_LYRICS_APPEARANCE)) {
+                ModuleBridge.setLyricAppearance(context, obj.getJSONObject(KEY_LYRICS_APPEARANCE).toString())
+            }
             if (obj.has(KEY_FP_AVOID)) {
                 ModuleBridge.setFingerprintAvoid(context, obj.getInt(KEY_FP_AVOID))
             }
@@ -205,6 +256,5 @@ object SettingsBackup {
         } catch (_: Exception) {
             // The app half is already applied; a malformed module half is not worth losing it over.
         }
-        return settings
     }
 }

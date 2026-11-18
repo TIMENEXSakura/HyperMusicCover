@@ -138,4 +138,11 @@ final class LyricFocus {
         Arrays.fill(selected, -1);
         Arrays.fill(selectedIndex, false);
     }
+    /** Keep the visible rows apart, then release the vacated space smoothly after an exit. */
+    static float releaseSeparation(float held, float needed, float seconds) {
+        if (needed >= held) return needed;
+        float next = needed + (held - needed) * (float) Math.exp(-Math.max(0f, seconds) / 0.085f);
+        return next - needed < 0.25f ? needed : next;
+    }
+
 }

@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.ObjIntConsumer;
 
 /** In-memory, low-resolution sampling of the map's own remote layer subtree, never the display. */
-final class NavigationSurfaceContrast {
+public final class NavigationSurfaceContrast {
     private NavigationSurfaceContrast() {}
     private static final long INTERVAL_MS = 1000L, TIMEOUT_MS = 2500L, API_RETRY_MS = 30000L;
     private static final long ENTRY_RETRY_MS = 100L, ENTRY_WINDOW_MS = 2000L, CONFIRM_MS = 250L;
@@ -92,8 +92,8 @@ final class NavigationSurfaceContrast {
                 : new LyricContrastBackground.Reading(key() + ":cached", color, "navigation-surface-cache");
     }
 
-    static Object[] save() { return CACHE.save(); }
-    static void adopt(Object[] state) { CACHE.adopt(state); }
+    public static Object[] save() { return CACHE.save(); }
+    public static void adopt(Object[] state) { CACHE.adopt(state); }
 
     private static void readDue() {
         long now = SystemClock.uptimeMillis();

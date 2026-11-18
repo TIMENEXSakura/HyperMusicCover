@@ -5,8 +5,8 @@ import static org.junit.Assert.*;
 
 public class LyricSourcePolicyTest {
     @Test public void networkIsOffByDefaultButCanBeExplicitlyEnabled() {
-        assertFalse(LyricSourcePolicy.current.allowNetwork);
-        assertFalse(LyricSourcePolicy.current.permits("qq"));
+        assertFalse(LyricSourcePolicy.current().allowNetwork);
+        assertFalse(LyricSourcePolicy.current().permits("qq"));
         assertTrue(new LyricSourcePolicy.Config(false, true, null, null).permits("qq"));
     }
 

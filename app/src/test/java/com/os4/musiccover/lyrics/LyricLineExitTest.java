@@ -14,7 +14,7 @@ public class LyricLineExitTest {
         exits.capture(index, 40f, y, 1.1f, 0.9f, 1f, 1f, 0f);
     }
 
-    @Test public void actualEndKeepsLastDrawnPositionAndShrinksWhileFading() {
+    @Test public void actualEndKeepsPoseAndDelegatesOpacityToSpatialWipe() {
         List<LyricLine> lines = Arrays.asList(line(0, 1000), line(1000, 2000));
         LyricLineExit exits = new LyricLineExit();
         exits.step(lines, 900, 100L, true, false, true);
@@ -24,20 +24,19 @@ public class LyricLineExitTest {
         assertTrue(exits.step(lines, 1000, 200L, true, false, true));
         LyricLineExit.Row row = exits.row(0);
         assertTrue(row.waitingForTop());
+        assertTrue(row.holdsAppearance());
         assertFalse(row.departing());
         assertFalse(exits.startAtTop(0, 500f, 300f, 40f, 200L));
         capture(exits, 0, 320f); // the completed line follows its live scroll up to the edge
         assertTrue(exits.startAtTop(0, 320f, 300f, 40f, 200L));
-        assertEquals(1f, row.alpha(200L), 0f);
-        assertEquals(1f, row.scale(200L), 0f);
+        assertTrue(row.holdsAppearance());
         capture(exits, 0, 200f); // once exiting, the captured pose is frozen
         assertEquals(320f, row.y, 0f);
-        assertEquals(0.5f, row.alpha(350L), 0f);
-        assertEquals(0.925f, row.scale(350L), 0.0001f);
-        exits.step(lines, 1300, 500L, true, false, true);
+        assertEquals(1.1f, row.scale, 0f);
+        assertEquals(0.5f, row.amount(200L + LyricExitWipe.DURATION_MS / 2), 0.0001f);
+        exits.step(lines, 1750, 200L + LyricExitWipe.DURATION_MS, true, false, true);
         assertTrue(row.finished);
-        assertEquals(0f, row.alpha(500L), 0f);
-        assertEquals(0.85f, row.scale(500L), 0.0001f);
+        assertFalse(row.holdsAppearance());
         assertFalse(exits.row(1).departing());
         assertFalse(exits.moving());
         assertEquals(2, lines.size()); // presentation never removes lyric data
@@ -218,12 +217,7 @@ public class LyricLineExitTest {
             assertEquals(live, LyricLineExit.edgeAlpha(live, top, bottom,
                     clipTop, clipBottom, fade), 0f);
         }
-        // The timing animation itself still fades the captured pose smoothly.
-        LyricLineExit.Row row = new LyricLineExit.Row();
-        row.startedAt = 100L;
-        assertEquals(1f, row.alpha(100L), 0f);
-        assertEquals(0.5f, row.alpha(250L), 0f);
-        assertEquals(0f, row.alpha(400L), 0f);
+
     }
 
     @Test public void movingCardUsesTheSameClippingAsTheLastLivePose() {

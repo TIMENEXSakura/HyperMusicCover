@@ -1,4 +1,6 @@
 package com.os4.musiccover.transit
+
+import com.os4.musiccover.hotreload.HotReload
 import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
 import android.content.ContentProviderClient

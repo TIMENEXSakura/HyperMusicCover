@@ -33,9 +33,9 @@ class LyricPipelineRegressionTest {
             secondaryWords = listOf(LyricWord(text = "和声", begin = 1500, end = 4000)))
         val line = LyriconConverter.convert(source, 3000)!!
         assertEquals("主唱", line.text)
-        assertEquals("和声", line.bg.text)
+        assertEquals("和声", line.backgrounds().single().text)
         assertEquals(2500, line.sylEnd.last())
-        assertEquals(4000, line.bg.sylEnd.last())
+        assertEquals(4000, line.backgrounds().single().sylEnd.last())
         assertEquals(4000, line.end)
         assertEquals("(和声)和声", source.secondary)
     }
@@ -44,8 +44,8 @@ class LyricPipelineRegressionTest {
         val source = RichLyricLine(begin = 1000, end = 2000, text = "",
             secondaryWords = listOf(LyricWord(text = "echo", begin = 1500, end = 4000)))
         val line = LyriconConverter.convert(source, 3000)!!
-        assertEquals("", line.text)
-        assertEquals("echo", line.backgrounds().single().text)
+        assertEquals("echo", line.text)
+        assertTrue(line.backgrounds().isEmpty())
         assertEquals(4000, line.end)
     }
 

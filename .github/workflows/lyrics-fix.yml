@@ -1,19 +1,16 @@
 name: Build lyrics fix APK
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: lyrics-fix-${{ github.ref }}
+  group: lyric-editor-diagnostics-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -22,30 +19,24 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools'
+          packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - name: Run unit tests
+      - name: Test, lint, and build the release
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug -PmcVersionName=0.9.57Plus-test2 -PmcVersionCode=957002
+      - name: Check module entry points and record artifact identity
         run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon :app:testDebugUnitTest
-      - name: Build APK
-        run: |
-          ./gradlew --no-daemon :app:assembleRelease \
-            -PmcVersionName=0.9.45 -PmcVersionCode=945015
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.45.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.57Plus-test2.apk
           cd dist
-          sha256sum HyperMusicCover-0.9.45.apk > SHA256SUMS.txt
-      - name: Lint
-        run: ./gradlew --no-daemon :app:lintDebug
-      - name: Verify Xposed entry points
-        run: |
-          unzip -p dist/HyperMusicCover-0.9.45.apk META-INF/xposed/java_init.list | grep -qx 'com.os4.musiccover.Main'
-          unzip -p dist/HyperMusicCover-0.9.45.apk META-INF/xposed/scope.list | grep -qx 'com.android.systemui'
+          apk=HyperMusicCover-0.9.57Plus-test2.apk
+          unzip -p "$apk" META-INF/xposed/java_init.list | grep -Fx 'com.os4.musiccover.Main'
+          unzip -p "$apk" META-INF/xposed/scope.list | grep -Fx 'com.android.systemui'
+          sha256sum "$apk" > SHA256SUMS.txt
+          git rev-parse HEAD > commit.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: HyperMusicCover-0.9.45
-          path: dist/*
+          name: HyperMusicCover-0.9.57Plus-test2
+          path: dist/
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v4
@@ -53,8 +44,43 @@ jobs:
         with:
           name: lyric-test-results
           path: |
-            app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
             app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 14
+
+  editor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build debuggable app for isolated preference fixture
+        run: ./gradlew --no-daemon :app:assembleDebug -PmcVersionName=0.9.57Plus-test2 -PmcVersionCode=957002
+      - name: Enable the hosted runner's virtualisation device
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          disable-animations: true
+          script: python3 tools/ci/lyric_editor_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lyric-editor-diagnostics
+          path: diagnostics/
           if-no-files-found: ignore
           retention-days: 14

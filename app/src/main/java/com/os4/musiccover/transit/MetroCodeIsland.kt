@@ -1,4 +1,6 @@
 package com.os4.musiccover.transit
+
+import com.os4.musiccover.hotreload.HotReload
 import com.os4.musiccover.BuildConfig
 import com.os4.musiccover.ProbeGuard
 import com.os4.musiccover.Gen

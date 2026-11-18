@@ -1,10 +1,11 @@
 package com.os4.musiccover.lyrics
 
+import com.os4.musiccover.Settings
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 
 /** Android-independent conversion of the main and secondary tracks received over Lyricon. */
 internal object LyriconConverter {
-    fun convert(line: RichLyricLine, nextStart: Int): LyricLine? {
+    fun convert(line: RichLyricLine, nextStart: Int, flexible: Boolean = Settings.LYRIC_FLEX_DUET.on()): LyricLine? {
         val text = line.text?.trim().orEmpty()
         val words = line.words?.takeIf { words -> words.all {
             it.begin in 0L..Int.MAX_VALUE.toLong() && it.end in 0L..Int.MAX_VALUE.toLong()
@@ -37,12 +38,18 @@ internal object LyriconConverter {
                     line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.isAlignedRight, s, e, chars.toIntArray())
             }
         }
+        val backing = LyriconBackground.convert(line, nextStart, flexible)
+        if (built == null && text.isEmpty()) {
+            if (backing == null) return null
+            return LyricLine(backing.text, line.translation, backing.roma, backing.start,
+                backing.end, backing.opposite, backing.sylStart, backing.sylEnd, backing.charEnd)
+        }
         if (built == null) {
             built = LyricLine(text, line.translation, LyricParse.romaOf(line.roma, text),
                 line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.isAlignedRight, null, null, null)
         }
         // The background vocal, which the renderer hangs under the line rather than beside it.
-        LyriconBackground.attach(built, line, nextStart)
+        if (backing != null) built.addBackground(backing)
         return built.takeIf { it.text.isNotEmpty() || it.backgrounds().isNotEmpty() }
     }
 

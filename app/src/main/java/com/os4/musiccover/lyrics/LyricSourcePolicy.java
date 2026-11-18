@@ -6,7 +6,19 @@ import java.util.Locale;
 
 public final class LyricSourcePolicy {
     public static final String DEFAULT_SOURCES = "lyricon,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
-    public static volatile Config current = new Config(false, false, DEFAULT_SOURCES, LocalLyricFormat.TTML);
+    private static volatile Config cached;
+    public static Config current() {
+        boolean custom = com.os4.musiccover.Settings.LYRIC_SOURCE_CUSTOM.on();
+        boolean online = com.os4.musiccover.Settings.LYRIC_ONLINE.on();
+        String sources = com.os4.musiccover.Settings.LYRIC_SOURCE_ORDER.get();
+        String format = com.os4.musiccover.Settings.LYRIC_LOCAL_FORMAT.get();
+        Config old = cached;
+        if (old == null || old.custom != custom || old.allowNetwork != online
+                || !old.sourceOrder.equals(sources) || !old.localFormat.equals(format)) {
+            cached = old = new Config(custom, online, sources, format);
+        }
+        return old;
+    }
 
     private LyricSourcePolicy() { }
 

@@ -85,7 +85,7 @@ internal fun LyricSourceSettings(
         summary = stringResource(R.string.lyrics_network_summary),
         checked = module.lyricNetwork,
         enabled = enabled,
-        onCheckedChange = { update(currentModule.copy(lyricNetwork = it)) },
+        onCheckedChange = { update(currentModule.copy(lyricNetwork = it, lyricsOnline = it)) },
     )
     BasicComponent(
         title = stringResource(R.string.lyrics_priority),

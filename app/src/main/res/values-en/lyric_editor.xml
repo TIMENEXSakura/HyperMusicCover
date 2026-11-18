@@ -1,0 +1,14 @@
+<resources>
+    <string name="lyric_editor_adjust_color">Adjust %1$s colour</string>
+    <string name="lyric_editor_more">More lyric settings</string>
+    <string name="lyric_editor_expand">Expand</string>
+    <string name="lyric_editor_collapse">Collapse</string>
+    <string name="lyric_editor_tap_hint">Tap a lyric on the lock screen to edit its colour</string>
+    <string name="lyric_editor_replay">Preview the word-by-word exit</string>
+    <string name="lyric_editor_sample_lead">晚风|穿过|星光里的|街</string>
+    <string name="lyric_editor_sample_backing">听见|你的|回声</string>
+    <string name="lyric_editor_sample_trans">"The breeze |crosses |a starlit |street"</string>
+    <string name="lyric_editor_sample_roman">"Wǎnfēng |chuānguò |xīngguāng lǐ de |jiē"</string>
+    <string name="lyric_editor_preview_only">Preview only. Enable the module to apply changes to the lock screen.</string>
+    <string name="lyric_editor_reset_summary">Restore the default lyric appearance?</string>
+</resources>

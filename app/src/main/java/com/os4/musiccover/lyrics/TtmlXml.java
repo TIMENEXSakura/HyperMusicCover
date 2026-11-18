@@ -14,6 +14,7 @@ final class TtmlXml {
         private final XmlElement element;
         Node(XmlElement element) { this.element = element; }
         String name() { return element.getName(); }
+        String text() { return element.getText(); }
         String attr(String name) {
             for (XmlAttribute attr : element.getAttributes()) {
                 if (attr.getName().equals(name)) return attr.getValue();

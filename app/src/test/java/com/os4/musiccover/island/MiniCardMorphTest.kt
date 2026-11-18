@@ -1,5 +1,7 @@
 package com.os4.musiccover.island
 
+import com.os4.musiccover.cover.CoverMorphMotion
+
 import com.os4.musiccover.*
 
 import org.junit.Assert.assertEquals

@@ -1,5 +1,7 @@
 package com.os4.musiccover.pickup;
 
+import com.os4.musiccover.cover.CoverPush;
+
 import com.os4.musiccover.R;
 import com.os4.musiccover.Xp;
 /**
