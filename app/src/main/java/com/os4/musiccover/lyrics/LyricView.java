@@ -1437,8 +1437,9 @@ final class LyricView extends View {
         String currentTrack = Main.trackKey();
         boolean changedTrack = lastPageTrack != null && !lastPageTrack.isEmpty()
                 && currentTrack != null && !currentTrack.isEmpty() && !lastPageTrack.equals(currentTrack);
-        if (cut || changedTrack || getWidth() != lastPageWidth || getHeight() != lastPageHeight) {
-            if (!pageWanted) show = 0f;
+        boolean covered = LyricWindow.owns(this) && Main.controlCenterShown();
+        if (cut || covered || changedTrack || getWidth() != lastPageWidth || getHeight() != lastPageHeight) {
+            if (cut || covered || changedTrack || !pageWanted) show = 0f;
             resetPageExit();
             return false;
         }
