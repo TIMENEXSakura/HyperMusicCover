@@ -257,7 +257,8 @@ final class LyricView extends View {
     /** Zero leaves the saved appearance in control; otherwise pure black or pure white. */
     private int navigationInk;
     private String navigationSource;
-    private int mainDim = -1, mainLit = -1, bgDim = -1, bgLit = -1;
+    private int mainDim = -1, mainLit = -1, duetDim = -1, duetLit = -1, bgDim = -1, bgLit = -1;
+    private int baseDuetDim = -1, baseDuetLit = -1;
     private int baseMainDim = -1, baseMainLit = -1, baseBgDim = -1, baseBgLit = -1;
     private int baseTranslation = -1, translationDim = -1, translationLit = -1;
     private int baseTranslationLit = -1;
@@ -323,6 +324,7 @@ final class LyricView extends View {
     private int wantTrans;
     /** The alignment pref the layout in the air is for; only meaningful with a version above. */
     private int wantAlign;
+    private boolean wantDuet, builtDuet = true;
     private LyricStyle wantStyle;
     /** The translation and romanisation switches the layout now in use was made under. */
     private int builtTrans = LockLyrics.BELOW_TRANS;
@@ -734,6 +736,7 @@ final class LyricView extends View {
                 // The alignment is in the layout too, and asked for the same way: against what
                 // the layout in use was built with, not against the field.
                 || Settings.LYRIC_ALIGN.get() != builtAlign
+                || Settings.LYRIC_APPEARANCE.get().duetEnabled != builtDuet
                 || !Settings.LYRIC_STYLE.get().sameLayout(layoutStyle))
                 && (LockLyrics.wantsAttached() || show == 0f)) {
             if (layOut()) {
@@ -1826,10 +1829,11 @@ final class LyricView extends View {
         final int width = getWidth();
         final int transOn = LockLyrics.below();
         final int alignOn = Settings.LYRIC_ALIGN.get();
+        final boolean duet = Settings.LYRIC_APPEARANCE.get().duetEnabled;
         final LyricStyle style = Settings.LYRIC_STYLE.get();
         final List<LyricLine> ls = LockLyrics.lines();
         if (!ls.isEmpty() && v == wantVersion && width == wantWidth && transOn == wantTrans
-                && alignOn == wantAlign && style.sameLayout(wantStyle)) return false;
+                && alignOn == wantAlign && duet == wantDuet && style.sameLayout(wantStyle)) return false;
         // A previous song or size no longer needs to occupy the shared layout worker. A running
         // build observes its old epoch at the next row; a queued build is removed altogether.
         cancelLayout();
@@ -1856,8 +1860,9 @@ final class LyricView extends View {
             wantVersion = wantWidth = -1;
             wantTrans = transOn;
             wantAlign = alignOn;
+            wantDuet = duet;
             wantStyle = null;
-            apply(build(v, width, ls, p, bp, tp, transOn, alignOn, style,
+            apply(build(v, width, ls, p, bp, tp, transOn, alignOn, duet, style,
                     buildTextPx, buildSidePx, epoch));
             return true;
         }
@@ -1865,12 +1870,13 @@ final class LyricView extends View {
         wantWidth = width;
         wantTrans = transOn;
         wantAlign = alignOn;
+        wantDuet = duet;
         wantStyle = style;
         layoutTask = new Runnable() {
             @Override
             public void run() {
                 if (!layoutEpoch.isCurrent(epoch)) return;
-                final Built b = build(v, width, ls, p, bp, tp, transOn, alignOn,
+                final Built b = build(v, width, ls, p, bp, tp, transOn, alignOn, duet,
                         style, buildTextPx, buildSidePx, epoch);
                 if (b == null || !Gen.live() || !layoutEpoch.isCurrent(epoch)) return;
                 post(new Runnable() {
@@ -1878,7 +1884,7 @@ final class LyricView extends View {
                     public void run() {
                         // Overtaken by a newer request: that one's answer is the one to wait for.
                         if (!Gen.live() || !layoutEpoch.isCurrent(epoch) || v != wantVersion || width != wantWidth
-                                || transOn != wantTrans || alignOn != wantAlign
+                                || transOn != wantTrans || alignOn != wantAlign || duet != wantDuet
                                 || !style.sameLayout(wantStyle)) return;
                         layoutTask = null;
                         wantVersion = wantWidth = -1;
@@ -1888,6 +1894,7 @@ final class LyricView extends View {
                         if (v != LockLyrics.version() || width != getWidth()
                                 || transOn != LockLyrics.below()
                                 || alignOn != Settings.LYRIC_ALIGN.get()
+                                || duet != Settings.LYRIC_APPEARANCE.get().duetEnabled
                                 || !style.sameLayout(Settings.LYRIC_STYLE.get())
                                 || !LockLyrics.wantsAttached()) {
                             return;
@@ -1924,6 +1931,7 @@ final class LyricView extends View {
         int transOn;
         /** The alignment pref this layout was made under; see Settings.LYRIC_ALIGN. */
         int align;
+        boolean duet;
         List<LyricLine> lines;
         StaticLayout[] main, trans;
         StaticLayout[][] bgLay;
@@ -1948,7 +1956,7 @@ final class LyricView extends View {
 
     /** Touches nothing of the view's but its constants, so it can run off the UI thread. */
     private Built build(int v, int width, List<LyricLine> ls, TextPaint p, TextPaint bp,
-                        TextPaint tp, int transOn, int alignOn, LyricStyle style,
+                        TextPaint tp, int transOn, int alignOn, boolean duet, LyricStyle style,
                         float buildTextPx, float buildSidePx, long epoch) {
         long t0 = SystemClock.uptimeMillis();
         Built b = new Built();
@@ -1957,6 +1965,7 @@ final class LyricView extends View {
         b.style = style;
         b.transOn = transOn;
         b.align = alignOn;
+        b.duet = duet;
         b.lines = ls;
         int n = ls.size();
         int w = Math.max(1, width - Math.round(2f * buildSidePx));
@@ -1982,7 +1991,7 @@ final class LyricView extends View {
             } else {
                 b.dotsTop[i] = Float.NaN;
             }
-            Layout.Alignment align = alignFor(l.opposite, alignOn);
+            Layout.Alignment align = alignFor(l.oppositeSide(duet), alignOn);
             b.main[i] = StaticLayout.Builder.obtain(l.text, 0, l.text.length(), p, w)
                     .setAlignment(align)
                     .setIncludePad(false)
@@ -2027,7 +2036,7 @@ final class LyricView extends View {
         // The same lines with translations borrowed after they went up (LyricSource
         // .borrowTranslations): nothing to start over, so the lines carry on where they are.
         boolean reveal = gainsTranslations(lines, b.lines) && b.width == layoutWidth
-                && b.align == builtAlign && focus >= 0 && scroll.length == b.lines.size();
+                && b.align == builtAlign && b.duet == builtDuet && focus >= 0 && scroll.length == b.lines.size();
         boolean preserve = reveal || (version == b.version && focus >= 0 && scroll.length == b.lines.size());
         float previousTextPx = textPx;
         float[] previousHeights = height;
@@ -2035,6 +2044,7 @@ final class LyricView extends View {
         version = b.version;
         builtTrans = b.transOn;
         builtAlign = b.align;
+        builtDuet = b.duet;
         lines = b.lines;
         layoutWidth = b.width;
         layoutMs = b.tookMs;
@@ -3002,7 +3012,7 @@ final class LyricView extends View {
         // alignment, with a duet's second voice against the other edge (see alignFor). Laid out
         // at their rest spacing, which is the anchor the breath moves them around.
         float groupW = size + 2f * DOT_GAP_EM * textPx;
-        Layout.Alignment align = alignFor(lines.get(d).opposite, builtAlign);
+        Layout.Alignment align = alignFor(lines.get(d).oppositeSide(builtDuet), builtAlign);
         float colW = main[d].getWidth();
         float left = align == Layout.Alignment.ALIGN_CENTER ? x + (colW - groupW) / 2f
                 : align == Layout.Alignment.ALIGN_OPPOSITE ? x + colW - groupW : x;
@@ -3013,7 +3023,7 @@ final class LyricView extends View {
             float litK = clamp01((u - k) / DOT_RAMP);
             float alpha = alphaMul * fade * (DOT_DIM + (1f - DOT_DIM) * litK);
             if (alpha <= 0.003f) continue;
-            dotPaint.setColor(ink(alpha, litK));
+            dotPaint.setColor(ink(alpha, litK, lines.get(d).voice(builtDuet)));
             c.drawCircle(cx + (k - 1) * gap, cy, r, dotPaint);
         }
     }
@@ -3068,7 +3078,7 @@ final class LyricView extends View {
     }
 
     private float linePivotX(int i) {
-        Layout.Alignment align = alignFor(lines.get(i).opposite, builtAlign);
+        Layout.Alignment align = alignFor(lines.get(i).oppositeSide(builtDuet), builtAlign);
         return align == Layout.Alignment.ALIGN_CENTER ? main[i].getWidth() / 2f
                 : align == Layout.Alignment.ALIGN_OPPOSITE ? main[i].getWidth() : 0f;
     }
@@ -3198,6 +3208,7 @@ final class LyricView extends View {
             // Keep the saved palette current underneath the temporary transform. Navigation
             // ending can then restore the actual current cover/settings without a color jump.
             boolean needsCover = next.mainMode == LyricAppearance.COVER
+                    || (next.duetEnabled && next.duetMode == LyricAppearance.COVER)
                     || next.bgMode == LyricAppearance.COVER || next.transMode == LyricAppearance.COVER;
             if (needsCover && (coverPalette == null || coverPalette.seed != src)) requestPalette(src);
             else if (paletteWork != null) {
@@ -3213,10 +3224,12 @@ final class LyricView extends View {
                 hsv[2] = 1f;
                 ti = android.graphics.Color.HSVToColor(hsv);
             }
-            int oldMainDim = baseMainDim, oldBgDim = baseBgDim;
+            int oldMainDim = baseMainDim, oldBgDim = baseBgDim, oldDuetDim = baseDuetDim;
             // HCT solving stays off the draw thread; until ready, retain the last palette.
             baseMainDim = resolveColor(next.mainMode, next.mainColor, ti, false, false, next.mainIntensity);
             baseMainLit = resolveColor(next.mainMode, next.mainColor, -1, false, true, next.mainIntensity);
+            baseDuetDim = resolveColor(next.duetMode, next.duetColor, ti, true, false, next.duetIntensity);
+            baseDuetLit = resolveColor(next.duetMode, next.duetColor, -1, true, true, next.duetIntensity);
             baseBgDim = resolveColor(next.bgMode, next.bgColor, ti, true, false, next.bgIntensity);
             baseBgLit = resolveColor(next.bgMode, next.bgColor, -1, true, true, next.bgIntensity);
             baseTranslation = resolveColor(next.transMode, next.transColor, ti, true, false, next.transIntensity);
@@ -3224,9 +3237,11 @@ final class LyricView extends View {
             // Blur pictures always contain saved colors and role-specific alpha. Only an
             // actual base change rebuilds them, never the 300ms navigation color animation.
             if (oldMainDim != baseMainDim || oldBgDim != baseBgDim ||
+                    oldDuetDim != baseDuetDim || builtDuetOpacity != next.duetOpacity ||
                     builtMainOpacity != next.mainOpacity || builtBgOpacity != next.bgOpacity ||
                     builtTransDim != baseTranslation || builtTransOpacity != next.transOpacity) {
                 builtMainOpacity = next.mainOpacity;
+                builtDuetOpacity = next.duetOpacity;
                 builtBgOpacity = next.bgOpacity;
                 builtTransDim = baseTranslation;
                 builtTransOpacity = next.transOpacity;
@@ -3237,6 +3252,8 @@ final class LyricView extends View {
         }
         mainDim = navigationColor.apply(baseMainDim);
         mainLit = navigationColor.apply(baseMainLit);
+        duetDim = navigationColor.apply(baseDuetDim);
+        duetLit = navigationColor.apply(baseDuetLit);
         bgDim = navigationColor.apply(baseBgDim);
         bgLit = navigationColor.apply(baseBgLit);
         translationDim = navigationColor.apply(baseTranslation);
@@ -3251,7 +3268,7 @@ final class LyricView extends View {
         return true;
     }
 
-    private float builtMainOpacity = -1f, builtBgOpacity = -1f, builtTransOpacity = -1f;
+    private float builtDuetOpacity = -1f, builtMainOpacity = -1f, builtBgOpacity = -1f, builtTransOpacity = -1f;
     private int builtTransDim;
 
     private void requestPalette(final int seed) {
@@ -3292,15 +3309,18 @@ final class LyricView extends View {
         return official;
     }
 
-    private long ink(float alpha, float whiteness) {
-        return ink(alpha, whiteness, false);
+    /** Colors are blended in SDR; only the held-note highlight requests HDR headroom. */
+    private long ink(float alpha, float whiteness, LyricLine.Voice voice) {
+        return ink(alpha, whiteness, voice, 1f);
     }
 
-    /** Colors are blended in SDR; only the held-note highlight requests HDR headroom. */
-    private long ink(float alpha, float whiteness, boolean backing) {
+    private long ink(float alpha, float whiteness, LyricLine.Voice voice, float gain) {
         LyricAppearance a = appearance == null ? LyricAppearance.DEFAULT : appearance;
-        return blendInk(backing ? bgDim : mainDim, backing ? bgLit : mainLit,
-                whiteness, alpha * (backing ? a.bgOpacity : a.mainOpacity), 1f);
+        switch (voice) {
+            case BACKING: return blendInk(bgDim, bgLit, whiteness, alpha * a.bgOpacity, gain);
+            case DUET: return blendInk(duetDim, duetLit, whiteness, alpha * a.duetOpacity, gain);
+            default: return blendInk(mainDim, mainLit, whiteness, alpha * a.mainOpacity, gain);
+        }
     }
 
     private static long blendInk(int low, int high, float amount, float alpha, float gain) {
@@ -3404,6 +3424,7 @@ final class LyricView extends View {
         final BlurPaints style = blurPaints();
         final LyricLine l = lines.get(i);
         final int alignOn = builtAlign, transOn = builtTrans;
+        final boolean duet = builtDuet;
         final int width = main[i].getWidth();
         final int fullW = width + 2 * blurPad, fullH = Math.round(height[i]) + 2 * blurPad;
         final float radius = blurFor(rows);
@@ -3421,7 +3442,7 @@ final class LyricView extends View {
                 final boolean skipped = job.ticket.obsolete(blurWarmFocus);
                 final Bitmap b = skipped ? null :
                         makeBlurred(l, width, fullW, fullH, pad, radius, style,
-                                transGap, bgGap, down, alignOn, transOn);
+                                transGap, bgGap, down, alignOn, transOn, duet);
                 // Upload preparation belongs on the worker too. Otherwise the first frame that
                 // draws a fresh blur bitmap also has to stage its pixels for the renderer.
                 if (b != null && gen == buildGen && colorsGen == blurGeneration
@@ -3471,10 +3492,10 @@ final class LyricView extends View {
     /** Frozen main-thread paint values shared by blur jobs for one layout and palette. */
     private static final class BlurPaints {
         final int layout, colors;
-        final TextPaint main, trans, background;
-        BlurPaints(int layout, int colors, TextPaint main, TextPaint trans, TextPaint background) {
+        final TextPaint main, trans, background, duet;
+        BlurPaints(int layout, int colors, TextPaint main, TextPaint trans, TextPaint background, TextPaint duet) {
             this.layout = layout; this.colors = colors;
-            this.main = main; this.trans = trans; this.background = background;
+            this.main = main; this.trans = trans; this.background = background; this.duet = duet;
         }
     }
 
@@ -3491,7 +3512,10 @@ final class LyricView extends View {
                 blendInk(baseBgDim, baseBgDim, 0f, a.bgOpacity, 1f)));
         tp.setColor(android.graphics.Color.toArgb(
                 blendInk(baseTranslation, baseTranslation, 0f, a.transOpacity, 1f)));
-        return blurPaintSnapshot = new BlurPaints(buildGen, blurGeneration, p, tp, bp);
+        TextPaint dp = new TextPaint(p);
+        dp.setColor(android.graphics.Color.toArgb(
+                blendInk(baseDuetDim, baseDuetDim, 0f, a.duetOpacity, 1f)));
+        return blurPaintSnapshot = new BlurPaints(buildGen, blurGeneration, p, tp, bp, dp);
     }
 
     /**
@@ -3500,17 +3524,21 @@ final class LyricView extends View {
      */
     private static Bitmap makeBlurred(LyricLine l, int width, int fullW, int fullH, int pad,
                                       float radius, BlurPaints style, float transGap, float bgGap,
-                                      int down, int alignOn, int transOn) {
+                                      int down, int alignOn, int transOn, boolean duet) {
         try {
-            TextPaint p = new TextPaint(style.main), tp = new TextPaint(style.trans),
+            LyricLine.Voice voice = l.voice(duet);
+            TextPaint p = new TextPaint(voice == LyricLine.Voice.DUET ? style.duet : style.main),
+                    tp = new TextPaint(style.trans),
                     bp = new TextPaint(style.background);
+            // A solo backing vocal uses a full-size layout but keeps the backing colour.
+            if (voice == LyricLine.Voice.BACKING) p.setColor(bp.getColor());
             Bitmap b = Bitmap.createBitmap(Math.max(1, fullW / down), Math.max(1, fullH / down),
                     Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(b);
             c.scale(1f / down, 1f / down);
             c.translate(pad, pad);
             BlurMaskFilter mf = new BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL);
-            Layout.Alignment align = alignFor(l.opposite, alignOn);
+            Layout.Alignment align = alignFor(l.oppositeSide(duet), alignOn);
             p.setShader(null);
             p.clearShadowLayer();
             p.setMaskFilter(mf);
@@ -3629,14 +3657,14 @@ final class LyricView extends View {
     private void drawStatic(Canvas c, int i, float a, float whiteness) {
         // Each layout's own paint: it draws with the copy it was laid out with, not the view's.
         StaticLayout lay = main[i];
-        lay.getPaint().setColor(ink(a, whiteness));
+        lay.getPaint().setColor(ink(a, whiteness, lines.get(i).voice(builtDuet)));
         lay.draw(c);
         lay.getPaint().setColor(0xFFFFFFFF);
         float below = lay.getHeight();
         for (StaticLayout b : bgLay[i]) {
             int save = c.save();
             c.translate(0f, below + lyricGap(BG_GAP_DP));
-            b.getPaint().setColor(ink(a, whiteness, true));
+            b.getPaint().setColor(ink(a, whiteness, LyricLine.Voice.BACKING));
             b.draw(c);
             b.getPaint().setColor(0xFFFFFFFF);
             c.restoreToCount(save);
@@ -3650,12 +3678,6 @@ final class LyricView extends View {
         float y = main[i].getHeight();
         for (StaticLayout bg : bgLay[i]) y += lyricGap(BG_GAP_DP) + bg.getHeight();
         return y + lyricGap(TRANS_GAP_DP);
-    }
-
-    /** The lead's selected color, retaining its opacity even in the HDR halo. */
-    private long white(float alpha, float gain) {
-        LyricAppearance a = appearance == null ? LyricAppearance.DEFAULT : appearance;
-        return blendInk(mainLit, mainLit, 1f, alpha * a.mainOpacity, gain);
     }
 
     /**
@@ -3697,7 +3719,7 @@ final class LyricView extends View {
             // Here only for its background vocal's words: the line itself is lit whole while it
             // is sung, as drawLine draws any line-timed one.
             float w = lineLit;
-            lay.getPaint().setColor(ink(a * (INACTIVE + (1f - INACTIVE) * w), w));
+            lay.getPaint().setColor(ink(a * (INACTIVE + (1f - INACTIVE) * w), w, l.voice(builtDuet)));
             lay.draw(c);
             lay.getPaint().setColor(0xFFFFFFFF);
         }
@@ -3718,7 +3740,7 @@ final class LyricView extends View {
                 // publish its text and nothing else. It used to be handed to the word path
                 // regardless, where the renderer read the missing syllable array and took
                 // SystemUI down (issue #94); whole, at the brightness of its sung lead.
-                bl.getPaint().setColor(ink(a * level, 0f, true));
+                bl.getPaint().setColor(ink(a * level, 0f, LyricLine.Voice.BACKING));
                 bl.draw(c);
                 bl.getPaint().setColor(0xFFFFFFFF);
             }
@@ -3741,16 +3763,16 @@ final class LyricView extends View {
                               float e, float sungA, float unsungA, float liftScale,
                               boolean glowOn, int gradSlot) {
         float sung = l.sungChars(ms);
-        boolean backing = gradSlot == 1;
+        LyricLine.Voice voice = gradSlot == 1 ? LyricLine.Voice.BACKING : l.voice(builtDuet);
         float feather = FEATHER_EM * p.getTextSize();
         int rows = lay.getLineCount();
         for (int r = 0; r < rows; r++) {
             int rs = lay.getLineStart(r), re = lay.getLineEnd(r);
             rowAt = Float.NaN;
             if (sung >= re) {
-                p.setColor(ink(sungA, e, backing));
+                p.setColor(ink(sungA, e, voice));
             } else if (sung <= rs) {
-                p.setColor(ink(unsungA, 0f, backing));
+                p.setColor(ink(unsungA, 0f, voice));
             } else {
                 int ch = (int) sung;
                 float f = sung - ch;
@@ -3758,13 +3780,13 @@ final class LyricView extends View {
                 float xb = ch + 1 < re ? xs[ch + 1] : lay.getLineRight(r);
                 p.setColor(0xFFFFFFFF);
                 rowAt = xa + (xb - xa) * f;
-                p.setShader(gradient(ink(sungA, e, backing), ink(unsungA, 0f, backing), rowAt, feather,
+                p.setShader(gradient(ink(sungA, e, voice), ink(unsungA, 0f, voice), rowAt, feather,
                         gradSlot));
             }
             rowFeather = feather;
             rowSungA = sungA;
             rowUnsungA = unsungA;
-            drawSyllables(c, i, l, lay, p, xs, e, r, liftScale, glowOn);
+            drawSyllables(c, i, l, lay, p, xs, e, r, liftScale, glowOn, voice);
             p.setShader(null);
             p.setColor(0xFFFFFFFF);
         }
@@ -3776,7 +3798,7 @@ final class LyricView extends View {
      * so the shaping and the spacing are the ones the layout measured.
      */
     private void drawSyllables(Canvas c, int i, LyricLine l, StaticLayout lay, TextPaint p, float[] xs,
-                               float e, int r, float liftScale, boolean glowOn) {
+                               float e, int r, float liftScale, boolean glowOn, LyricLine.Voice voice) {
         // Belt and braces: every caller is supposed to have asked hasWords() first.
         if (l.sylStart == null) return;
         int count = l.sylStart.length;
@@ -3817,7 +3839,7 @@ final class LyricView extends View {
                     for (int layer = 0; layer < LyricGlow.LAYERS; layer++) {
                         float weight = LyricGlow.weight(glow, layer);
                         if (weight <= 0f) continue;
-                        glowPaint.setColor(white(GLOW_ALPHA * glow * weight, g));
+                        glowPaint.setColor(ink(GLOW_ALPHA * glow * weight, 1f, voice, g));
                         c.drawBitmap(halo.layers[layer], halo.left, baseline - lift + halo.top, glowPaint);
                     }
                 }
@@ -3828,10 +3850,10 @@ final class LyricView extends View {
                 if (g > 1.001f) {
                     if (Float.isNaN(rowAt)) {
                         if (rowShader == null && l.sungChars(ms) >= ce) {
-                            p.setColor(white(rowSungA, g));
+                            p.setColor(ink(rowSungA, 1f, voice, g));
                         }
                     } else {
-                        p.setShader(gradient(white(rowSungA, g), ink(rowUnsungA, 0f), rowAt,
+                        p.setShader(gradient(ink(rowSungA, 1f, voice, g), ink(rowUnsungA, 0f, voice), rowAt,
                                 rowFeather, 2));
                     }
                 }

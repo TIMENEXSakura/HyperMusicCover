@@ -43,7 +43,36 @@ class LyriconDuetTest {
             convert(RichLyricLine(begin = 4000, end = 5000, text = "男：再见"))), true)
         assertEquals(3, lines.size)
         assertEquals("echo", lines[1].text)
+        assertEquals(LyricLine.Voice.BACKING, lines[1].voice(true))
         assertEquals(0, lines[1].backgrounds().size)
         assertEquals(3500, lines[1].end)
+    }
+
+    @Test fun partialWordPayloadKeepsFullSecondSingerLine() {
+        val received = RichLyricLine(begin = 1000, end = 2600, text = "Both lines stay complete",
+            isAlignedRight = true, translation = "完整", secondary = "echo", words = listOf(
+                LyricWord(text = "Both", begin = 1000, end = 1200)))
+        val line = convert(received)
+        assertEquals("Both lines stay complete", line.text)
+        assertFalse(line.hasWords())
+        assertEquals(LyricLine.Voice.DUET, line.voice(true))
+        assertEquals("完整", line.translation)
+        assertEquals("echo", line.backgrounds().single().text)
+    }
+
+    @Test fun completeWordPayloadUsesSpacedTextAndItsCharacterOffsets() {
+        val line = convert(RichLyricLine(begin = 0, end = 900, text = "we sing", words = listOf(
+            LyricWord(text = "we", begin = 0, end = 400),
+            LyricWord(text = "sing", begin = 400, end = 900))))
+        assertEquals("we sing", line.text)
+        assertArrayEquals(intArrayOf(2, 7), line.charEnd)
+    }
+
+    @Test fun invalidTimingWithOnlyWordsStillKeepsText() {
+        val line = convert(RichLyricLine(begin = 0, end = 900, isAlignedRight = true,
+            words = listOf(LyricWord(text = "answer", begin = -1, end = 800))))
+        assertEquals("answer", line.text)
+        assertFalse(line.hasWords())
+        assertTrue(line.opposite)
     }
 }

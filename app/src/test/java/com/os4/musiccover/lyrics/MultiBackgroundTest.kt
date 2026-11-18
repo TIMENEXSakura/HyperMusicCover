@@ -40,6 +40,8 @@ class MultiBackgroundTest {
             """</div></body></tt>""")
         assertEquals(listOf("Lead", "ooh ah"), lines.map { it.text })
         val echo = lines[1]
+        assertEquals(LyricLine.Voice.BACKING, echo.voice(true))
+        assertEquals(LyricLine.Voice.BACKING, echo.voice(false))
         assertTrue(echo.hasWords())
         assertEquals(3000, echo.start)
         assertEquals(0, echo.backgrounds().size)

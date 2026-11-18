@@ -32,8 +32,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -66,11 +71,21 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-internal fun voiceKey(role: Int) = when (role) { 1 -> "trans"; 2 -> "bg"; else -> "main" }
-internal fun voiceLabel(role: Int) = when (role) {
-    1 -> R.string.lyrics_style_trans
-    2 -> R.string.lyrics_style_backing
-    else -> R.string.lyrics_style_main
+internal enum class LyricEditorVoice(val key: String, val label: Int) {
+    Lead("main", R.string.lyrics_style_main),
+    Translation("trans", R.string.lyrics_style_trans),
+    Backing("bg", R.string.lyrics_style_backing),
+    Duet("duet", R.string.lyric_editor_duet_voice),
+}
+
+/** Both the picker and the simulated lock screen read the same colour channels. */
+internal data class VoiceColour(val mode: Int, val rgb: Int, val opacity: Float, val intensity: Float)
+
+internal fun LyricAppearance.voiceColour(voice: LyricEditorVoice) = when (voice) {
+    LyricEditorVoice.Lead -> VoiceColour(mainMode, mainColor, mainOpacity, mainIntensity)
+    LyricEditorVoice.Translation -> VoiceColour(transMode, transColor, transOpacity, transIntensity)
+    LyricEditorVoice.Backing -> VoiceColour(bgMode, bgColor, bgOpacity, bgIntensity)
+    LyricEditorVoice.Duet -> VoiceColour(duetMode, duetColor, duetOpacity, duetIntensity)
 }
 
 /** The clock and gesture bar frame the same lead / backing / translated lines as the lyric view. */
@@ -78,9 +93,9 @@ internal fun voiceLabel(role: Int) = when (role) {
 internal fun LyricStylePreview(
     state: ModuleBridge.State,
     appearance: LyricAppearance,
-    voice: Int,
+    voice: LyricEditorVoice,
     draft: Color?,
-    onPick: (Int, Color) -> Unit,
+    onPick: (LyricEditorVoice, Color) -> Unit,
 ) {
     val seed = state.lyricPreviewSeed.takeIf { it != 0 } ?: 0xff57507c.toInt()
     var palette by remember(seed) { mutableStateOf<LyricPalette.Colors?>(null) }
@@ -95,20 +110,17 @@ internal fun LyricStylePreview(
         hsv[2] = 1f
         android.graphics.Color.HSVToColor(hsv)
     }
-    fun ink(role: Int, lit: Boolean): Color {
+    fun ink(role: LyricEditorVoice, lit: Boolean): Color {
         if (role == voice && draft != null) return draft
-        val mode = when (role) { 1 -> appearance.transMode; 2 -> appearance.bgMode; else -> appearance.mainMode }
-        val custom = when (role) { 1 -> appearance.transColor; 2 -> appearance.bgColor; else -> appearance.mainColor }
-        val strength = when (role) { 1 -> appearance.transIntensity; 2 -> appearance.bgIntensity; else -> appearance.mainIntensity }
-        val alpha = when (role) { 1 -> appearance.transOpacity; 2 -> appearance.bgOpacity; else -> appearance.mainOpacity }
+        val (mode, custom, alpha, strength) = appearance.voiceColour(role)
         val official = if (lit) -1 else officialDim
         val color = when (mode) {
             LyricAppearance.CUSTOM -> custom
             LyricAppearance.SYSTEM -> LyricAppearance.soften(if (lit) systemLit else systemDim, strength)
             LyricAppearance.COVER -> palette?.let {
                 val base = when {
-                    role == 0 && lit -> it.mainLit
-                    role == 0 -> it.mainDim
+                    role == LyricEditorVoice.Lead && lit -> it.mainLit
+                    role == LyricEditorVoice.Lead -> it.mainDim
                     lit -> it.bgLit
                     else -> it.bgDim
                 }
@@ -139,33 +151,39 @@ internal fun LyricStylePreview(
     val count = lead.fields + backing.fields + below.fields
     val leadAlign = when (state.lyricsAlign) { 1 -> TextAlign.Center; 2 -> TextAlign.End; else -> TextAlign.Start }
     val backingAlign = when (state.lyricsAlign) { 1 -> TextAlign.Center; 2 -> TextAlign.Start; else -> TextAlign.End }
-    val wallpaper = remember(seed) {
-        Brush.linearGradient(listOf(Color(0xff141622), androidx.compose.ui.graphics.lerp(Color(0xff191a24), Color(seed), .42f), Color(0xff11121a)))
-    }
+    val dark = MiuixTheme.colorScheme.background.luminance() < .4f
     Card(modifier = Modifier.firstCard()) {
-        Column(Modifier.fillMaxWidth().background(wallpaper).padding(horizontal = 20.dp, vertical = 12.dp)) {
+        Column(Modifier.fillMaxWidth().lockScreenLandscape(Color(seed), dark)
+            .padding(horizontal = 20.dp, vertical = 12.dp)) {
             Column(Modifier.fillMaxWidth().clearAndSetSemantics { }, horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Rounded.Lock, contentDescription = null, tint = Color.White.copy(alpha = .60f), modifier = Modifier.size(15.dp))
                 Text(clock, fontWeight = FontWeight.Light, fontSize = 46.sp, color = Color.White.copy(alpha = .94f))
             }
             Spacer(Modifier.height(18.dp))
-            PreviewVoice(0, voice, onPick, lead, 0, count, ink(0, true),
+            PreviewVoice(LyricEditorVoice.Lead, voice, onPick, lead, 0, count, ink(LyricEditorVoice.Lead, true),
                 state.lyricSizeSp, state.lyricWeight, leadAlign, progress.value)
-            PreviewVoice(2, voice, onPick, backing, lead.fields, count, ink(2, true),
+            PreviewVoice(LyricEditorVoice.Backing, voice, onPick, backing, lead.fields, count, ink(LyricEditorVoice.Backing, true),
                 state.lyricBgSizeSp, state.lyricBgWeight, backingAlign, progress.value)
             if (below.fields > 0) {
-                PreviewVoice(1, voice, onPick, below, lead.fields + backing.fields, count, ink(1, false),
+                PreviewVoice(LyricEditorVoice.Translation, voice, onPick, below, lead.fields + backing.fields, count, ink(LyricEditorVoice.Translation, false),
                     state.lyricTransSizeSp, state.lyricTransWeight, leadAlign, progress.value)
             }
-            val next = ink(0, false)
-            Text(stringResource(R.string.lyrics_preview_next), modifier = Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable(role = Role.Button, onClickLabel = stringResource(R.string.lyric_editor_adjust_color,
-                    stringResource(R.string.lyrics_style_main))) { onPick(0, ink(0, true)) }
-                .heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 10.dp),
-                color = next.copy(alpha = next.alpha * .30f), textAlign = leadAlign,
-                fontSize = state.lyricSizeSp.sp, lineHeight = (state.lyricSizeSp * 1.35f).sp,
-                fontWeight = FontWeight(state.lyricWeight))
+            // This is the next lead line. Its words stay on screen while the current group exits.
+            val duet = sampleFields(stringResource(R.string.lyric_editor_sample_duet), timed = true)
+            if (appearance.duetEnabled) {
+                PreviewVoice(LyricEditorVoice.Duet, voice, onPick, duet, 0, duet.fields,
+                    ink(LyricEditorVoice.Duet, true), state.lyricSizeSp, state.lyricWeight, backingAlign, 0f)
+            } else {
+                val next = ink(LyricEditorVoice.Lead, false)
+                Text(duet.text, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .clickable(role = Role.Button, onClickLabel = stringResource(R.string.lyric_editor_adjust_color,
+                        stringResource(R.string.lyrics_style_main))) {
+                        onPick(LyricEditorVoice.Lead, ink(LyricEditorVoice.Lead, true))
+                    }.heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 10.dp),
+                    color = next.copy(alpha = next.alpha * .30f), textAlign = leadAlign,
+                    fontSize = state.lyricSizeSp.sp, lineHeight = (state.lyricSizeSp * 1.35f).sp,
+                    fontWeight = FontWeight(state.lyricWeight))
+            }
             Spacer(Modifier.height(12.dp))
             Box(Modifier.align(Alignment.CenterHorizontally).width(55.dp).height(3.dp)
                 .background(Color.White.copy(alpha = .55f), RoundedCornerShape(50)))
@@ -179,6 +197,63 @@ internal fun LyricStylePreview(
                     tint = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             }
         }
+    }
+}
+
+/** A dusk landscape behind the clock and lyrics. Paths and brushes depend only on the available
+ * size and the current cover, so replaying the lyric animation reuses the same drawing. */
+private fun Modifier.lockScreenLandscape(cover: Color, dark: Boolean) = drawWithCache {
+    val w = size.width
+    val h = size.height
+    val sky = lerp(if (dark) Color(0xff28354c) else Color(0xff475c77), cover, .17f)
+    val haze = lerp(if (dark) Color(0xff73637d) else Color(0xff957d88), cover, .10f)
+    val dusk = if (dark) Color(0xff9c777a) else Color(0xffbd9386)
+    val distant = lerp(if (dark) Color(0xff536279) else Color(0xff758298), cover, .12f)
+    val middle = if (dark) Color(0xff344959) else Color(0xff485f70)
+    val near = lerp(if (dark) Color(0xff233848) else Color(0xff344c5a), cover, .08f)
+    val skyBrush = Brush.verticalGradient(0f to sky, .39f to haze, .67f to dusk, 1f to distant)
+    val sun = Offset(.83f * w, .16f * h)
+    val glow = Brush.radialGradient(listOf(dusk.copy(alpha = .59f), dusk.copy(alpha = 0f)),
+        center = sun, radius = (minOf(w, h) * .34f).coerceAtLeast(1f))
+    val sunRadius = minOf(w, h) * .037f
+    val farRidge = Path().apply {
+        moveTo(0f, .66f * h)
+        cubicTo(.13f * w, .62f * h, .18f * w, .51f * h, .29f * w, .54f * h)
+        cubicTo(.38f * w, .56f * h, .47f * w, .43f * h, .54f * w, .46f * h)
+        cubicTo(.64f * w, .51f * h, .68f * w, .43f * h, .77f * w, .45f * h)
+        cubicTo(.85f * w, .47f * h, .92f * w, .41f * h, w, .38f * h)
+        lineTo(w, h)
+        lineTo(0f, h)
+        close()
+    }
+    val middleRidge = Path().apply {
+        moveTo(0f, .51f * h)
+        cubicTo(.13f * w, .52f * h, .22f * w, .65f * h, .33f * w, .65f * h)
+        cubicTo(.48f * w, .66f * h, .55f * w, .75f * h, .66f * w, .69f * h)
+        cubicTo(.76f * w, .66f * h, .9f * w, .57f * h, w, .59f * h)
+        lineTo(w, h)
+        lineTo(0f, h)
+        close()
+    }
+    val nearRidge = Path().apply {
+        moveTo(0f, .83f * h)
+        cubicTo(.18f * w, .72f * h, .30f * w, .79f * h, .46f * w, .85f * h)
+        cubicTo(.65f * w, .94f * h, .79f * w, .70f * h, w, .74f * h)
+        lineTo(w, h)
+        lineTo(0f, h)
+        close()
+    }
+    val shade = Brush.verticalGradient(listOf(Color(0xff151e37).copy(alpha = .04f),
+        Color(0xff182637).copy(alpha = if (dark) .28f else .32f),
+        Color(0xff14212e).copy(alpha = .12f)))
+    onDrawBehind {
+        drawRect(skyBrush)
+        drawRect(glow)
+        drawCircle(Color(0xfff6d5ba).copy(alpha = .58f), sunRadius, sun)
+        drawPath(farRidge, distant)
+        drawPath(middleRidge, middle)
+        drawPath(nearRidge, near)
+        drawRect(shade)
     }
 }
 
@@ -203,7 +278,7 @@ private fun sampleFields(marked: String, timed: Boolean): SampleFields = remembe
 /** Colour spans retain the measured advances as the words disappear, including wrapped lines. */
 @Composable
 private fun PreviewVoice(
-    role: Int, current: Int, onPick: (Int, Color) -> Unit,
+    role: LyricEditorVoice, current: LyricEditorVoice, onPick: (LyricEditorVoice, Color) -> Unit,
     sample: SampleFields, first: Int, total: Int, ink: Color,
     size: Float, weight: Int, alignment: TextAlign, progress: Float,
 ) {
@@ -224,7 +299,7 @@ private fun PreviewVoice(
             }
         }
     }
-    val label = stringResource(voiceLabel(role))
+    val label = stringResource(role.label)
     Box(
         Modifier.fillMaxWidth().clip(shape)
             .background(if (selectedRole) Color.White.copy(alpha = .065f) else Color.Transparent)

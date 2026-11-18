@@ -14,7 +14,12 @@ class BackgroundVocalTest {
 
     @Test
     fun bracketsInsideTheFirstAndLastWordsComeOff() {
-        val b = LyricParse.unwrapBackground(timed("(oh yeah)", 4, 9))
+        val source = timed("(oh yeah)", 4, 9)
+        val echo = timed("echo", 4)
+        source.addBackground(echo)
+        val b = LyricParse.unwrapBackground(source)
+        assertSame(echo, b.backgrounds().single())
+        assertEquals(LyricLine.Voice.BACKING, b.voice(true))
         assertEquals("oh yeah", b.text)
         assertArrayEquals(intArrayOf(3, 7), b.charEnd)
         assertArrayEquals(intArrayOf(0, 100), b.sylStart)
@@ -33,6 +38,7 @@ class BackgroundVocalTest {
         val b = LyricParse.unwrapBackground(LyricLine(" ( oh ) ", null, 0, 1000, false,
             null, null, null))
         assertEquals("oh", b.text)
+        assertEquals(LyricLine.Voice.BACKING, b.voice(false))
         assertFalse(b.hasWords())
     }
 

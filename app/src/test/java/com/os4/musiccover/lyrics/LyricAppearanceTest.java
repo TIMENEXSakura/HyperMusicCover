@@ -62,6 +62,59 @@ public class LyricAppearanceTest {
         assertEquals(10f, style.bgSizeSp, 0f);
         assertSame(style, style.with("bgsize", Float.NaN));
     }
+    @Test public void oldSettingsGiveTheSecondSingerTheExistingLeadControls() {
+        LyricAppearance old = LyricAppearance.parse(
+                "{\"mainMode\":2,\"mainColor\":1193046,\"mainOpacity\":0.4,\"mainIntensity\":0.8}");
+        assertTrue(old.duetEnabled);
+        assertEquals(old.mainMode, old.duetMode);
+        assertEquals(old.mainColor, old.duetColor);
+        assertEquals(old.mainOpacity, old.duetOpacity, 0f);
+        assertEquals(old.mainIntensity, old.duetIntensity, 0f);
+    }
+
+    @Test public void independentDuetColourSurvivesDisablingAndReloading() {
+        LyricAppearance a = new LyricAppearance(0, 1, -1, -1, 1f, .72f, 3, -1, .62f,
+                .65f, .65f, .65f, false, LyricAppearance.CUSTOM, 0x123456, .4f, .8f);
+        LyricAppearance saved = LyricAppearance.parse(a.toJson());
+        assertFalse(saved.duetEnabled);
+        assertEquals(LyricAppearance.CUSTOM, saved.duetMode);
+        assertEquals(0xff123456, saved.duetColor);
+        assertEquals(.4f, saved.duetOpacity, 0f);
+        assertEquals(.8f, saved.duetIntensity, 0f);
+        assertEquals(a.mainColor, saved.mainColor);
+        assertEquals(a.bgMode, saved.bgMode);
+        assertEquals(a.transMode, saved.transMode);
+    }
+
+    @Test public void disablingDuetOnlyChangesTheSecondLeadAndPreservesWords() {
+        LyricLine first = new LyricLine("first", null, 100, 300, false, null, null, null);
+        LyricLine second = new LyricLine("second", null, 300, 500, true,
+                new int[] { 300 }, new int[] { 500 }, new int[] { 6 });
+        LyricLine backing = new LyricLine("echo", null, 350, 550, true, null, null, null);
+        second.addBackground(backing);
+        assertEquals(LyricLine.Voice.LEAD, first.voice(true));
+        assertFalse(first.oppositeSide(true));
+        assertEquals(LyricLine.Voice.DUET, second.voice(true));
+        assertTrue(second.oppositeSide(true));
+        assertEquals(LyricLine.Voice.LEAD, second.voice(false));
+        assertFalse(second.oppositeSide(false));
+        assertEquals("second", second.text);
+        assertEquals(3f, second.sungChars(400), 0f);
+        assertEquals(LyricLine.Voice.BACKING, backing.voice(true));
+        assertEquals(LyricLine.Voice.BACKING, backing.voice(false));
+        assertTrue(backing.oppositeSide(false));
+        assertSame(backing, second.backgrounds()[0]);
+    }
+
+    @Test public void standaloneBackingKeepsItsRoleWhenItsTranslationArrives() {
+        LyricLine source = new LyricLine("echo", null, 0, 200, true, null, null, null).asBacking();
+        LyricLine copy = new LyricLine("echo", "回声", 0, 200, true, null, null, null);
+        copy.copyBackgrounds(source);
+        assertEquals(LyricLine.Voice.BACKING, copy.voice(true));
+        assertEquals(LyricLine.Voice.BACKING, copy.voice(false));
+        assertTrue(copy.oppositeSide(false));
+    }
+
     @Test public void invalidSettingsHaveSafeDefaults() {
         assertSame(LyricAppearance.DEFAULT, LyricAppearance.parse("invalid"));
         LyricAppearance a = new LyricAppearance(-1, 9, -1, -1, Float.NaN, 5f);

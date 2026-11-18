@@ -57,7 +57,7 @@ internal object LyriconBackground {
             (line.isAlignedRight || flexible), null, null, null)
     }
 
-    private fun mapWords(text: String, tokens: List<String>): IntArray? {
+    internal fun mapWords(text: String, tokens: List<String>): IntArray? {
         val chars = IntArray(tokens.size)
         var at = 0
         for ((index, token) in tokens.withIndex()) {

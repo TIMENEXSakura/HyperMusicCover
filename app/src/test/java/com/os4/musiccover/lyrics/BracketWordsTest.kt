@@ -115,6 +115,10 @@ class BracketWordsTest {
             assertEquals(listOf("作词：甲", "作曲：乙", "和声：丙", "主唱第一句", "回声", "一起"),
                 lines.map { it.text })
             assertEquals(listOf(false, false, false, false, true, true), lines.map { it.opposite })
+            assertEquals(LyricLine.Voice.LEAD, lines[2].voice(true)) // The production credit.
+            assertEquals(LyricLine.Voice.BACKING, lines[4].voice(true))
+            assertEquals(LyricLine.Voice.DUET, lines[5].voice(true))
+            assertEquals(LyricLine.Voice.LEAD, lines[5].voice(false))
             Settings.LYRIC_FLEX_DUET.set(false)
             assertEquals(listOf("作词：甲", "作曲：乙", "和声：丙", "主唱第一句", "和声：回声", "对唱：一起"),
                 parse(*rows).map { it.text })

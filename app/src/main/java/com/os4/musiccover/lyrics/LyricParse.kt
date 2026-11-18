@@ -351,8 +351,15 @@ object LyricParse {
             runCatching { Xp.log("[MCLyric] the parser gave up on a lyric (" + body.length + " chars): " + t) }
             return emptyList()
         }
-        val src = unswallow(lyrics.lines, prepared.body)
-        val ttmlSides = TtmlVoices.resolve(prepared.body, src, flexibleDuet)
+        val resolved = TtmlVoices.resolve(prepared.body, unswallow(lyrics.lines, prepared.body), flexibleDuet)
+        val src = resolved.lines
+        fun placed(source: ISyncedLine, converted: LyricLine): LyricLine {
+            val role = resolved.placements[source]
+            val positioned = role?.side?.let { relabel(converted, 0, it) } ?: converted
+            return if (role?.backing == true || source is KaraokeLine.AccompanimentKaraokeLine) {
+                unwrapBackground(positioned)
+            } else positioned
+        }
         val out = ArrayList<LyricLine>(src.size)
         // Where the tail of a line may run to when the file left it without an end of its own:
         // the arrival of the line after it. Looked up by time and not read off the list: the list
@@ -372,7 +379,7 @@ object LyricParse {
                 // the focus for the length of an echo. They hang under the main line they belong
                 // to (the last one started by then), and stretch it if they outlast it.
                 is KaraokeLine.AccompanimentKaraokeLine -> {
-                    val b = karaoke(line, nextStart)?.let { ttmlSides[line]?.let { side -> relabel(it, 0, side) } ?: it }?.let { unwrapBackground(it) } ?: continue
+                    val b = karaoke(line, nextStart)?.let { placed(line, it) } ?: continue
                     val owner = out.lastOrNull { it.start <= b.start }
                     if (owner == null) out.add(b) else owner.addBackground(b)
                 }
@@ -385,8 +392,8 @@ object LyricParse {
                     // business, and a version that goes back to separate lines still works.
                     // Every one of them: a TTML line can carry several x-bg spans (PR #106).
                     val backs = (line as? KaraokeLine.MainKaraokeLine)?.accompanimentLines
-                        .orEmpty().mapNotNull { acc -> karaoke(acc, nextStart)?.let { ttmlSides[acc]?.let { side -> relabel(it, 0, side) } ?: it }?.let { unwrapBackground(it) } }
-                    val lead = karaoke(line, nextStart)?.let { ttmlSides[line]?.let { side -> relabel(it, 0, side) } ?: it }
+                        .orEmpty().mapNotNull { acc -> karaoke(acc, nextStart)?.let { placed(acc, it) } }
+                    val lead = karaoke(line, nextStart)?.let { placed(line, it) }
                     // A line with nothing but a background vocal in it - a TTML <p> holding only
                     // an x-bg - is that vocal, sung as a line of its own. Hung under an empty
                     // lead it would leave a blank row of full-size text above it.
@@ -404,8 +411,9 @@ object LyricParse {
                         // Instrumental breaks arrive as empty lines; a row of nothing would take a
                         // slot in the stack for its whole duration.
                         if (line.content.isBlank()) continue
-                        out.add(LyricLine(line.content.trim(), line.translation,
-                            line.start, line.end, ttmlSides[line] == true, null, null, null))
+                        val plain = LyricLine(line.content.trim(), line.translation, line.start, line.end,
+                            false, null, null, null)
+                        out.add(placed(line, plain))
                     }
                 }
             } catch (error: Exception) {
@@ -925,6 +933,7 @@ object LyricParse {
      * nothing but a bracket goes with it.
      */
     internal fun unwrapBackground(line: LyricLine): LyricLine {
+        line.asBacking()
         val text = line.text
         var from = 0
         var until = text.length
@@ -953,7 +962,7 @@ object LyricParse {
         val chars = line.charEnd
         if (chars == null) {
             return LyricLine(shown, line.translation, line.roma, line.start, line.end,
-                line.opposite, null, null, null)
+                line.opposite, null, null, null).also { it.copyBackgrounds(line) }
         }
         val starts = ArrayList<Int>(chars.size)
         val ends = ArrayList<Int>(chars.size)
@@ -969,12 +978,12 @@ object LyricParse {
         }
         if (cut.isEmpty()) {
             return LyricLine(shown, line.translation, line.roma, line.start, line.end,
-                line.opposite, null, null, null)
+                line.opposite, null, null, null).also { it.copyBackgrounds(line) }
         }
         // Whatever was left past the last syllable before is drawn by it now.
         cut[cut.size - 1] = shown.length
         return LyricLine(shown, line.translation, line.roma, line.start, line.end, line.opposite,
-            starts.toIntArray(), ends.toIntArray(), cut.toIntArray())
+            starts.toIntArray(), ends.toIntArray(), cut.toIntArray()).also { it.copyBackgrounds(line) }
     }
 
     /**
@@ -1084,7 +1093,7 @@ object LyricParse {
         if (enabled) speakers(lines, true) else lines
 
     private fun speakers(lines: List<LyricLine>, flexible: Boolean): List<LyricLine> {
-        if (lines.any { it.opposite }) return lines
+        val structured = lines.any { it.opposite }
         val labels = lines.map {
             val label = LABEL.find(it.text)?.groupValues?.get(1)
             if (flexible) singerLabel(label) else label
@@ -1108,18 +1117,28 @@ object LyricParse {
             if (l != null && l !in CREDITS && l !in TOGETHER && l !in BACKING_SINGER && l !in DUET_SINGER &&
                 ((counts[l] ?: 0) >= 2 || (explicitDuet && (l == "男" || l == "女")))) singers.add(l)
         }
-        if (singers.size < 2 && !hasRole) return lines
+        if ((!hasRole && structured) || (singers.size < 2 && !hasRole)) return lines
         val order = singers.toList()
         val out = ArrayList<LyricLine>(lines.size)
         var right = false
+        var harmony = false
         for ((i, line) in lines.withIndex()) {
             val label = labels[i]
-            val backing = flexible && label != null && (label in BACKING_SINGER || label in DUET_SINGER)
+            val backing = flexible && label in BACKING_SINGER
+            val duet = flexible && label in DUET_SINGER
+            if (structured && !backing && !duet) {
+                out.add(line)
+                continue
+            }
             val together = label != null && label in TOGETHER
-            val known = label != null && (together || backing || label in singers)
-            if (known) right = backing || (!together && order.indexOf(label) % 2 == 1)
+            val known = label != null && (together || backing || duet || label in singers)
+            if (known) {
+                harmony = backing
+                right = backing || duet || (!together && order.indexOf(label) % 2 == 1)
+            }
             val cut = if (known) LABEL.find(line.text)!!.range.last + 1 else 0
-            out.add(relabel(line, cut, right) ?: continue)
+            val sung = relabel(line, cut, right) ?: continue
+            out.add(if (harmony) unwrapBackground(sung) else sung)
         }
         return out
     }

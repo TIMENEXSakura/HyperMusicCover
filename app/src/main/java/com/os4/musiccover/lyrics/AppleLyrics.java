@@ -7,6 +7,8 @@ import android.os.Bundle;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import io.github.libxposed.api.XposedInterface;
 
@@ -56,7 +58,7 @@ public final class AppleLyrics {
      * previous build - and a change that only shows up as a line NOT being logged looks
      * identical to not having loaded at all. It cost a round trip once.
      */
-    private static final String BUILD = "hr-1";
+    private static final String BUILD = "native-voices-2";
 
     /** The player's package, and the only process this class ever runs in. */
     public static final String PKG = "com.apple.android.music";
@@ -276,81 +278,138 @@ public final class AppleLyrics {
      * whose names survive the player's obfuscation, which is why this route is worth building on
      * at all - there is no mapping file to chase when Apple Music updates.
      */
-    private static List<Line> readLines(Object song) {
+    static List<Line> readLines(Object song) {
         List<Line> out = new ArrayList<>();
         for (Object section : vector(call(song, "getSections"))) {
-            for (Object native_ : vector(call(section, "getLines"))) {
+            for (Object row : vector(call(section, "getLines"))) {
                 Line l = new Line();
-                l.begin = num(call(native_, "getBegin"));
-                l.end = num(call(native_, "getEnd"));
-                l.agent = str(call(native_, "getAgent"));
-                l.text = html(str(call(native_, "getHtmlLineText")));
-                l.translation = html(str(call(native_, "getHtmlTranslationLineText")));
-                for (Object w : vector(call(native_, "getWords"))) {
-                    Word word = new Word();
-                    word.begin = num(call(w, "getBegin"));
-                    word.end = num(call(w, "getEnd"));
-                    word.text = html(str(call(w, "getHtmlLineText")));
-                    if (word.text != null && !word.text.isEmpty()) {
-                        l.words.add(word);
+                readWords(call(row, "getWords"), l.words);
+                readWords(call(row, "getBackgroundWords", false), l.bg);
+                l.agent = clean(str(call(row, "getAgent")));
+                if (l.agent == null) l.agent = sharedAgent(l.words);
+                l.bgAgent = sharedAgent(l.bg);
+                l.begin = num(call(row, "getBegin"));
+                l.end = num(call(row, "getEnd"));
+                // Some rows carry the times only on their words, especially background-only rows.
+                if (l.end <= l.begin) {
+                    long first = Long.MAX_VALUE;
+                    long last = l.end;
+                    for (List<Word> track : java.util.Arrays.asList(l.words, l.bg)) {
+                        for (Word w : track) {
+                            if (w.begin >= 0) first = Math.min(first, w.begin);
+                            last = Math.max(last, w.end);
+                        }
                     }
+                    if (l.begin == 0 && first != Long.MAX_VALUE) l.begin = first;
+                    l.end = Math.max(l.begin, last);
                 }
-                // The background vocal, which takes an argument - Apple's getter is
-                // getBackgroundWords(boolean), and asked without one it is simply not found.
-                for (Object w : vector(call(native_, "getBackgroundWords", false))) {
-                    Word word = new Word();
-                    word.begin = num(call(w, "getBegin"));
-                    word.end = num(call(w, "getEnd"));
-                    word.text = html(str(call(w, "getHtmlLineText")));
-                    if (word.text != null && !word.text.isEmpty()) {
-                        l.bg.add(word);
-                    }
-                }
-                respace(l.text, l.words);
-                Object bgText = call(native_, "getHtmlBackgroundVocalsLineText");
-                if (bgText == null) {
-                    bgText = call(native_, "getHtmlBackgroundVocalsLineText", false);
-                }
-                respace(html(str(bgText)), l.bg);
-                if (l.text != null && !l.text.isEmpty()) {
-                    out.add(l);
-                }
+                l.text = reconcile(html(str(call(row, "getHtmlLineText"))), l.words, l.end);
+                String bgText = clean(html(str(call(row, "getHtmlBackgroundVocalsLineText"))));
+                if (bgText == null) bgText = html(str(call(row, "getHtmlBackgroundVocalsLineText", false)));
+                l.bgText = reconcile(bgText, l.bg, l.end);
+                if (l.text.isEmpty() && l.bgAgent == null) l.bgAgent = l.agent;
+                l.translation = clean(html(str(call(row, "getHtmlTranslationLineText"))));
+                if (!l.text.isEmpty() || !l.bgText.isEmpty()) out.add(l);
             }
         }
         return out;
     }
 
-    /**
-     * The spaces between the words, put back from the line they were cut out of.
-     *
-     * A word arrives as bare text - "Fifty,", "fifty", "under", "ground" - and a line's words
-     * joined that way read "Fifty,fiftyfeetupunderground" (issue #29). Whether a space follows a
-     * word cannot be told from the word itself - "under" and "ground" are one word sung in two -
-     * so it is read off the line's own text, which does have them: each word is found in the line
-     * from where the last one ended, and whatever lies between is hung on the end of the word
-     * before, where every word-timed format here keeps it. A line the words cannot be found in
-     * is left as it came; from the first word that is not found on, nothing is guessed.
-     */
-    private static void respace(String line, List<Word> words) {
-        if (line == null || line.isEmpty() || words.size() < 2) {
-            return;
-        }
-        int at = 0;
-        Word prev = null;
-        for (Word w : words) {
-            int i = line.indexOf(w.text, at);
-            if (i < 0) {
-                return;
+    private static void readWords(Object vec, List<Word> out) {
+        for (Object item : vector(vec)) {
+            String text = html(str(call(item, "getHtmlLineText")));
+            if (text == null || text.isEmpty()) continue;
+            Word w = new Word();
+            Object begin = call(item, "getBegin");
+            w.begin = begin instanceof Number ? num(begin) : -1;
+            w.end = num(call(item, "getEnd"));
+            if (w.begin >= 0 && w.end <= w.begin) {
+                long duration = num(call(item, "getDuration"));
+                if (duration > 0 && duration <= Long.MAX_VALUE - w.begin) w.end = w.begin + duration;
             }
-            if (prev != null && i > at) {
-                prev.text += line.substring(at, i);
-            }
-            at = i + w.text.length();
-            prev = w;
+            w.text = text;
+            w.agent = clean(str(call(item, "getAgent")));
+            out.add(w);
         }
     }
 
-    /** How many lines carry a background vocal, for the account in the log. */
+    private static String clean(String s) {
+        if (s == null) return null;
+        String trimmed = s.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** Only a consistent word credit can stand in for a missing row or background credit. */
+    private static String sharedAgent(List<Word> words) {
+        String agent = null;
+        for (Word w : words) {
+            if (w.agent == null) continue;
+            if (agent != null && !agent.equals(w.agent)) return null;
+            agent = w.agent;
+        }
+        return agent;
+    }
+
+    /** The complete row is authoritative. Word timing survives only if it covers that text. */
+    private static String reconcile(String row, List<Word> words, long rowEnd) {
+        String text = clean(row);
+        if (text == null) {
+            StringBuilder joined = new StringBuilder();
+            for (Word w : words) joined.append(w.text);
+            text = joined.toString().trim();
+        }
+        // The row owns spacing and punctuation between the sung words. The original pieces
+        // may also carry spaces, which are needed above when there is no full row string.
+        words.removeIf(w -> clean(w.text) == null);
+        int at = 0;
+        Word previous = null;
+        for (int k = 0; k < words.size(); k++) {
+            Word w = words.get(k);
+            String token = w.text.trim();
+            int pos = text.indexOf(token, at);
+            if (w.begin < 0 || (previous != null && w.begin < previous.begin
+                    && (w.agent == null || previous.agent == null || w.agent.equals(previous.agent)))
+                    || pos < 0 || !separator(text, at, pos)) {
+                words.clear();
+                return text;
+            }
+            if (w.end <= w.begin) {
+                long next = k + 1 < words.size() ? words.get(k + 1).begin : rowEnd;
+                if (next <= w.begin) {
+                    words.clear();
+                    return text;
+                }
+                w.end = next;
+            }
+            if (previous == null) w.text = text.substring(0, pos) + token;
+            else {
+                previous.text += text.substring(at, pos);
+                w.text = token;
+            }
+            at = pos + token.length();
+            previous = w;
+        }
+        if (previous != null) {
+            if (separator(text, at, text.length())) previous.text += text.substring(at);
+            else words.clear();
+        }
+        return text;
+    }
+
+    private static boolean separator(String text, int from, int until) {
+        for (int i = from; i < until;) {
+            int cp = text.codePointAt(i);
+            int type = Character.getType(cp);
+            if (!Character.isWhitespace(cp) && !Character.isSpaceChar(cp)
+                    && type != Character.CONNECTOR_PUNCTUATION && type != Character.DASH_PUNCTUATION
+                    && type != Character.START_PUNCTUATION && type != Character.END_PUNCTUATION
+                    && type != Character.INITIAL_QUOTE_PUNCTUATION && type != Character.FINAL_QUOTE_PUNCTUATION
+                    && type != Character.OTHER_PUNCTUATION) return false;
+            i += Character.charCount(cp);
+        }
+        return true;
+    }
+
     /**
      * Every line at the same moment and no word timed: Apple's unsynced lyric. A getter this
      * build does not have reads as 0 too (see num), which is the same lyric to a lock screen.
@@ -359,7 +418,7 @@ public final class AppleLyrics {
         if (lines.size() < 2) return false;
         long first = lines.get(0).begin;
         for (Line l : lines) {
-            if (l.begin != first || !l.words.isEmpty()) return false;
+            if (l.begin != first || !l.words.isEmpty() || !l.bg.isEmpty()) return false;
         }
         return true;
     }
@@ -367,7 +426,7 @@ public final class AppleLyrics {
     private static int bgLines(List<Line> lines) {
         int n = 0;
         for (Line l : lines) {
-            if (!l.bg.isEmpty()) {
+            if (!l.bgText.isEmpty()) {
                 n++;
             }
         }
@@ -392,62 +451,54 @@ public final class AppleLyrics {
      * third voice would have to share one of them - so anything past the second is left on the
      * default side rather than being given a side at random.
      */
-    private static List<String> readVoices(Object song, List<Line> lines) {
-        List<String> out = new ArrayList<>();
-        List<Object> agents = vector(call(song, "getAgents"));
-        for (Object a : agents) {
-            if (!person(call(a, "getType"))) {
-                continue;
-            }
-            String id = str(call(a, "getId"));
-            if (id != null && !id.isEmpty()) {
-                out.add(id);
-                break;
-            }
-        }
-        for (Object a : agents) {
-            Object type = call(a, "getType");
-            if (group(type)) {
-                continue;
-            }
-            String id = str(call(a, "getId"));
-            if (id == null || id.isEmpty() || out.contains(id) || !sings(id, lines)) {
-                continue;
-            }
-            if (out.isEmpty()) {
-                out.add(id);
-            } else {
-                out.add(id);
-                break;
+    static List<String> readVoices(Object song, List<Line> lines) {
+        List<String> voices = new ArrayList<>(2);
+        Set<String> declared = new LinkedHashSet<>();
+        Set<String> groups = new LinkedHashSet<>();
+        for (Object a : vector(call(song, "getAgents"))) {
+            String id = clean(str(call(a, "getId")));
+            if (id == null) continue;
+            Object type = agentType(a);
+            if (group(type)) groups.add(id);
+            else {
+                declared.add(id);
+                if (voices.isEmpty() && person(type)) voices.add(id);
             }
         }
-        return out;
-    }
-
-    /** Whether any line is credited to this agent. */
-    private static boolean sings(String id, List<Line> lines) {
+        Set<String> leads = new LinkedHashSet<>(), backs = new LinkedHashSet<>();
         for (Line l : lines) {
-            if (id.equals(l.agent)) {
-                return true;
+            if (!l.text.isEmpty()) {
+                if (l.agent != null) leads.add(l.agent);
+                else for (Word w : l.words) if (w.agent != null) leads.add(w.agent);
+            }
+            if (!l.bgText.isEmpty() && l.bgAgent != null) backs.add(l.bgAgent);
+        }
+        // Without declarations, explicit v1/v2 retain their author-defined identities
+        // even when the second vocalist sings the opening verse.
+        if (voices.isEmpty() && !groups.contains("v1") && (leads.contains("v1") || leads.contains("v2"))) {
+            voices.add("v1");
+        }
+        for (Set<String> credits : java.util.Arrays.asList(leads, backs)) {
+            Set<String> candidates = new LinkedHashSet<>(declared);
+            candidates.addAll(credits);
+            for (String id : candidates) {
+                if (voices.size() == 2) return voices;
+                if (credits.contains(id) && !voices.contains(id) && !groups.contains(id)
+                        && id.chars().noneMatch(Character::isWhitespace)) voices.add(id);
             }
         }
-        return false;
+        return voices;
     }
 
-    /**
-     * Whether an agent is a group - the band, or everyone together - however the build says so.
-     *
-     * Only the enum's name is known (the vector hands over enums, measured). A number is a build
-     * this has not seen, and there only a person counts, which is how voices were read before.
-     */
+    private static Object agentType(Object agent) {
+        Object type = call(agent, "getType_");
+        return type != null ? type : call(agent, "getType");
+    }
+
+    /** Native numeric tags on this model include PERSON=1, GROUP=3, and OTHER=5. */
     private static boolean group(Object type) {
-        if (type == null) {
-            return false;
-        }
-        if (type instanceof Number) {
-            return ((Number) type).longValue() != AGENT_PERSON;
-        }
-        return "Group".equalsIgnoreCase(type.toString().trim());
+        return type instanceof Number ? ((Number) type).longValue() == 3L
+                : type != null && "Group".equalsIgnoreCase(type.toString().trim());
     }
 
     /**
@@ -480,7 +531,7 @@ public final class AppleLyrics {
         sb.append(" size=").append(size);
         for (Object a : vector(v)) {
             sb.append(" {").append(a.getClass().getSimpleName())
-                    .append(" type=").append(call(a, "getType"))
+                    .append(" type=").append(agentType(a))
                     .append(" id=").append(call(a, "getId"))
                     .append('}');
         }
@@ -531,11 +582,12 @@ public final class AppleLyrics {
         return out;
     }
 
-    private static final class Line {
+    static final class Line {
         long begin;
         long end;
         String text;
         String translation;
+        String bgText, bgAgent;
         /** Which voice sings it, as Apple's own agent id. Null on a song with one singer. */
         String agent;
         /** The background vocal sung over this line, word by word. Empty for most lines. */
@@ -550,6 +602,7 @@ public final class AppleLyrics {
     }
 
     private static final class Word {
+        String agent;
         long begin;
         long end;
         String text;
@@ -565,7 +618,7 @@ public final class AppleLyrics {
      * and translation is a plain LRC of the translated lines. A song Apple has no word timings
      * for simply gets no rawLyric, and the line-timed copy is what shows.
      */
-    private static String payload(String id, List<Line> lines, List<String> voices) {
+    static String payload(String id, List<Line> lines, List<String> voices) {
         StringBuilder plain = new StringBuilder();
         StringBuilder word = new StringBuilder();
         StringBuilder trans = new StringBuilder();
@@ -573,13 +626,15 @@ public final class AppleLyrics {
         boolean anyTrans = false;
         for (Line l : lines) {
             String stamp = stamp(l.begin);
-            plain.append(stamp).append(l.text).append('\n');
+            String visible = l.text.isEmpty() ? l.bgText : l.text;
+            List<Word> timed = l.text.isEmpty() ? l.bg : l.words;
+            plain.append(stamp).append(visible).append('\n');
             word.append(stamp);
-            if (l.words.isEmpty()) {
-                word.append(l.text);
+            if (timed.isEmpty()) {
+                word.append(visible);
             } else {
                 anyWords = true;
-                for (Word w : l.words) {
+                for (Word w : timed) {
                     word.append('<').append(bare(w.begin)).append('>').append(w.text);
                 }
                 // The line's own end, so the last syllable has somewhere to stop. Without it a
@@ -616,7 +671,7 @@ public final class AppleLyrics {
         // if the parse of it ever fails the lines above are still a whole lyric.
         boolean anyBg = false;
         for (Line l : lines) {
-            if (!l.bg.isEmpty()) {
+            if (!l.bgText.isEmpty()) {
                 anyBg = true;
                 break;
             }
@@ -641,40 +696,38 @@ public final class AppleLyrics {
         sb.append("<tt xmlns=\"http://www.w3.org/ns/ttml\" ")
                 .append("xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\">")
                 .append("<head><metadata>");
-        for (int i = 0; i < voices.size() && i < 2; i++) {
+        for (int i = 0; i < Math.max(1, voices.size()); i++) {
             sb.append("<ttm:agent type=\"person\" xml:id=\"v").append(i + 1).append("\"/>");
         }
         sb.append("</metadata></head><body><div>");
         for (Line l : lines) {
-            String v = "v1";
-            if (l.agent != null && voices.size() >= 2 && l.agent.equals(voices.get(1))) {
-                v = "v2";
-            }
             sb.append("<p begin=\"").append(clock(l.begin)).append("\" end=\"")
-                    .append(clock(l.end)).append("\" ttm:agent=\"").append(v).append("\">");
+                    .append(clock(l.end)).append("\" ttm:agent=\"").append(voice(l.agent, voices)).append("\">");
             if (l.words.isEmpty()) {
-                sb.append(xml(l.text));
+                // lyrics-core only retains bare paragraph text when there is no timed child.
+                if (!l.text.isEmpty() && !l.bgText.isEmpty()) span(sb, l.text, l.begin, l.end, null);
+                else sb.append(xml(l.text));
             } else {
                 for (Word w : l.words) {
-                    sb.append("<span begin=\"").append(clock(w.begin)).append("\" end=\"")
-                            .append(clock(w.end)).append("\">").append(xml(w.text))
-                            .append("</span>");
+                    String singer = l.agent == null && w.agent != null ? voice(w.agent, voices) : null;
+                    span(sb, w.text, w.begin, w.end, singer);
                 }
             }
             // The background vocal, as the nested x-bg span the format reserves for it. The
             // parser turns this into a line of its own and the renderer hangs it under the line
             // it overlaps, smaller - so it must not be written as ordinary syllables, which
             // would put the echo in the main line's own text.
-            if (!l.bg.isEmpty()) {
-                Word first = l.bg.get(0);
-                Word last = l.bg.get(l.bg.size() - 1);
-                sb.append("<span ttm:role=\"x-bg\" begin=\"").append(clock(first.begin))
-                        .append("\" end=\"").append(clock(last.end)).append("\">");
-                for (Word w : l.bg) {
-                    sb.append("<span begin=\"").append(clock(w.begin)).append("\" end=\"")
-                            .append(clock(w.end)).append("\">").append(xml(w.text))
-                            .append("</span>");
+            if (!l.bgText.isEmpty()) {
+                long start = l.bg.isEmpty() ? l.begin : l.bg.get(0).begin;
+                long end = l.bg.isEmpty() ? l.end : l.bg.get(l.bg.size() - 1).end;
+                sb.append("<span ttm:role=\"x-bg\"");
+                if (l.bgAgent != null) {
+                    sb.append(" ttm:agent=\"").append(voice(l.bgAgent, voices)).append("\"");
                 }
+                sb.append(" begin=\"").append(clock(start)).append("\" end=\"").append(clock(end)).append("\">");
+                // A background without timed children is discarded by lyrics-core 0.4.7.
+                if (l.bg.isEmpty()) span(sb, l.bgText, start, end, null);
+                else for (Word w : l.bg) span(sb, w.text, w.begin, w.end, null);
                 sb.append("</span>");
             }
             if (l.translation != null && !l.translation.isEmpty()) {
@@ -684,6 +737,16 @@ public final class AppleLyrics {
             sb.append("</p>");
         }
         return sb.append("</div></body></tt>").toString();
+    }
+
+    private static String voice(String id, List<String> voices) {
+        return voices.size() >= 2 && voices.get(1).equals(id) ? "v2" : "v1";
+    }
+
+    private static void span(StringBuilder sb, String text, long begin, long end, String voice) {
+        sb.append("<span begin=\"").append(clock(begin)).append("\" end=\"").append(clock(end)).append('"');
+        if (voice != null) sb.append(" ttm:agent=\"").append(voice).append('"');
+        sb.append('>').append(xml(text)).append("</span>");
     }
 
     /** TTML's clock time, written in full so nothing has to guess which fields were left out. */
@@ -802,7 +865,7 @@ public final class AppleLyrics {
                     .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
                     .replace("&nbsp;", " ");
         }
-        return out.trim();
+        return out;
     }
 
     // ---------------------------------------------------------------- publishing

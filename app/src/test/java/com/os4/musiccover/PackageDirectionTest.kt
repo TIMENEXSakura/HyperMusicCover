@@ -32,10 +32,10 @@ class PackageDirectionTest {
 
     private val features = setOf("immersive", "island", "lyrics", "pickup", "shade", "transit")
 
-    /** Shared contracts and pure lyric appearance/format utilities; none loads a host feature. */
+    /** Shared contracts, display capability checks and pure lyric helpers. None loads a host feature. */
     private val contracts = setOf("R", "BuildConfig", "SettingSpec", "HotReloadPolicy", "LogLevel",
         "ProbeGuard", "LauncherIcon", "lyrics.LyricAppearance", "lyrics.LyricPalette",
-        "lyrics.LocalLyricFormat", "lyrics.LyricExitWipe")
+        "lyrics.LocalLyricFormat", "lyrics.LyricExitWipe", "lyrics.HdrDisplay")
 
     private val importLine =
         Regex("""^\s*import\s+(?:static\s+)?com\.os4\.musiccover\.([A-Za-z0-9_.]+)""")

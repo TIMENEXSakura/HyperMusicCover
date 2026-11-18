@@ -205,7 +205,7 @@
     <string name="lyrics_clock_independent">歌词动画不受时钟遮挡</string>
     <string name="lyrics_clock_independent_summary">胶囊歌词整组动画不随时钟移动而被裁切</string>
     <string name="lyrics_roma">显示罗马音</string>
-    <string name="lyrics_style_title">歌词外观调整</string>
+    <string name="lyrics_style_title">歌词颜色</string>
     <string name="lyrics_style_general">通用</string>
     <string name="lyrics_style_text">文字</string>
     <string name="lyrics_size">字号</string>

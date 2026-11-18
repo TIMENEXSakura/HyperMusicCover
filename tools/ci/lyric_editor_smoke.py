@@ -76,7 +76,7 @@ def dismiss_launcher_anr(root):
 
 def locate(options, scroll=False, bottom_tab=False):
     last_labels = []
-    for index in range(12):
+    for index in range(22 if scroll else 12):
         try:
             root = tree()
         except (ValueError, subprocess.TimeoutExpired):
@@ -99,7 +99,7 @@ def locate(options, scroll=False, bottom_tab=False):
                     continue
                 return bounds(node)
         if scroll and index >= 1:
-            shell("input", "swipe", 430, 1820, 430, 1020, 320)
+            swipe("up" if scroll == "up" else "down")
         time.sleep(0.5)
     raise AssertionError(f"Could not locate {options} in {activity()}: {list(filter(None, last_labels))}")
 
@@ -122,13 +122,39 @@ def start_main():
         raise AssertionError(result)
 
 
-def open_editor():
+def swipe(direction):
+    # Swipe along the page margin so a horizontal preference slider cannot take the gesture.
+    start, end = (1840, 1010) if direction == "down" else (1010, 1840)
+    shell("input", "swipe", 1050, start, 1050, end, 380)
+    time.sleep(0.25)
+
+
+def open_lyrics_tab():
     start_main()
     tap(labels("tab_features"), bottom_tab=True)
     tap(labels("features_cover_title"), scroll=True)
     tap(labels("lyrics_section"), scroll=True)
-    tap(labels("lyrics_style_title"), scroll=True)
+    locate(labels("lyrics_style_title"), scroll=True)
+    assert "CoverActivity" in activity(), activity()
+
+
+def enter_editor():
+    tap(labels("lyrics_style_title"), scroll="up")
+    locate(labels("lyric_editor_sample_lead"))
     assert "LyricStyleActivity" in activity(), activity()
+
+
+def return_to_lyrics():
+    shell("input", "keyevent", "KEYCODE_BACK")
+    locate(labels("lyrics_style_title"), scroll="up")
+    assert "CoverActivity" in activity(), activity()
+
+
+def editor_shot(name):
+    locate(labels("lyric_editor_sample_lead"), scroll="up")
+    swipe("up")
+    locate(labels("lyric_editor_sample_duet"))
+    shot(name)
 
 
 def seed(file, xml):
@@ -177,10 +203,10 @@ def locate_hue_bar():
     return group[len(group)//2]
 
 
-def choose_nonwhite():
+def choose_nonwhite(hue=0.58):
     y, left, right = locate_hue_bar()
     dpi = int(re.findall(r"\d+", shell("wm", "density"))[-1])
-    for index, fraction in [(0, 0.58), (1, 0.74)]:
+    for index, fraction in [(0, hue), (1, 0.74)]:
         # The pinned miuix implementation lays out 26dp sliders 12dp apart.
         center = y + round(index * (26 + 12) * dpi / 160)
         shell("input", "swipe", (left + right) // 2, center,
@@ -188,13 +214,105 @@ def choose_nonwhite():
     time.sleep(0.3)
 
 
-def wait_saved(role):
-    for _ in range(20):
+ROLES = {
+    "bg": ("lyric_editor_sample_backing", "lyrics_style_backing", .78),
+    "main": ("lyric_editor_sample_lead", "lyrics_style_main", .40),
+    "trans": ("lyric_editor_sample_trans", "lyrics_style_trans", .13),
+    "duet": ("lyric_editor_sample_duet", "lyric_editor_duet_voice", .60),
+}
+# Exact binary fractions avoid conflating float serialization with a changed setting.
+LEGACY = {
+    "mainMode": 2, "mainColor": -4888511, "mainOpacity": .875, "mainIntensity": .5,
+    "bgMode": 0, "bgColor": -1, "bgOpacity": .75, "bgIntensity": .625,
+    "transMode": 0, "transColor": -1, "transOpacity": .625, "transIntensity": .75,
+}
+
+
+def formatted(key, role):
+    return STRINGS[key].replace("%1$s", STRINGS[ROLES[role][1]])
+
+
+def pick(row, edited_role=None):
+    tap(labels(ROLES[row][0]), scroll="up")
+    locate([formatted("lyric_editor_adjust_color", edited_role or row)])
+    locate(labels("lyrics_style_done"))
+
+
+def wait_persisted(predicate, what):
+    for _ in range(24):
         saved = appearance()
-        if saved.get(role + "Mode") == 2 and saved.get(role + "Color", -1) != -1:
+        if predicate(saved):
             return saved
-        time.sleep(0.25)
-    raise AssertionError(f"Custom RGB for {role} was not persisted: {appearance()}")
+        time.sleep(.25)
+    raise AssertionError(f"{what}: {appearance()}")
+
+
+def semantic_field(doc, role, field):
+    source = "main" if role == "duet" and role + field not in doc else role
+    return doc[source + field]
+
+
+def check_roles(before, after, ignore=()):
+    for role in ROLES:
+        if role in ignore:
+            continue
+        for field in ("Mode", "Color", "Opacity", "Intensity"):
+            expected = semantic_field(before, role, field)
+            actual = semantic_field(after, role, field)
+            assert abs(actual - expected) < .00001, (role, field, actual, expected)
+
+
+def assert_only_colours():
+    # The editor is short. Inspect its complete list, including controls below the fold.
+    forbidden = set(labels("lyrics_enabled", "lyrics_hdr", "lyrics_align", "lyrics_trans",
+                           "lyrics_roma", "lyrics_max_lines", "lyrics_height", "lyrics_network",
+                           "lyrics_clock_independent", "lyrics_bt_sync", "lyric_editor_duet_enabled",
+                           "lyrics_size", "lyrics_weight", "lyrics_opacity"))
+    for role in ROLES:
+        for field in ("size", "weight", "opacity"):
+            forbidden.add(formatted("lyric_text_voice_" + field, role))
+    found = set()
+    last = None
+    for _ in range(8):
+        root = tree()
+        nodes = tuple((n.get("text", ""), n.get("content-desc", ""), n.get("bounds", ""))
+                      for n in root.iter("node") if n.get("package") == PKG and bounds(n))
+        for txt, desc, _ in nodes:
+            found.update(txt.splitlines())
+            found.update(desc.splitlines())
+        if nodes == last:
+            break
+        last = nodes
+        swipe("down")
+    assert STRINGS["lyrics_color"] in found, found
+    assert not (forbidden & found), f"Non-colour settings in colour editor: {forbidden & found}"
+    locate(labels("lyric_editor_sample_lead"), scroll="up")
+
+
+def check_main_settings():
+    # Follow the actual order so every long-list lookup starts above the requested control.
+    locate(labels("lyric_editor_duet_enabled"), scroll=True)
+    shot("lyrics-settings")
+    locate(labels("lyrics_network"), scroll=True)
+    locate(labels("lyrics_max_lines"), scroll=True)
+    for role in ("main", "bg", "trans"):
+        for field in ("size", "weight", "opacity"):
+            locate([formatted("lyric_text_voice_" + field, role)], scroll=True)
+    locate([formatted("lyric_text_voice_opacity", "duet")], scroll=True)
+    shot("lyrics-typography")
+    for key in ("lyrics_height", "lyrics_clock_independent", "lyrics_bt_sync",
+                "lyrics_align", "lyrics_trans", "lyrics_roma", "lyrics_hdr"):
+        locate(labels(key), scroll=True)
+    locate(labels("lyrics_style_title"), scroll="up")
+
+
+def set_duet(enabled):
+    before = appearance()
+    assert before.get("duetEnabled", True) != enabled, before
+    tap(labels("lyric_editor_duet_enabled"), scroll=True)
+    after = wait_persisted(lambda doc: doc.get("duetEnabled") is enabled, "Duet switch")
+    check_roles(before, after)
+
 
 
 def run():
@@ -213,52 +331,72 @@ def run():
     seed("shared_prefs/app_prefs.xml", '<map><string name="language_code">zh-CN</string></map>')
     # A fresh installation can try the editor before the first SystemUI settings migration.
     adb("logcat", "-c")
-    open_editor()
-    tap(labels("lyric_editor_sample_lead"))
-    locate(labels("lyrics_style_done"))
+    open_lyrics_tab()
+    enter_editor()
+    pick("main")
     choose_nonwhite()
     tap(labels("lyrics_style_done"))
     assert appearance() == {}, "Preview-only editing wrote an activation-free preference"
     tap(labels("lyric_editor_replay"), scroll=True)
-    shot("editor-preview-only")
+    editor_shot("editor-preview-only")
     shell("am", "force-stop", PKG)
-    seed(DE, '<map><boolean name="_migrated" value="true"/></map>')
-    open_editor()
-    shot("editor-light")
-    for role, key in [("main", "lyric_editor_sample_lead"), ("trans", "lyric_editor_sample_trans"),
-                      ("bg", "lyric_editor_sample_backing")]:
+    prefs = ET.Element("map")
+    ET.SubElement(prefs, "boolean", name="_migrated", value="true")
+    ET.SubElement(prefs, "string", name="lyricappearance").text = json.dumps(LEGACY)
+    seed(DE, ET.tostring(prefs, encoding="unicode"))
+    open_lyrics_tab()
+    check_main_settings()
+    enter_editor()
+    editor_shot("editor-light")
+    assert_only_colours()
+
+    # Materialise the old document through a backing edit first: duet inherits the
+    # old main colour, then each later edit has four explicit independent roles.
+    for role, (_, _, hue) in ROLES.items():
         before = appearance()
-        tap(labels(key))
-        locate(labels("lyrics_style_done"))
+        pick(role)
         if role == "main":
             shot("native-colour-picker")
-        choose_nonwhite()
-        if role == "main":
+            choose_nonwhite(hue)
             tap(labels("rules_cancel"))
             assert appearance() == before, "Cancel persisted the draft"
-            tap(labels(key))
-            locate(labels("lyrics_style_done"))
-            choose_nonwhite()
+            pick(role)
+        choose_nonwhite(hue)
         tap(labels("lyrics_style_done"))
-        saved = wait_saved(role)
-        for other in {"main", "trans", "bg"} - {role}:
-            for field, default in [("Mode", 0), ("Color", -1)]:
-                assert saved.get(other + field, default) == before.get(other + field, default), (role, other, field)
-        print(f"Saved {role} only", flush=True)
+        saved = wait_persisted(lambda doc: doc.get(role + "Mode") == 2
+                              and doc.get(role + "Color", -1) not in (-1, semantic_field(before, role, "Color")),
+                              f"Edited RGB for {role}")
+        check_roles(before, saved, ignore=(role,))
+        assert abs(saved[role + "Opacity"] - semantic_field(before, role, "Opacity")) < .00001
+        if role == "bg":
+            assert all("duet" + field in saved for field in ("Mode", "Color", "Opacity", "Intensity")), saved
+        print(f"Verified {role} colour and peer voices", flush=True)
+
     final = appearance()
-    shot("editor-edited")
-    shell("input", "keyevent", "KEYCODE_BACK")
-    locate(labels("lyrics_style_title"))
-    assert "CoverActivity" in activity(), activity()
+    assert len({final[role + "Color"] for role in ROLES}) == 4, final
+    editor_shot("editor-edited")
+    return_to_lyrics()
+    set_duet(False)
+    enter_editor()
+    pick("duet", edited_role="main")
+    tap(labels("rules_cancel"))
+    editor_shot("editor-duet-off")
+    return_to_lyrics()
+    set_duet(True)
+    enter_editor()
+    pick("duet")
+    tap(labels("rules_cancel"))
+    assert appearance() == final, "Switching the duet off and on changed its configured colour"
     shell("am", "force-stop", PKG)
     shell("cmd", "uimode", "night", "yes")
-    open_editor()
-    locate(labels("lyric_editor_sample_lead"))
+    open_lyrics_tab()
+    enter_editor()
+    editor_shot("editor-dark")
     assert appearance() == final, "Opening in dark mode lost settings"
-    shot("editor-dark")
     (OUT / "verified.json").write_text(json.dumps({
-        "commit": os.environ.get("GITHUB_SHA"), "roles": ["main", "trans", "bg"],
+        "commit": os.environ.get("GITHUB_SHA"), "roles": list(ROLES),
         "cancelVerified": True, "coldStartVerified": True, "unmigratedPreviewVerified": True,
+        "legacyThreeVoiceUpgrade": True, "duetSwitchBothWays": True, "mainSettingsPlacement": True,
         "fixture": "Migrated device-protected app preferences on AOSP; no SystemUI host",
     }, indent=2))
 

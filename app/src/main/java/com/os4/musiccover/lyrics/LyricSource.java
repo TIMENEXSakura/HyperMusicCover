@@ -282,6 +282,7 @@ public final class LyricSource {
     /** The one payload fetched by reference, and the reference asked for last and when. */
     private static final Object REF_LOCK = new Object();
     private static String sRefHeld;
+    private static android.media.session.MediaSession.Token sRefHeldToken, sRefAskedToken;
     private static String sRefPayload;
     private static String sRefAsked;
     private static long sRefAskedAt;
@@ -295,14 +296,16 @@ public final class LyricSource {
      */
     private static String byRef(MediaController c, final String ref) {
         long now = android.os.SystemClock.uptimeMillis();
+        final android.media.session.MediaSession.Token token = c.getSessionToken();
         synchronized (REF_LOCK) {
-            if (ref.equals(sRefHeld)) {
+            if (ref.equals(sRefHeld) && token.equals(sRefHeldToken)) {
                 return sRefPayload;
             }
-            if (ref.equals(sRefAsked) && now - sRefAskedAt < REF_RETRY_MS) {
+            if (ref.equals(sRefAsked) && token.equals(sRefAskedToken) && now - sRefAskedAt < REF_RETRY_MS) {
                 return null;
             }
             sRefAsked = ref;
+            sRefAskedToken = token;
             sRefAskedAt = now;
         }
         final String pkg = c.getPackageName();
@@ -317,6 +320,8 @@ public final class LyricSource {
                     return;
                 }
                 synchronized (REF_LOCK) {
+                    if (!ref.equals(sRefAsked) || !token.equals(sRefAskedToken)) return;
+                    sRefHeldToken = token;
                     sRefHeld = ref;
                     sRefPayload = payload;
                 }
@@ -325,6 +330,33 @@ public final class LyricSource {
             }
         });
         return null;
+    }
+
+    /** Only our Apple hook publishes a payload under this catalogue id and reference. */
+    @android.annotation.SuppressLint("WrongConstant")
+    static String appleVoiceRef(MediaController c, String id) {
+        if (c == null || !AppleDuetRows.PLAYER.equals(c.getPackageName())) return null;
+        try {
+            MediaMetadata md = c.getMetadata();
+            if (md == null || !id.equals(md.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))) return null;
+            String ref = md.getString(KEY_LYRIC_REF);
+            return ref != null && ref.startsWith(id + "#") ? ref : null;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    static String appleVoicePayload(MediaController c, AppleDuetRows rows, String ref) {
+        synchronized (REF_LOCK) {
+            if (ref.equals(sRefHeld) && c.getSessionToken().equals(sRefHeldToken)) return sRefPayload;
+        }
+        if (ref.equals(rows.requestedRef)) return null;
+        rows.requestedRef = ref;
+        try {
+            return byRef(c, ref);
+        } catch (RuntimeException ignored) {
+            return null; // The session may have closed since it advertised the reference.
+        }
     }
 
     /** LRC-style timing, bracketed with [] or <>. <> is the word-level (enhanced) form. */
@@ -935,7 +967,11 @@ public final class LyricSource {
                 // A translation left on the line itself by its tag writer (#95) is hung on the
                 // line before anything reads it: borrow() must see it and not go and fetch a
                 // second one, and the layout must draw it as a translation.
-                r.lines = LyricParse.splitInlineTranslations(r.lines);
+                if (r.lines instanceof AppleDuetRows) {
+                    r.lines = ((AppleDuetRows) r.lines).splitTranslations();
+                } else {
+                    r.lines = LyricParse.splitInlineTranslations(r.lines);
+                }
                 Xp.log("[MCLyric] " + pkg + " -> " + r.why);
                 Main.main().post(() -> {
                     if (!superseded(gen) && policy == LyricSourcePolicy.current()) cb.onLines(r.lines, r.why, r.source);

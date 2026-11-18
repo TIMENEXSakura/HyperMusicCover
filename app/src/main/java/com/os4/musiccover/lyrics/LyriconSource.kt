@@ -332,7 +332,9 @@ object LyriconSource {
             }
         }
         if (!connected()) return null
-        val rich = song!!.lyrics
+        val selectedSong = song ?: return null
+        val selectedPlayer = sPlayer
+        val rich = selectedSong.lyrics
         if (rich.isNullOrEmpty()) return null
         val out = ArrayList<LyricLine>(rich.size)
         // Where the tail of a line may run to when the bridge gave its last word no end of its
@@ -347,7 +349,12 @@ object LyriconSource {
         if (out.isEmpty()) return null
         out.sortBy { it.start }
         val lines = LyricParse.flexibleSpeakers(out, flexibleDuet)
-        return lines.takeIf { connected() && song === sSong && Settings.LYRIC_FLEX_DUET.on() == flexibleDuet }
+        if (!connected() || selectedSong !== sSong || Settings.LYRIC_FLEX_DUET.on() != flexibleDuet) return null
+        val id = selectedSong.id
+        return if (selectedPlayer == AppleDuetRows.PLAYER && selectedPlayer == player &&
+            sPlayer == selectedPlayer && !id.isNullOrBlank() && lines.none { it.voice(true) == LyricLine.Voice.DUET }) {
+            AppleDuetRows(id, lines)
+        } else lines
     }
 
     /**

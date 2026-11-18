@@ -1374,7 +1374,14 @@ public final class LockLyrics {
         // away, Apple's lyric - on the session 0.55s after the track change - waited out ten
         // seconds of catalogues that had nothing (2026-10-06, Here's to Never Growing Up).
         if (!Settings.LYRICS.on() || key.isEmpty() || sDemo) return;
-        if (!sLines.isEmpty() && !LyricSourcePolicy.current().mayReplace(policySource(sSource), "metadata")) return;
+        LyricSourcePolicy.Config policy = LyricSourcePolicy.current();
+        if (!sLines.isEmpty() && !policy.mayReplace(policySource(sSource), "metadata")) {
+            if (!sLoading && sSource == LyricSource.SRC_LYRICON && policy.permits("metadata")
+                    && sLines instanceof AppleDuetRows) {
+                supplementAppleDuet(key, c, (AppleDuetRows) sLines, policy);
+            }
+            return;
+        }
         if (sLoading && sParked == null && !sLines.isEmpty()) return;
         if (sParked != null && sParked.rereading) return;
         String info = LyricSource.infoFor(c);
@@ -1425,6 +1432,32 @@ public final class LockLyrics {
     /** What the last lookup searched for, and whether this song has been looked up again. */
     private static String sLookedUpAs;
     private static boolean sIdentityRetried;
+
+    /** Fill a Lyricon answer from its own player's voice metadata without rerunning source selection. */
+    private static void supplementAppleDuet(String key, MediaController c, AppleDuetRows rows,
+                                             LyricSourcePolicy.Config policy) {
+        String ref = LyricSource.appleVoiceRef(c, rows.getSongId());
+        if (ref == null || ref.equals(rows.checkedRef) || ref.equals(rows.pendingRef)) return;
+        String payload = LyricSource.appleVoicePayload(c, rows, ref);
+        if (payload == null) return;
+        rows.pendingRef = ref;
+        int gen = sGen;
+        Gen.thread("MCAppleDuet", () -> {
+            AppleDuetRows updated = rows.enriched(ref, payload);
+            Main.main().post(() -> {
+                if (!ref.equals(rows.pendingRef)) return;
+                rows.pendingRef = null;
+                if (sDemo || gen != sGen || sLines != rows || !key.equals(sKey)
+                        || LyricSourcePolicy.current() != policy
+                        || !ref.equals(LyricSource.appleVoiceRef(sController, rows.getSongId()))) return;
+                rows.checkedRef = ref;
+                if (updated == rows) return;
+                updated.checkedRef = ref;
+                CACHE.put(key, new Cached(updated, LyricSource.SRC_LYRICON));
+                setLines(updated, sWhy);
+            });
+        });
+    }
 
     /** How many times one song may be re-read because the session published something new. */
     private static final int MAX_INFO_TRIES = 3;

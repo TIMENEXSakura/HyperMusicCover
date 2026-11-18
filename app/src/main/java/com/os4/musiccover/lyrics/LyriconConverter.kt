@@ -6,51 +6,33 @@ import io.github.proify.lyricon.lyric.model.RichLyricLine
 /** Android-independent conversion of the main and secondary tracks received over Lyricon. */
 internal object LyriconConverter {
     fun convert(line: RichLyricLine, nextStart: Int, flexible: Boolean = Settings.LYRIC_FLEX_DUET.on()): LyricLine? {
-        val text = line.text?.trim().orEmpty()
-        val words = line.words?.takeIf { words -> words.all {
+        val words = line.words.orEmpty().filter { !it.text.isNullOrBlank() }
+        val published = line.text?.trim().orEmpty()
+        val joined = line.words.orEmpty().joinToString("") { it.text.orEmpty() }.trim()
+        val text = published.ifEmpty { joined }
+        val begin = line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        val end = line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        // The line and its timed words travel separately. Some providers time only a
+        // prefix. Keep the published lyric intact, and use timing only when it covers it.
+        val offsets = if (words.isNotEmpty() && words.all {
             it.begin in 0L..Int.MAX_VALUE.toLong() && it.end in 0L..Int.MAX_VALUE.toLong()
-        } }
-        var built: LyricLine? = null
-        if (!words.isNullOrEmpty()) {
-            val sb = StringBuilder()
-            val starts = ArrayList<Int>(words.size)
-            val ends = ArrayList<Int>(words.size)
-            val chars = ArrayList<Int>(words.size)
-            for (w in words) {
-                val t = w.text ?: continue
-                if (t.isEmpty()) continue
-                sb.append(t)
-                starts.add(w.begin.toInt())
-                // A word with no end of its own is left to the tail-closing pass below, which is
-                // the same thing every other word-timed source here needs.
-                ends.add(if (w.end > w.begin) w.end.toInt() else w.begin.toInt())
-                chars.add(sb.length)
-            }
-            var n = sb.length
-            while (n > 0 && sb[n - 1].isWhitespace()) n--
-            if (n > 0 && starts.isNotEmpty()) {
-                for (k in chars.indices) if (chars[k] > n) chars[k] = n
-                val s = starts.toIntArray()
-                val e = ends.toIntArray()
-                LyricParse.closeUntimedTail(s, e, line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), nextStart)
-                built = LyricLine(sb.substring(0, n), line.translation,
-                    LyricParse.romaOf(line.roma, sb.substring(0, n)), line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
-                    line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.isAlignedRight, s, e, chars.toIntArray())
-            }
+        }) LyriconBackground.mapWords(text, words.map { it.text.orEmpty() }) else null
+        val built = if (text.isEmpty()) null else {
+            val starts = offsets?.let { IntArray(words.size) { words[it].begin.toInt() } }
+            val ends = offsets?.let { IntArray(words.size) { maxOf(words[it].begin, words[it].end).toInt() } }
+            if (starts != null && ends != null) LyricParse.closeUntimedTail(starts, ends, end, nextStart)
+            LyricLine(text, line.translation, LyricParse.romaOf(line.roma, text), begin, end,
+                line.isAlignedRight, starts, ends, offsets)
         }
         val backing = LyriconBackground.convert(line, nextStart, flexible)
-        if (built == null && text.isEmpty()) {
+        if (built == null) {
             if (backing == null) return null
             return LyricLine(backing.text, line.translation, backing.roma, backing.start,
-                backing.end, backing.opposite, backing.sylStart, backing.sylEnd, backing.charEnd)
-        }
-        if (built == null) {
-            built = LyricLine(text, line.translation, LyricParse.romaOf(line.roma, text),
-                line.begin.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.end.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), line.isAlignedRight, null, null, null)
+                backing.end, backing.opposite, backing.sylStart, backing.sylEnd, backing.charEnd).asBacking()
         }
         // The background vocal, which the renderer hangs under the line rather than beside it.
         if (backing != null) built.addBackground(backing)
-        return built.takeIf { it.text.isNotEmpty() || it.backgrounds().isNotEmpty() }
+        return built
     }
 
 }

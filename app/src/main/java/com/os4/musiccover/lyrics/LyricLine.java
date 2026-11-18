@@ -29,6 +29,26 @@ public final class LyricLine {
     final int[] sylEnd;
     final int[] charEnd;
 
+    enum Voice { LEAD, DUET, BACKING }
+
+    // A provider can return a paragraph containing only a backing vocal. It occupies a
+    // top-level layout slot, but its singer and colour still belong to the backing track.
+    private boolean backing;
+
+    LyricLine asBacking() {
+        backing = true;
+        return this;
+    }
+
+    Voice voice(boolean distinguishDuet) {
+        if (backing) return Voice.BACKING;
+        return distinguishDuet && opposite ? Voice.DUET : Voice.LEAD;
+    }
+
+    boolean oppositeSide(boolean distinguishDuet) {
+        return opposite && (distinguishDuet || backing);
+    }
+
     private static final LyricLine[] NONE = new LyricLine[0];
 
     /**
@@ -46,7 +66,7 @@ public final class LyricLine {
     /** Hangs a background vocal under this line; one that outlasts the line extends it. */
     void addBackground(LyricLine b) {
         LyricLine[] next = java.util.Arrays.copyOf(backgrounds, backgrounds.length + 1);
-        next[backgrounds.length] = b;
+        next[backgrounds.length] = b.asBacking();
         backgrounds = next;
         if (b.end > end) end = b.end;
     }
@@ -54,6 +74,7 @@ public final class LyricLine {
     /** The same background vocals as from, for a copy of it with other text. */
     void copyBackgrounds(LyricLine from) {
         backgrounds = from.backgrounds;
+        backing = from.backing;
     }
 
     public LyricLine(String text, String translation, int start, int end, boolean opposite,

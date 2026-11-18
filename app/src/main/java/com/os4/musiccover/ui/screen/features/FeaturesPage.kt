@@ -31,6 +31,7 @@ import com.os4.musiccover.app.ShadeActivity
 import com.os4.musiccover.app.MiniPlayerActivity
 import com.os4.musiccover.app.TransitActivity
 import com.os4.musiccover.app.FpQuickActivity
+import com.os4.musiccover.lyrics.HdrDisplay
 import com.os4.musiccover.app.LyricStyleActivity
 import com.os4.musiccover.app.SettingsStore
 import com.os4.musiccover.ui.component.SettingsNotices
@@ -194,6 +195,7 @@ internal fun CoverPageView(
     // master switch says nothing rather than flashing the hint on every visit.
     var asked by remember { mutableStateOf(false) }
     LaunchedEffect(refreshKey, lost) {
+        module = SettingsStore.overlay(module)
         module = ModuleBridge.queryAlive(context)
         asked = true
     }
@@ -318,10 +320,7 @@ internal fun CoverPageView(
                             ClockGroup(enabled, module.coverFeature, module) { module = it }
                         }
                         1 -> CardGroup(enabled, module) { module = it }
-                        else -> ArrowPreference(
-                            title = stringResource(R.string.lyrics_style_title),
-                            onClick = { context.startActivity(Intent(context, LyricStyleActivity::class.java)) },
-                        )
+                        else -> LyricsGroup(enabled, module) { module = it }
                     }
                 }
             }
@@ -470,7 +469,7 @@ private fun ClockGroup(
 }
 
 @Composable
-internal fun LyricPlaybackSettings(
+private fun LyricsGroup(
     enabled: Boolean,
     module: ModuleBridge.State,
     onChange: (ModuleBridge.State) -> Unit,
@@ -514,6 +513,11 @@ internal fun LyricPlaybackSettings(
             ),
             summary = stringResource(summary),
         )
+        ArrowPreference(
+            title = stringResource(R.string.lyrics_style_title),
+            onClick = { context.startActivity(Intent(context, LyricStyleActivity::class.java)) },
+        )
+        DuetVoiceSwitch(enabled, module, onChange)
         // How the lock screen is asked for the cover instead while the switch above is on. A row
         // rather than a summary on one of the switches below: none of them is about the cover,
         // and this is not a description of any of them.
@@ -538,6 +542,7 @@ internal fun LyricPlaybackSettings(
                         ModuleBridge.setLyricsMaxLines(context, count)
                     },
                 )
+                LyricTextSettings(enabled, module, onChange)
                 var heightDraft by remember(module.lyricFill) { mutableIntStateOf((module.lyricFill * 100).roundToInt()) }
                 ValueSlider(
                     title = stringResource(R.string.lyrics_height),
@@ -613,6 +618,30 @@ internal fun LyricPlaybackSettings(
                         },
                     )
                 }
+                val alignModes = listOf(
+                    stringResource(R.string.lyrics_align_left),
+                    stringResource(R.string.lyrics_align_center),
+                    stringResource(R.string.lyrics_align_right),
+                )
+                WindowDropdownPreference(
+                    title = stringResource(R.string.lyrics_align),
+                    items = alignModes,
+                    selectedIndex = module.lyricsAlign.coerceIn(0, alignModes.lastIndex),
+                    enabled = enabled,
+                    onSelectedIndexChange = {
+                        onChange(module.copy(lyricsAlign = it))
+                        ModuleBridge.setLyricsAlign(context, it)
+                    },
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.lyrics_trans),
+                    checked = module.lyricsTrans,
+                    enabled = enabled,
+                    onCheckedChange = {
+                        onChange(module.copy(lyricsTrans = it))
+                        ModuleBridge.setLyricsTrans(context, it)
+                    },
+                )
                 SwitchPreference(
                     title = stringResource(R.string.lyrics_flexible_duet),
                     summary = stringResource(R.string.lyrics_flexible_duet_summary),
@@ -621,6 +650,28 @@ internal fun LyricPlaybackSettings(
                     onCheckedChange = {
                         onChange(module.copy(lyricFlexibleDuet = it))
                         ModuleBridge.setLyricFlexibleDuet(context, it)
+                    },
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.lyrics_roma),
+                    checked = module.lyricsRoma,
+                    enabled = enabled,
+                    onCheckedChange = {
+                        onChange(module.copy(lyricsRoma = it))
+                        ModuleBridge.setLyricsRoma(context, it)
+                    },
+                )
+                // A screen with no HDR headroom gets nothing from the highlight and would still pay
+                // for its window; SystemUI ignores the switch there, and it is shown off here.
+                val hdrScreen = remember { HdrDisplay.supported(context) }
+                SwitchPreference(
+                    title = stringResource(R.string.lyrics_hdr),
+                    summary = if (hdrScreen) null else stringResource(R.string.lyrics_hdr_unsupported),
+                    checked = module.lyricsHdr && hdrScreen,
+                    enabled = enabled && hdrScreen,
+                    onCheckedChange = {
+                        onChange(module.copy(lyricsHdr = it))
+                        ModuleBridge.setLyricsHdr(context, it)
                     },
                 )
                 SwitchPreference(

@@ -205,7 +205,7 @@
     <string name="lyrics_clock_independent">Animate lyrics independently of the clock</string>
     <string name="lyrics_clock_independent_summary">Keep clock movement from clipping the capsule lyric animation</string>
     <string name="lyrics_roma">Show romanisations</string>
-    <string name="lyrics_style_title">Adjust lyric appearance</string>
+    <string name="lyrics_style_title">Lyric colours</string>
     <string name="lyrics_style_general">General</string>
     <string name="lyrics_style_text">Text</string>
     <string name="lyrics_size">Size</string>

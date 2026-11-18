@@ -22,20 +22,21 @@ jobs:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: Test, lint, and build the release
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug -PmcVersionName=0.9.57Plus-test2 -PmcVersionCode=957002
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
       - name: Check module entry points and record artifact identity
         run: |
+          jq -e '.elements[0] | .versionName == "0.9.57" and .versionCode == 957003' app/build/outputs/apk/release/output-metadata.json
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.57Plus-test2.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.57.apk
           cd dist
-          apk=HyperMusicCover-0.9.57Plus-test2.apk
+          apk=HyperMusicCover-0.9.57.apk
           unzip -p "$apk" META-INF/xposed/java_init.list | grep -Fx 'com.os4.musiccover.Main'
           unzip -p "$apk" META-INF/xposed/scope.list | grep -Fx 'com.android.systemui'
           sha256sum "$apk" > SHA256SUMS.txt
           git rev-parse HEAD > commit.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: HyperMusicCover-0.9.57Plus-test2
+          name: HyperMusicCover-0.9.57
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -63,7 +64,7 @@ jobs:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debuggable app for isolated preference fixture
-        run: ./gradlew --no-daemon :app:assembleDebug -PmcVersionName=0.9.57Plus-test2 -PmcVersionCode=957002
+        run: ./gradlew --no-daemon :app:assembleDebug
       - name: Enable the hosted runner's virtualisation device
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
