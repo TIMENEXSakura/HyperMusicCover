@@ -151,11 +151,68 @@ def swipe(direction, short=False):
     time.sleep(0.25)
 
 
+def lyric_tab(root):
+    expected = labels("cover_clock_section", "card_section", "lyrics_section")
+    for group in root.iter("node"):
+        tabs = list(group)
+        if len(tabs) != len(expected):
+            continue
+        if not all(tab.get("package") == PKG and bounds(tab)
+                   and (tab.get("clickable") == "true" or tab.get("selected") == "true")
+                   and any(n.get("text") == name or n.get("content-desc") == name
+                           for n in tab.iter("node"))
+                   for tab, name in zip(tabs, expected)):
+            continue
+        # The animation above the tabs also says "Lock-screen lyrics". Only the
+        # three sibling controls of the horizontal tab row can satisfy this shape.
+        areas = [bounds(tab) for tab in tabs]
+        if (areas[0][0] < areas[1][0] < areas[2][0]
+                and max(a[1] for a in areas) < min(a[3] for a in areas)):
+            return tabs[-1]
+    return None
+
+
+def select_lyrics_tab():
+    markers = set(labels("lyrics_enabled", "lyrics_style_title", "lyric_editor_duet_enabled"))
+    selected_seen = False
+    for index in range(16):
+        try:
+            root = tree()
+        except (ValueError, subprocess.TimeoutExpired):
+            time.sleep(.5)
+            continue
+        if dismiss_launcher_anr(root):
+            time.sleep(.5)
+            continue
+        target = lyric_tab(root)
+        if target is not None:
+            selected_seen = target.get("selected") == "true"
+        marker_seen = any(n.get("package") == PKG and bounds(n)
+                          and n.get("text") in markers for n in root.iter("node"))
+        if selected_seen and marker_seen:
+            return
+        if target is None:
+            swipe("down" if selected_seen or index < 4 else "up")
+        elif selected_seen:
+            # The tab row can be near the bottom with the preferences below the fold.
+            swipe("down", short=True)
+        else:
+            area = bounds(target)
+            edge = edge_of_page(area, 2400)
+            if edge:
+                swipe(edge, short=True)
+                continue
+            x1, y1, x2, y2 = area
+            shell("input", "tap", (x1 + x2) // 2, (y1 + y2) // 2)
+            time.sleep(.6)
+    raise AssertionError(f"Could not confirm the selected lyrics tab and its settings in {activity()}")
+
+
 def open_lyrics_tab():
     start_main()
     tap(labels("tab_features"), bottom_tab=True)
     tap(labels("features_cover_title"), scroll=True)
-    tap(labels("lyrics_section"), scroll=True)
+    select_lyrics_tab()
     locate(labels("lyrics_style_title"), scroll=True)
     assert "CoverActivity" in activity(), activity()
 
