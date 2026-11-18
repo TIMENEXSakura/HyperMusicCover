@@ -15,7 +15,7 @@ PKG = "com.github.zyl6932.HyperMusicCover"
 MAIN = PKG + "/com.os4.musiccover.MainActivity"
 DE = f"/data/user_de/0/{PKG}/shared_prefs/settings.xml"
 OUT = Path("diagnostics")
-RES = Path("app/src/main/res/values-en")
+RES = Path("app/src/main/res/values")
 STRINGS = {entry.get("name"): "".join(entry.itertext())
            for xml in RES.glob("*.xml") for entry in ET.parse(xml).getroot().findall("string")}
 
@@ -50,42 +50,81 @@ def labels(*keys):
             else STRINGS[key] for key in keys]
 
 
-def locate(options, scroll=False):
-    for index in range(8):
+def bounds(node):
+    coordinates = list(map(int, re.findall(r"-?\d+", node.get("bounds", ""))))
+    if len(coordinates) == 4 and coordinates[2] > coordinates[0] and coordinates[3] > coordinates[1]:
+        return coordinates
+    return None
+
+
+def dismiss_launcher_anr(root):
+    title = root.find(".//node[@resource-id='android:id/alertTitle']")
+    close = root.find(".//node[@resource-id='android:id/aerr_close']")
+    if title is None or close is None or title.get("package") != "android":
+        return False
+    if title.get("text", "").replace("’", "'") != "Pixel Launcher isn't responding":
+        return False
+    area = bounds(close)
+    if area is None:
+        return False
+    ET.ElementTree(root).write(OUT / "launcher-anr.xml", encoding="utf-8")
+    print("Dismissing emulator Pixel Launcher ANR", flush=True)
+    x1, y1, x2, y2 = area
+    shell("input", "tap", (x1 + x2) // 2, (y1 + y2) // 2)
+    return True
+
+
+def locate(options, scroll=False, bottom_tab=False):
+    last_labels = []
+    for index in range(12):
         try:
             root = tree()
         except (ValueError, subprocess.TimeoutExpired):
             time.sleep(1)
             continue
+        if dismiss_launcher_anr(root):
+            time.sleep(1)
+            if bottom_tab and PKG not in activity():
+                start_main()
+            continue
+        visible_nodes = [node for node in root.iter("node") if node.get("package") == PKG and bounds(node)]
+        if bottom_tab:
+            visible_nodes.sort(key=lambda node: bounds(node)[3], reverse=True)
+        last_labels = [node.get("text") or node.get("content-desc") for node in visible_nodes]
         for option in options:
-            for node in root.iter("node"):
+            for node in visible_nodes:
                 values = [node.get("text", ""), node.get("content-desc", "")]
                 # A merged Compose button sometimes exposes the role and sample on separate lines.
                 if not any(option == line.strip() for value in values for line in value.splitlines()):
                     continue
-                coordinates = list(map(int, re.findall(r"\d+", node.get("bounds", ""))))
-                if len(coordinates) == 4 and coordinates[2] > coordinates[0] and coordinates[3] > coordinates[1]:
-                    return coordinates
+                return bounds(node)
         if scroll and index >= 1:
             shell("input", "swipe", 430, 1820, 430, 1020, 320)
         time.sleep(0.5)
-    raise AssertionError(f"Could not locate {options}")
+    raise AssertionError(f"Could not locate {options} in {activity()}: {list(filter(None, last_labels))}")
 
 
-def tap(options, scroll=False):
-    x1, y1, x2, y2 = locate(options, scroll)
+def tap(options, scroll=False, bottom_tab=False):
+    x1, y1, x2, y2 = locate(options, scroll, bottom_tab)
     shell("input", "tap", (x1 + x2) // 2, (y1 + y2) // 2)
     time.sleep(0.45)
 
 
 def activity():
     lines = shell("dumpsys", "activity", "activities").splitlines()
-    return next((line for line in lines if "topResumedActivity=" in line or "mResumedActivity:" in line), "")
+    return next((line for line in lines if "topResumedActivity=" in line or "mResumedActivity:" in line
+                 or "mResumedActivity=" in line or "ResumedActivity:" in line), "")
+
+
+def start_main():
+    result = shell("am", "start", "-W", "-n", MAIN)
+    if "Error" in result or "Exception" in result:
+        raise AssertionError(result)
 
 
 def open_editor():
-    shell("am", "start", "-W", "-n", MAIN)
-    tap(labels("tab_features"))
+    start_main()
+    tap(labels("tab_features"), bottom_tab=True)
     tap(labels("features_cover_title"), scroll=True)
     tap(labels("lyrics_section"), scroll=True)
     tap(labels("lyrics_style_title"), scroll=True)
@@ -99,7 +138,9 @@ def seed(file, xml):
 
 
 def appearance():
-    prefs = ET.fromstring(shell("run-as", PKG, "cat", DE))
+    # Before the first migration the setting may never have been written at all.
+    command = f"if test -f {shlex.quote(DE)}; then cat {shlex.quote(DE)}; else echo '<map/>'; fi"
+    prefs = ET.fromstring(shell("run-as", PKG, "sh", "-c", command))
     item = prefs.find("./string[@name='lyricappearance']")
     return json.loads(item.text) if item is not None and item.text else {}
 
@@ -169,6 +210,7 @@ def run():
     shell("cmd", "uimode", "night", "no")
     shell("am", "force-stop", PKG)
     seed("shared_prefs/app_settings.xml", '<map><boolean name="welcome_shown" value="true"/></map>')
+    seed("shared_prefs/app_prefs.xml", '<map><string name="language_code">zh-CN</string></map>')
     # A fresh installation can try the editor before the first SystemUI settings migration.
     adb("logcat", "-c")
     open_editor()
@@ -229,6 +271,9 @@ if __name__ == "__main__":
         try:
             shot("failure")
             (OUT / "crash-log.txt").write_bytes(adb("logcat", "-d", "-b", "crash"))
+            (OUT / "foreground.txt").write_text(activity())
+            (OUT / "activity-log.txt").write_bytes(adb("logcat", "-d", "-v", "brief",
+                "ActivityManager:I", "ActivityTaskManager:I", "AndroidRuntime:E", "*:S"))
         except Exception as diagnostic_error:
             print(f"Additional failure diagnostics unavailable: {diagnostic_error}", flush=True)
         raise
