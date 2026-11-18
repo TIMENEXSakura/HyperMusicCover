@@ -75,6 +75,8 @@ jobs:
           api-level: 35
           arch: x86_64
           target: google_apis
+          ram-size: 2048M
+          heap-size: 384M
           profile: pixel_7
           disable-animations: true
           script: python3 tools/ci/lyric_editor_smoke.py

@@ -267,8 +267,9 @@ public final class AppleLyrics {
                 Line l = new Line();
                 readWords(call(row, "getWords"), l.words);
                 readWords(call(row, "getBackgroundWords", false), l.bg);
-                l.agent = clean(str(call(row, "getAgent")));
-                if (l.agent == null) l.agent = sharedAgent(l.words);
+                String rowAgent = clean(str(call(row, "getAgent")));
+                l.confirmedAgent = consistentLeadAgent(rowAgent, l.words);
+                l.agent = rowAgent != null ? rowAgent : sharedAgent(l.words);
                 l.bgAgent = sharedAgent(l.bg);
                 l.begin = num(call(row, "getBegin"));
                 l.end = num(call(row, "getEnd"));
@@ -286,6 +287,7 @@ public final class AppleLyrics {
                     l.end = Math.max(l.begin, last);
                 }
                 l.text = reconcile(html(str(call(row, "getHtmlLineText"))), l.words, l.end);
+                if (rowAgent == null && l.words.isEmpty()) l.confirmedAgent = null;
                 String bgText = clean(html(str(call(row, "getHtmlBackgroundVocalsLineText"))));
                 if (bgText == null) bgText = html(str(call(row, "getHtmlBackgroundVocalsLineText", false)));
                 l.bgText = reconcile(bgText, l.bg, l.end);
@@ -322,6 +324,18 @@ public final class AppleLyrics {
     }
 
     /** Only a consistent word credit can stand in for a missing row or background credit. */
+    /** A row credit covers uncredited words. Without one every sung word must agree. */
+    private static String consistentLeadAgent(String rowAgent, List<Word> words) {
+        String lead = rowAgent;
+        for (Word w : words) {
+            if (clean(w.text) == null) continue;
+            String singer = w.agent != null ? w.agent : rowAgent;
+            if (singer == null || (lead != null && !lead.equals(singer))) return null;
+            lead = singer;
+        }
+        return lead;
+    }
+
     private static String sharedAgent(List<Word> words) {
         String agent = null;
         for (Word w : words) {
@@ -572,6 +586,8 @@ public final class AppleLyrics {
         String bgText, bgAgent;
         /** Which voice sings it, as Apple's own agent id. Null on a song with one singer. */
         String agent;
+        /** Native lead agreed by the row and its words, before their default display side is applied. */
+        String confirmedAgent;
         /** The background vocal sung over this line, word by word. Empty for most lines. */
         final List<Word> bg = new ArrayList<>();
         final List<Word> words = new ArrayList<>();
@@ -679,7 +695,7 @@ public final class AppleLyrics {
     private static String ttml(List<Line> lines, List<String> voices) {
         StringBuilder sb = new StringBuilder(4096);
         sb.append("<tt xmlns=\"http://www.w3.org/ns/ttml\" ")
-                .append("xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\">")
+                .append("xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\" xmlns:hmc=\"urn:hyper-music-cover:lyrics\">")
                 .append("<head><metadata>");
         for (int i = 0; i < Math.max(1, voices.size()); i++) {
             sb.append("<ttm:agent type=\"person\" xml:id=\"v").append(i + 1).append("\"/>");
@@ -687,7 +703,8 @@ public final class AppleLyrics {
         sb.append("</metadata></head><body><div>");
         for (Line l : lines) {
             sb.append("<p begin=\"").append(clock(l.begin)).append("\" end=\"")
-                    .append(clock(l.end)).append("\" ttm:agent=\"").append(voice(l.agent, voices)).append("\">");
+                    .append(clock(l.end)).append("\" ttm:agent=\"").append(voice(l.agent, voices))
+                    .append("\" hmc:leadVoice=\"").append(confirmedVoice(l, voices)).append("\">");
             if (l.words.isEmpty()) {
                 // lyrics-core only retains bare paragraph text when there is no timed child.
                 if (!l.text.isEmpty() && !l.bgText.isEmpty()) span(sb, l.text, l.begin, l.end, null);
@@ -722,6 +739,13 @@ public final class AppleLyrics {
             sb.append("</p>");
         }
         return sb.append("</div></body></tt>").toString();
+    }
+
+    private static String confirmedVoice(Line line, List<String> voices) {
+        if (voices.size() < 2 || line.text.isEmpty() || line.confirmedAgent == null) return "unknown";
+        if (line.confirmedAgent.equals(voices.get(0))) return "v1";
+        if (line.confirmedAgent.equals(voices.get(1))) return "v2";
+        return "unknown";
     }
 
     private static String voice(String id, List<String> voices) {
@@ -878,6 +902,7 @@ public final class AppleLyrics {
      * The framework treats that as an ordinary metadata change, which is exactly what the lock
      * screen's re-read was built to notice.
      */
+    @android.annotation.SuppressLint("WrongConstant") // Both ends recognize this module-owned metadata key.
     private static void republish(AppleLyricStore.Snapshot lyric) {
         Object session = sSession;
         if (session == null) {

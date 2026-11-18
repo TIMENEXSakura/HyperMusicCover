@@ -94,6 +94,20 @@ class AppleLyricsTest {
         assertEquals(LyricLine.Voice.BACKING, rendered.last().voice(true))
     }
 
+    @Test fun confirmedSideUsesOnlyUnambiguousNativeLeadCredits() {
+        val payload = extract(Vec(Agent("lead", 1), Agent("guest", 5), Agent("choir", 3)),
+            Row("first", 1000, 1900, "lead"),
+            Row("reply", 2000, 2900, words = Vec(Word("reply", 2000, 2500, "guest"))),
+            Row("chorus", 3000, 3900, "choir"),
+            Row("mixed", 4000, 4900, "lead", Vec(Word("mixed", 4000, 4500, "guest"))),
+            Row("part missing", 5000, 5900, words = Vec(Word("part", 5000, 5300, "lead"))),
+            Row("not credited", 6000, 6900, words = Vec(Word("not", 6000, 6300, "lead"),
+                Word("credited", 6300, 6800))),
+            Row("", 7000, 7900, "guest", bg = "backing only"))
+        assertEquals(listOf("v1", "v2", "unknown", "unknown", "unknown", "unknown", "unknown"),
+            paragraphs(payload).map { it.getAttribute("hmc:leadVoice") })
+    }
+
     @Test fun partialWordTrackNeverTruncatesAnyPartOfFullText() {
         val payload = extract(Vec(Agent("v1", 1), Agent("v2", 1)),
             Row("before middle after", 1000, 2000, "v1", Vec(Word("middle", 1300, 1600))),

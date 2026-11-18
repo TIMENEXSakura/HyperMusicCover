@@ -90,7 +90,7 @@ def locate(options, scroll=False, bottom_tab=False, for_tap=False):
     for index in range(22 if scroll else 12):
         try:
             root = tree()
-        except (ValueError, subprocess.TimeoutExpired):
+        except (ValueError, subprocess.SubprocessError):
             time.sleep(1)
             continue
         if dismiss_launcher_anr(root):

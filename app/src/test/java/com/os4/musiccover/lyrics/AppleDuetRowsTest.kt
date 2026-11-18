@@ -9,11 +9,13 @@ class AppleDuetRowsTest {
             intArrayOf(start), intArrayOf(start + 520), intArrayOf(text.length))
 
     private fun document(vararg p: String) =
-        """<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><body><div>""" +
+        """<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:hmc="urn:hyper-music-cover:lyrics"><body><div>""" +
             p.joinToString("") + "</div></body></tt>"
 
-    private fun cue(ms: Int, agent: String, body: String) =
-        """<p begin="${ms}ms" end="${ms + 900}ms" ttm:agent="$agent">$body</p>"""
+    private fun cue(ms: Int, agent: String, body: String, confirmed: String? = null): String {
+        val credit = confirmed?.let { " hmc:leadVoice=\"$it\"" }.orEmpty()
+        return """<p begin="${ms}ms" end="${ms + 900}ms" ttm:agent="$agent"$credit>$body</p>"""
+    }
 
     @Test fun exactCuesKeepAllProviderFieldsAndSongOrder() {
         val first = row("again", 1000)
@@ -60,10 +62,29 @@ class AppleDuetRowsTest {
         assertSame(rows.last(), merged.last())
     }
 
-    @Test fun existingProviderDistinctionAndForeignSongArePreserved() {
-        val rows = listOf(row("left",1000), row("right",2000,true))
-        val doc = document(cue(1000,"v2","left"))
-        assertSame(rows, AppleDuetRows.mergeExplicitVoices(rows, doc))
+    @Test fun aDifferentSongCanCorrectBothSidesWhileKeepingTheProviderForAmbiguousCues() {
+        val id = "921357864"
+        val rows = listOf(row("refrain", 1200), row("refrain", 4200), row("answer", 5700, true),
+            row("first", 6100, true), row("choir", 8000, true), row("legacy", 8500, true),
+            row("ambiguous", 9000, true), row("unmatched", 9500, true), row("overlap", 9900, true))
+        val xml = document(cue(1200, "v1", "refrain", "v1"), cue(4200, "v2", "refrain", "v2"),
+            cue(5700, "v2", "answer", "v2"), cue(6100, "v1", "first", "v1"),
+            cue(8000, "v1", "choir", "unknown"), cue(8500, "v1", "legacy"),
+            cue(9000, "v1", "ambiguous", "v1"), cue(9000, "v2", "ambiguous", "v2"),
+            cue(9900, "v1", """over<span ttm:agent="v2">lap</span>""", "v1"))
+        val payload = org.json.JSONObject().put("songId", id).put("ttml", xml).toString()
+        val original = AppleDuetRows(id, rows)
+        val merged = original.enriched(LyricSource.lyricRef(id, payload), payload)
+        assertTrue(merged[1].opposite)
+        assertFalse(merged[3].opposite)
+        for (i in listOf(0, 2, 4, 5, 6, 7, 8)) assertSame(rows[i], merged[i])
+        val partial = org.json.JSONObject().put("songId", id)
+            .put("ttml", document(cue(5700, "v2", "answer", "v2"))).toString()
+        assertSame(merged, merged.enriched(LyricSource.lyricRef(id, partial), partial))
+    }
+
+    @Test fun foreignSongAndStaleReferenceStayRejected() {
+        val doc = document(cue(1000, "v2", "left"))
         val primary = AppleDuetRows("321", listOf(row("left",1000)))
         val wrongSong = org.json.JSONObject().put("songId","123").put("ttml",doc).toString()
         assertSame(primary, primary.enriched(LyricSource.lyricRef("321", wrongSong), wrongSong))

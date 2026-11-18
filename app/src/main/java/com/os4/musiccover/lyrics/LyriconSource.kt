@@ -352,7 +352,7 @@ object LyriconSource {
         if (!connected() || selectedSong !== sSong || Settings.LYRIC_FLEX_DUET.on() != flexibleDuet) return null
         val id = selectedSong.id
         return if (selectedPlayer == AppleDuetRows.PLAYER && selectedPlayer == player &&
-            sPlayer == selectedPlayer && !id.isNullOrBlank() && lines.none { it.voice(true) == LyricLine.Voice.DUET }) {
+            sPlayer == selectedPlayer && !id.isNullOrBlank()) {
             AppleDuetRows(id, lines)
         } else lines
     }
