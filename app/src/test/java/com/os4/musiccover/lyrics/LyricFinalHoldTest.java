@@ -71,4 +71,16 @@ public class LyricFinalHoldTest {
         assertEquals(1f, hold.alpha(), 0f);
         assertFalse(hold.moving());
     }
+
+    @Test public void earlierOverlappingVoiceCanEndAfterTheLastWrittenLine() {
+        LyricLine earlierVoice = new LyricLine("earlier", null, 0, 2700, false, null, null, null);
+        LyricLine last = new LyricLine("last", null, 1800, 2300, false, null, null, null);
+        int end = LyricFocus.songEnd(java.util.Arrays.asList(earlierVoice, last));
+        LyricFinalHold hold = new LyricFinalHold();
+        assertEquals(2700, end);
+        assertFalse(hold.step(2300, last.start, end, 1f, false));
+        assertEquals(1f, hold.alpha(), 0f);
+        assertTrue(hold.step(2700, last.start, end, 1f, false));
+        assertEquals(0f, hold.alpha(), 0f);
+    }
 }

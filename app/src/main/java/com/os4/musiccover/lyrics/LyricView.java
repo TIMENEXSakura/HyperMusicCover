@@ -127,7 +127,6 @@ final class LyricView extends View {
     private static final int GLOW_MIN_MS = 1000;
     private static final float GLOW_DP = 9f;
     private static final float GLOW_ALPHA = 0.55f;
-    private static final float GLOW_SWELL = 0.045f;
     /** How long a held note's glow takes to go after the note ends. */
     private static final int GLOW_TAIL_MS = 380;
 
@@ -163,7 +162,7 @@ final class LyricView extends View {
     private static final float TAU_EMPH_IN = 0.08f;
     private static final float TAU_EMPH_OUT = 0.22f;
     private static final float TAU_SHOW = 0.18f;
-    /** Rising while growing out of the island: the pop's own alpha spring does the fading. */
+    /** Sliding out of the island: the pop's own alpha spring does the fading. */
     private static final float TAU_POP_SHOW = 0.03f;
     /** Out faster than in: the clock starts growing into the lyrics' space at once. */
     private static final float TAU_HIDE = 0.06f;
@@ -249,6 +248,7 @@ final class LyricView extends View {
     // ---- content, rebuilt when the lines or the width change
     private int version = -1;
     private List<LyricLine> lines = Collections.emptyList();
+    private int lyricEnd;
     private int layoutWidth = -1;
     private StaticLayout[] main = new StaticLayout[0];
     private StaticLayout[] trans = new StaticLayout[0];
@@ -483,7 +483,7 @@ final class LyricView extends View {
         layoutStyle = style;
         textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, style.sizeSp,
                 getResources().getDisplayMetrics());
-        wordPad = (int) Math.ceil(glowPx * 1.6f + liftPx + textPx * GLOW_SWELL);
+        wordPad = (int) Math.ceil(glowPx * 1.6f + liftPx);
         sidePx = style.sidePx(getWidth(), shortSide(), density, textPx);
         paint.setTextSize(textPx);
         paint.setTypeface(Typeface.create(Typeface.DEFAULT, style.weight, false));
@@ -763,7 +763,7 @@ final class LyricView extends View {
         // killed for an ANR (2026-09-16 02:51). Only what moves redraws.
         ms = smoothPosition(now);
         LyricLine finalLine = lines.get(lines.size() - 1);
-        changed |= finalHold.step(ms, LyricFocus.startOf(finalLine), LyricFocus.endOf(finalLine),
+        changed |= finalHold.step(ms, LyricFocus.startOf(finalLine), lyricEnd,
                 dt, still || gone || startingPage);
         boolean recentSeek = LyricTransition.recentSeek(now, jumpedAt, SEEK_WINDOW_MS);
         if (recentSeek || still) java.util.Arrays.fill(rowSeparation, 0f);
@@ -1498,7 +1498,7 @@ final class LyricView extends View {
         boolean playing = LockLyrics.playing();
         long source = stopPosition.select(LockLyrics.feedbackTrackKey(), LockLyrics.sessionToken(),
                 playing, LockLyrics.stopped(), LockLyrics.rawPositionMs(), smoothAt != 0L,
-                Math.round(smoothMs), lines.isEmpty() ? 0L : LyricFocus.endOf(lines.get(lines.size() - 1)),
+                Math.round(smoothMs), lyricEnd,
                 LockLyrics.bluetoothOffsetMs());
         if (stopPosition.identityChanged()) {
             smoothMs = 0f;
@@ -1859,6 +1859,7 @@ final class LyricView extends View {
         builtAlign = b.align;
         builtDuet = b.duet;
         lines = b.lines;
+        lyricEnd = LyricFocus.songEnd(lines);
         layoutWidth = b.width;
         layoutMs = b.tookMs;
         buildGen++;
@@ -2624,7 +2625,8 @@ final class LyricView extends View {
 
     private void drawLyrics(Canvas canvas) {
         drawCount++;
-        if (show <= 0.003f || lines.isEmpty() || focus < 0 || main.length != lines.size()) return;
+        if (show <= 0.003f || finalHold.alpha() == 0f || lines.isEmpty()
+                || focus < 0 || main.length != lines.size()) return;
         float bandH = clipBandBottom - clipBandTop;
         if (bandH <= 0f) return;
         tracePlacementFrame();
@@ -2666,7 +2668,6 @@ final class LyricView extends View {
         if (!finishingLast) finalMask = null;
         for (int i = 0; i < n; i++) {
             boolean last = i == n - 1;
-            if (last && finalHold.alpha() == 0f) continue;
             LyricLine line = lines.get(i);
             boolean unfinished = ms >= LyricFocus.startOf(line) && ms < LyricFocus.endOf(line);
             float rowTransitionAlpha = unfinished || last && finalHold.completed() ? 1f : transition.alpha(i);
@@ -2710,7 +2711,7 @@ final class LyricView extends View {
             float bottom = y + height[i];
             if (shownY >= clipBandBottom || bottom + offset + blurPad <= clipBandTop) continue;
             float edge = clamp01((clipBandBottom - shownY) / bottomFade);
-            float alpha = vis * edge * rowTransitionAlpha;
+            float alpha = vis * edge * rowTransitionAlpha * (last ? 1f : finalHold.alpha());
             if (alpha <= 0.003f) continue;
             previousBottom = Math.max(previousBottom, bottom);
             int layer = topFade.beginRow(canvas, getWidth(), y - blurPad,
@@ -3538,7 +3539,7 @@ final class LyricView extends View {
 
     /**
      * One row's syllables in their places, each lifted by how far through it the singing is, and a
-     * held note glowing and swelling while it lasts. Drawn as runs with the whole row as context,
+     * held note glowing while it lasts. Drawn as runs with the whole row as context,
      * so the shaping and the spacing are the ones the layout measured.
      */
     private void drawSyllables(Canvas c, int i, LyricLine l, StaticLayout lay, TextPaint p, float[] xs,
@@ -3572,10 +3573,6 @@ final class LyricView extends View {
             }
             float x0 = xs[cs];
             if (glow > 0.01f) {
-                float x1 = ce < re ? xs[ce] : lay.getLineRight(r);
-                int save = c.save();
-                float swell = 1f + GLOW_SWELL * glow;
-                c.scale(swell, swell, (x0 + x1) / 2f, baseline);
                 float g = glowGain(glow);
                 LyricGlowMask masks = glowMasks[i];
                 LyricGlowMask.Run halo = masks == null ? null : masks.find(cs, ce);
@@ -3604,7 +3601,6 @@ final class LyricView extends View {
                 c.drawTextRun(l.text, cs, ce, rs, re, x0, baseline - lift, false, p);
                 p.setShader(rowShader);
                 p.setColor(rowColor);
-                c.restoreToCount(save);
             } else {
                 c.drawTextRun(l.text, cs, ce, rs, re, x0, baseline - lift, false, p);
             }

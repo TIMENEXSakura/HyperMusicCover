@@ -29,6 +29,12 @@ final class LyricFocus {
         return end;
     }
 
+    static int songEnd(List<LyricLine> lines) {
+        int end = 0;
+        for (LyricLine line : lines) end = Math.max(end, endOf(line));
+        return end;
+    }
+
     boolean update(List<LyricLine> lines, int position, int limit, int fallback, int latestStarted) {
         int previousCount = count;
         int found = 0;
