@@ -3259,7 +3259,7 @@ internal class MiniPlayerController(
     /** Only the music's own morph drives the lyric band; notification morphs are unrelated. */
     fun lyricMusicMorphProgress(): Float {
         if (destroyed || morphScene || (flightState.noteMorphKey != null && flightState.noteMorphKey != MUSIC_ISLAND)) return Float.NaN
-        return morph?.renderedProgress ?: Float.NaN
+        return morph?.progress ?: Float.NaN
     }
 
     fun lyricMusicSceneTransition(): Boolean = morph != null && morphScene

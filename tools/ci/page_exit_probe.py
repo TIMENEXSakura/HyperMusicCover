@@ -65,7 +65,7 @@ def collect():
     meta = json.loads((OUT / "capture.json").read_bytes())
     for name in ["background", "reference", "capsule-half", "clip-fade", "blur-soft", "blur-wide",
                  *(f"landing-{i}" for i in range(9)),
-                 *(f"pull-{i}" for i in range(7)),
+                 *(f"pull-{i}" for i in range(9)),
                  *(f"panel-{i}" for i in range(9)),
                  *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
@@ -238,7 +238,7 @@ def analyse():
     # Pixel coverage records whether both the source and destination drew on one
     # frame, including identical silhouettes whose bounds alone would look correct.
     pull_tops, pull_widths = [], []
-    for i in range(7):
+    for i in range(9):
         frame = rgb(f"pull-{i}")
         coverage = ((frame - background) / (255 - background)).mean(axis=2)
         mask = coverage > .35
@@ -262,10 +262,16 @@ def analyse():
     assert len(set(pull_tops[1:5])) == 1, f"Late row moved held pill: {pull_tops}"
     matching_pixels(rgb("pull-1"), rgb("pull-2"), "First morph frame did not match the visible pill")
     matching_pixels(rgb("pull-3"), rgb("pull-4"), "Stationary finger flashed as the row moved underneath")
-    assert all(22 <= pull_tops[i - 1] - pull_tops[i] <= 25 for i in (5, 6)), pull_tops
-    assert abs(pull_widths[0] - 188) < 2 and abs(pull_widths[-1] - (188 + 160 * .56)) < 2, pull_widths
-    assert pull_widths[0] == pull_widths[1] == pull_widths[2] < pull_widths[3] < 240, pull_widths
-    assert pull_widths[3] == pull_widths[4] < pull_widths[5] < pull_widths[6], pull_widths
+    # At 21ms a coalesced MOVE asks for most of the card. Limit travel in the next
+    # rendered sample. The pending final input at UP (27ms) cannot change the pixels.
+    assert 1 <= pull_tops[4] - pull_tops[5] <= 20, pull_tops
+    assert pull_widths[0] == pull_widths[1] == pull_widths[2] == 188, pull_widths
+    assert pull_widths[2] < pull_widths[3] == pull_widths[4] < pull_widths[5], pull_widths
+    assert pull_widths[5] - pull_widths[4] <= 14, pull_widths
+    matching_pixels(rgb("pull-5"), rgb("pull-6"), "Finger lift skipped to an undisplayed target")
+    for i in (7, 8):
+        assert 1 <= pull_tops[i - 1] - pull_tops[i] <= 20, pull_tops
+        assert 1 <= pull_widths[i] - pull_widths[i - 1] <= 16, pull_widths
 
     panel_strip = Image.new("RGB", (5 * 226, 177), "#121622")
     labels = ImageDraw.Draw(panel_strip)

@@ -383,7 +383,8 @@ internal class NoteMorphMotion(
             circle = useFlight && home == HOME_SMALL && !views.stackedStyle(),
             nativeDy = if (toRow) { { stackHost.settleDy(row, emptyList()) } } else null)
         edits.morph = next
-        noteDragMotion.noteSpan = noteDragMotion.noteDragSpan(row, useFlight && home == HOME_SMALL)
+        val travel = next.upwardTravel()
+        noteDragMotion.noteSpan = noteDragMotion.noteDragSpan(travel)
         val drag = noteDragMotion.noteDrag?.takeIf { it.key == key }
         if (useFlight && toRow && home == HOME_SMALL) {
             // The flight is the small island from here: one hands over to the other in place.
@@ -403,7 +404,6 @@ internal class NoteMorphMotion(
                         it.restBoxOnScreen()?.y?.plus(it.nudgeY)
                     }
                 }
-                val travel = next.upwardTravel()
                 if (shown != null && travel != null) noteDragMotion.joinFlight(drag, shown, travel)
             }
         }
@@ -414,7 +414,10 @@ internal class NoteMorphMotion(
         val started = if (drag != null) {
             val (p, lift) = noteDragMotion.notePose(drag)
             val shown = noteDragMotion.flightTop(drag, p, lift)
-            next.startDragging(p, lift, drag.nudgeX, shown).also { ok ->
+            val pull = if (shown.isFinite()) NotePullFrames(shown, drag.nudgeX, drag.span).also {
+                it.target(p, shown, drag.nudgeX)
+            } else null
+            next.startDragging(p, lift, drag.nudgeX, pull).also { ok ->
                 if (ok && shown.isFinite()) next.containerBox()?.let { first ->
                     rowHost.trace("pull handoff waitMs=" +
                         (android.os.SystemClock.uptimeMillis() - flightState.rowWaitSince) +
@@ -455,6 +458,8 @@ internal class NoteMorphMotion(
     }
 
     private fun noteMorphListener(key: String) = object : MiniCardMorph.Listener {
+        private var pickupFramesLeft = if (key == MUSIC_ISLAND && noteDragMotion.noteDrag?.opening == true) 6 else 0
+
         /** The music out of a scene lands once the cover has let go of the lock screen. */
         override fun canSettle(morph: MiniCardMorph, toNative: Boolean) =
             key != MUSIC_ISLAND || toNative || !rowState.morphScene || !Main.coverSceneActive()
@@ -462,6 +467,12 @@ internal class NoteMorphMotion(
         override fun artBridged() = key == MUSIC_ISLAND && rowState.artBridged
 
         override fun onFrame(morph: MiniCardMorph, progress: Float) {
+            // Match the first few computed poses after pickup to a phone recording, including
+            // releases between frames. The existing trace supplies the monotonic timestamp.
+            if (pickupFramesLeft > 0) morph.containerBox()?.let { box ->
+                rowHost.trace("pull frame held=${morph.held} y=${box.y.roundToInt()} w=${box.w.roundToInt()}")
+                pickupFramesLeft--
+            }
             if (key == MUSIC_ISLAND && rowState.morph === morph && !rowState.morphScene)
                 LockLyrics.onMusicMorphFrame()
             if ((key == STACK_ISLAND || LockIslands.isAppGroup(key)) &&

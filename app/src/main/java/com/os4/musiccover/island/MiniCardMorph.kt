@@ -215,7 +215,6 @@ internal class MiniCardMorph(
 
     val toNative: Boolean get() = motion.target == 1f
     val progress: Float get() = motion.value
-    val renderedProgress: Float get() = noteHandoff?.visualProgress ?: progress
 
     /** A finger is on it: its progress is the finger's, not its spring's. */
     val held: Boolean get() = dragging
@@ -248,24 +247,27 @@ internal class MiniCardMorph(
 
     /** Start held, at rest or at the pose already drawn while waiting for the row. */
     fun startDragging(progress: Float = motion.value, lift: Float = 0f, dx: Float = 0f,
-                      screenTop: Float = Float.NaN): Boolean {
-        motion.value = progress
+                      pull: NotePullFrames? = null): Boolean {
+        notePull = pull
+        motion.value = pull?.progress ?: progress
         nudge.value = lift / NUDGE_UNIT
         nudgeX.value = dx / NUDGE_UNIT
-        fingerTop = screenTop
         dragging = true
         if (start()) return true
         dragging = false
         return false
     }
 
-    private var fingerTop = Float.NaN
+    private var notePull: NotePullFrames? = null
     private var noteHandoff: NoteHandoff? = null
 
     /** One finger position: progress (rubber-banded past either end by the caller) and nudge. */
     fun drag(progress: Float, nudgePx: Float, nudgeXPx: Float = 0f, screenTop: Float = Float.NaN) {
         if (!running) return
-        fingerTop = screenTop
+        notePull?.let {
+            it.target(progress, screenTop, nudgeXPx)
+            return
+        }
         drivenFocus = Float.NaN
         motion.value = progress
         motion.velocity = 0f
@@ -336,8 +338,12 @@ internal class MiniCardMorph(
     fun release(toNative: Boolean, velocity: Float) {
         if (!running) return
         dragging = false
-        if (fingerTop.isFinite()) noteHandoff?.release(SystemClock.uptimeMillis())
-        fingerTop = Float.NaN
+        if (notePull != null) {
+            // MOVE can arrive immediately before UP, with no drawing opportunity in between.
+            // The springs still contain the position and finger offset from the last frame.
+            noteHandoff?.release(SystemClock.uptimeMillis())
+            notePull = null
+        }
         motion.aim(toNative)
         // A hard fling handed on whole crossed the rest of the way in one frame: a flight let go
         // at 0.3 was past its end on the next, and its crossfade onto the island happened all at
@@ -529,8 +535,14 @@ internal class MiniCardMorph(
             return
         }
         if (dragging) {
-            // The finger writes the progress; this only keeps the far end live under it. A
-            // leader posing it this frame has done that already.
+            notePull?.let { pull ->
+                val dt = if (lastFrame == 0L) 1f / 120f else (frameTimeNanos - lastFrame) / 1e9f
+                lastFrame = frameTimeNanos
+                pull.advance(dt)
+                motion.value = pull.progress
+                nudgeX.value = pull.offsetX / NUDGE_UNIT
+            }
+            // A leader posing its follower this frame has already refreshed its endpoints.
             if (SystemClock.uptimeMillis() - ledAt < LED_FRESH_MS) Gen.frame(this)
             else if (!apply()) {
                 lastCancel = geometryWhy()
@@ -541,7 +553,7 @@ internal class MiniCardMorph(
         }
         // Stepped by the real gap, as CoverMorphLayer does: holding a slow frame read worse.
         val dt = if (lastFrame == 0L) 1f / 120f
-            else ((frameTimeNanos - lastFrame) / 1e9f).coerceIn(0f, 0.05f)
+            else ((frameTimeNanos - lastFrame) / 1e9f).coerceIn(0f, if (noteHandoff != null) 1f / 60f else 0.05f)
         lastFrame = frameTimeNanos
         motion.step(dt, Settings.SPRING.get())
         nudge.step(dt, Settings.SPRING.get())
@@ -584,14 +596,14 @@ internal class MiniCardMorph(
         val nativeRest = if (liftOurTy.isNaN()) nativeRaw else CoverMorphMotion.Box(nativeRaw.x,
             nativeRaw.y - (header.translationY - liftStackTy) * ownScale, nativeRaw.w, nativeRaw.h)
         if (miniRest.w <= 0f || nativeRest.w <= 0f) return false
-        val now = if (fingerTop.isFinite() || noteHandoff != null) SystemClock.uptimeMillis() else 0L
-        val handoff = noteHandoff ?: if (fingerTop.isFinite()) {
-            NoteHandoff(miniRest, motion.value, now).also { noteHandoff = it }
+        val handoff = noteHandoff ?: if (notePull != null) {
+            NoteHandoff(miniRest).also { noteHandoff = it }
         } else null
+        val now = if (handoff == null) 0L else SystemClock.uptimeMillis()
         val framed = handoff?.frame(miniRest, nativeRest, motion.value, now)
             ?: containerFrame(miniRest, nativeRest, motion.value)
         val shapeHome = handoff?.shapeHome ?: miniRest
-        val c = renderedProgress.coerceIn(0f, 1f)
+        val c = progress.coerceIn(0f, 1f)
         val optical = focus.sample(if (dragging && drivenFocus.isFinite()) drivenFocus else c,
             returning = !dragging && !toNative)
         // The nudge moves the whole container toward the card (up from the pill, down from it).
@@ -600,8 +612,7 @@ internal class MiniCardMorph(
         // The provisional pill may already be well above its rest slot when a delayed
         // row joins. Preserve that screen pose even if the stack changes the far end on a
         // later pre-draw; keep the equivalent spring offset ready for the releasing frame.
-        if (dragging && fingerTop.isFinite())
-            nudge.value = heldNudge(framed.y, towardNative, fingerTop) / NUDGE_UNIT
+        notePull?.let { nudge.value = heldNudge(framed.y, towardNative, it.top) / NUDGE_UNIT }
         val box = CoverMorphMotion.Box(framed.x + nudgeX.value * NUDGE_UNIT,
             framed.y + towardNative * nudge.value * NUDGE_UNIT, framed.w, framed.h)
         val radius = lerp(shapeHome.h / 2f, nativeRadius, c)
@@ -1067,16 +1078,12 @@ internal class MiniCardMorph(
 
     /** The real pill was translated under the finger but retained its size and material while
      * the row was being laid out. Carry that appearance across the first render. */
-    internal class NoteHandoff(private val source: CoverMorphMotion.Box,
-                               private val joinedProgress: Float, private val joinedAt: Long) {
+    internal class NoteHandoff(private val source: CoverMorphMotion.Box) {
         var shapeHome = source
-            private set
-        var visualProgress = 0f
             private set
         var direction = -1f
             private set
-        private var heldHome = source
-        private var heldRowTop = source.y
+        private var heldRow = source
         private var releasedAt = -1L
 
         fun release(now: Long) { releasedAt = now }
@@ -1084,43 +1091,26 @@ internal class MiniCardMorph(
         fun finished(now: Long): Boolean = releasedAt >= 0L && now - releasedAt >= NOTE_HANDOFF_MS
 
         fun frame(home: CoverMorphMotion.Box, row: CoverMorphMotion.Box, p: Float, now: Long): CoverMorphMotion.Box {
-            val elapsed = now - joinedAt
-            visualProgress = handoffProgress(p, joinedProgress, elapsed)
-            // The next island can take the resting pill's slot synchronously on release.
-            val previous = if (releasedAt < 0L) source else heldHome
-            val phase = if (releasedAt < 0L) elapsed else now - releasedAt
-            val k = if (releasedAt < 0L && joinedProgress <= 0f) 1f else
-                smooth(0f, NOTE_HANDOFF_MS.toFloat(), phase.toFloat())
-            shapeHome = if (k >= 1f || previous.x == home.x && previous.w == home.w && previous.h == home.h) home
-                else CoverMorphMotion.Box(lerp(previous.x, home.x, k), home.y,
-                    lerp(previous.w, home.w, k), lerp(previous.h, home.h, k))
-            val shape = containerFrame(shapeHome, row, visualProgress)
-            val up = if (row.y <= home.y) -1f else 1f
-            val progressY = p.coerceIn(-.3f, 1.3f)
-            var top = lerp(home.y, row.y, progressY)
-            direction = up
-            if (releasedAt < 0L) {
-                heldHome = shapeHome
-                heldRowTop = row.y
-            } else if (k < 1f) {
-                // The finger's last offset used the endpoints before setFlightOut and the OEM
-                // layout. Admit changes in both endpoints as the spring departs that screen pose.
-                top = lerp(lerp(heldHome.y, heldRowTop, progressY), top, k)
-                direction = lerp(if (heldRowTop <= heldHome.y) -1f else 1f, up, k)
-            }
-            return if (top == shape.y) shape else CoverMorphMotion.Box(shape.x, top, shape.w, shape.h)
+            val held = releasedAt < 0L
+            val k = if (held) 0f else smooth(0f, NOTE_HANDOFF_MS.toFloat(), (now - releasedAt).toFloat())
+            if (held) heldRow = row
+            // setFlightOut can replace the home pill and move or resize its row on UP.
+            shapeHome = blendBox(source, home, k)
+            val destination = blendBox(heldRow, row, k)
+            direction = lerp(if (heldRow.y <= source.y) -1f else 1f, if (row.y <= home.y) -1f else 1f, k)
+            return containerFrame(shapeHome, destination, p)
+        }
+
+        private fun blendBox(a: CoverMorphMotion.Box, b: CoverMorphMotion.Box, share: Float): CoverMorphMotion.Box {
+            if (share <= 0f || a === b) return a
+            if (share >= 1f) return b
+            return CoverMorphMotion.Box(lerp(a.x, b.x, share), lerp(a.y, b.y, share),
+                lerp(a.w, b.w, share), lerp(a.h, b.h, share))
         }
     }
 
     companion object {
         private const val NOTE_HANDOFF_MS = 96L
-
-        /** Only progress accumulated while the fixed-size pill waited for its row needs easing. */
-        fun handoffProgress(progress: Float, joinedProgress: Float, elapsedMs: Long): Float {
-            if (joinedProgress <= 0f || progress <= 0f || elapsedMs >= NOTE_HANDOFF_MS) return progress
-            val share = smooth(0f, NOTE_HANDOFF_MS.toFloat(), elapsedMs.toFloat())
-            return (progress - joinedProgress * (1f - share)).coerceAtLeast(0f)
-        }
 
         /** The most progress per second a let-go hands the spring. */
         private const val MAX_RELEASE_SPEED = 5f
@@ -1238,5 +1228,39 @@ internal class MiniCardMorph(
             if (x <= 0f || limit <= 0f) return 0f
             return limit * (1f - 1f / (x * give / limit + 1f))
         }
+    }
+}
+
+/** A quick fling can deliver most of the pull in one batched MOVE. Advance the actual
+ * container on display frames, with the same fraction for its width, top and side offset. */
+internal class NotePullFrames(initialTop: Float, initialX: Float, travel: Float) {
+    var progress = 0f
+        private set
+    var top = initialTop
+        private set
+    var offsetX = initialX
+        private set
+    private val span = abs(travel).coerceAtLeast(1f)
+    private var targetProgress = 0f
+    private var targetTop = initialTop
+    private var targetX = initialX
+
+    fun target(progress: Float, top: Float, offsetX: Float) {
+        targetProgress = progress
+        targetTop = top
+        targetX = offsetX
+    }
+
+    fun advance(dtSeconds: Float) {
+        val dp = targetProgress - progress
+        val dy = targetTop - top
+        val dx = targetX - offsetX
+        val distance = maxOf(abs(dp), abs(dy) / span, abs(dx) / span)
+        if (distance == 0f) return
+        val step = 5f * dtSeconds.coerceIn(0f, 1f / 60f)
+        val t = minOf(1f, step / distance)
+        progress += dp * t
+        top += dy * t
+        offsetX += dx * t
     }
 }

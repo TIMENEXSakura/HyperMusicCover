@@ -220,12 +220,9 @@ internal class NoteDragMotion(
         if (flightState.flightFromSmall) views.setSmallNudge(drag.nudgeX, -up) else views.player?.setNudge(drag.nudgeX, -up)
     }
 
-    /** The row's arrival: how far the pull has to go, from the island's place to the row's. */
-    fun noteDragSpan(row: View, fromSmall: Boolean): Float {
-        val start = (if (fromSmall) views.smallBoxOnScreen() else views.player?.restBoxOnScreen())?.y ?: return 1f
-        val xy = IntArray(2).also(row::getLocationOnScreen)
-        return kotlin.math.abs(start - xy[1]).coerceAtLeast(NOTE_SPAN_MIN_DP * views.density())
-    }
+    /** The gesture and the rendered flight both use the row's settled screen position. */
+    fun noteDragSpan(travel: Float?): Float =
+        abs(travel ?: 0f).coerceAtLeast(NOTE_SPAN_MIN_DP * views.density())
 }
 
 /** The row joining or relaying out must not move a pill under a stationary finger.

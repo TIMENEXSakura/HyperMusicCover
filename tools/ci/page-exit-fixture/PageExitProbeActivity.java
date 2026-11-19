@@ -21,10 +21,12 @@ import android.view.PixelCopy;
 import android.view.View;
 import android.widget.FrameLayout;
 
+import com.os4.musiccover.cover.CoverMorphMotion;
 import com.os4.musiccover.cover.CoverMorphMotion.Box;
 import com.os4.musiccover.island.FlightState;
 import com.os4.musiccover.island.MiniCardMorph;
 import com.os4.musiccover.island.NoteFlightOrigin;
+import com.os4.musiccover.island.NotePullFrames;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -47,7 +49,7 @@ public final class PageExitProbeActivity extends Activity {
     // Release, overshoot, rebound twice, then explicitly drag away from the folded end.
     private static final float[] LANDING = {.55f, .25f, 0f, -.14f, .15f, -.03f, .05f, 0f, .30f};
     private static final int LANDING_START = MORPH_LAST + 1, LANDING_LAST = MORPH_LAST + LANDING.length;
-    private static final int PULL_START = LANDING_LAST + 1, PULL_LAST = PULL_START + 6;
+    private static final int PULL_START = LANDING_LAST + 1, PULL_LAST = PULL_START + 8;
     private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
@@ -243,7 +245,6 @@ public final class PageExitProbeActivity extends Activity {
         // duplicate at rest or even two perfectly overlapping silhouettes are observable.
         private final FlightState pullState = new FlightState();
         private final Paint pullInk = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private NoteFlightOrigin pullOrigin;
 
         private void drawLatePull(Canvas c, int frame) {
             Box pill = new Box(176, 640, 188, 52);
@@ -258,19 +259,49 @@ public final class PageExitProbeActivity extends Activity {
             }
             if (!rowReady) return;
 
-            // The row first measured 300px from the pill, but joined only 220px
-            // away. On the next pre-draw it moves another 44px under a still finger.
-            float p = .32f + Math.max(0, frame - 4) * .12f;
-            float nudge = thresholdNudge * (1f - p);
-            if (pullOrigin == null)
-                pullOrigin = new NoteFlightOrigin(heldTop, 220f, .32f, thresholdNudge * .68f);
+            // Replay for each capture so a repeated onDraw/PixelCopy retry cannot
+            // consume another animation frame. Geometry uses one third of the phone's pixels.
+            float travel = 220f;
+            float joinedProgress = 96f / travel;
+            float joinedNudge = thresholdNudge * (1f - joinedProgress);
+            NoteFlightOrigin origin = new NoteFlightOrigin(heldTop, travel, joinedProgress, joinedNudge);
+            NotePullFrames frames = new NotePullFrames(heldTop, 0f, travel);
+            frames.target(joinedProgress, heldTop, 0f);
+            if (frame >= 3) frames.advance(.008f);
+            // The native card moves under a stationary finger between onDraw and pre-draw.
             Box card = new Box(96, frame <= 3 ? 420 : 464, 348, 100);
-            long elapsed = frame == 2 ? 0 : frame <= 4 ? 32 : frame == 5 ? 64 : 96;
-            float visual = MiniCardMorph.Companion.handoffProgress(p, .32f, elapsed);
-            Box box = MiniCardMorph.Companion.containerFrame(pill, card, visual);
-            float physicalTop = MiniCardMorph.Companion.containerFrame(pill, card, p).y;
-            float lift = MiniCardMorph.Companion.heldNudge(physicalTop, -1f, pullOrigin.top(p, nudge));
-            paintPill(c, box.x, physicalTop - lift, box.w, box.h);
+            if (frame >= 5) {
+                // Coalesced MOVE near the end of the 881px pull at t=21ms.
+                float progress = ((881f - 60f) / 3f - 72f) / travel;
+                float nudge = thresholdNudge * (1f - progress);
+                frames.target(progress, origin.top(progress, nudge), 0f);
+                frames.advance(.013f);
+            }
+            if (frame >= 6) {
+                // The final input at t=27ms arrives before another display frame.
+                float progress = (881f / 3f - 72f) / travel;
+                frames.target(progress, origin.top(progress, 0f), 0f);
+            }
+
+            MiniCardMorph.NoteHandoff handoff = new MiniCardMorph.NoteHandoff(pill);
+            Box box = handoff.frame(pill, card, frames.getProgress(), 21L);
+            float top = frames.getTop();
+            if (frame >= 6) {
+                handoff.release(27L);
+                CoverMorphMotion spring = new CoverMorphMotion();
+                spring.value = frames.getProgress();
+                spring.aim(true);
+                spring.velocity = 5f;
+                CoverMorphMotion nudge = new CoverMorphMotion();
+                nudge.value = MiniCardMorph.Companion.heldNudge(box.y, handoff.getDirection(), top) / 100f;
+                for (int i = 7; i <= frame; i++) {
+                    spring.step(1f / 120f, .4f);
+                    nudge.step(1f / 120f, .4f);
+                    box = handoff.frame(pill, card, spring.value, i == 7 ? 30L : 38L);
+                    top = box.y + handoff.getDirection() * nudge.value * 100f;
+                }
+            }
+            paintPill(c, box.x, top, box.w, box.h);
         }
 
         private void paintPill(Canvas c, float x, float y, float w, float h) {
