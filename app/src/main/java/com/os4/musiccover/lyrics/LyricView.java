@@ -578,12 +578,6 @@ final class LyricView extends View {
             if (k > 0 && !Float.isNaN(dotsTop[k])) {
                 long end = lines.get(k - 1).end;
                 if (end > pos && end < best) best = end;
-            int highlight = line.nextHighlightChange(pos);
-            if (highlight != Integer.MAX_VALUE) best = Math.min(best, highlight);
-            for (LyricLine vocal : line.backgrounds()) {
-                highlight = vocal.nextHighlightChange(pos);
-                if (highlight != Integer.MAX_VALUE) best = Math.min(best, highlight);
-            }
             }
         }
         return best == Long.MAX_VALUE ? -1L : best;
