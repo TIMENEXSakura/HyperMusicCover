@@ -22,8 +22,7 @@
 此版本以后有可能停止维护（由于原作者会修复bug）
 目前该版本主要负责的是TTML歌词获取错误导致的系统界面崩溃问题。
 
-本仓库不提供稳定版预编译安装包，需要自行编译。或者从Actions中下载CI构建。
-工作流产物仅用于自行构建和测试，不作为稳定版发布，也不保证稳定性。
+0.9.59Plus-A 的签名安装包和修复记录见[本分支的 Releases](https://github.com/TIMENEXSakura/HyperMusicCover/releases)。工作流产物用于自行构建和测试。
 
 遇到问题请卸载该分支并使用原版，或等待自行发现修复。
 
@@ -36,7 +35,7 @@
 1. Fork 本仓库，选择包含修改的 `stable-lyrics-fix` 分支。
 2. 在自己的仓库进入 **Actions**，启用工作流。
 3. 选择 **Build lyrics fix APK** → **Run workflow**，分支选择 `stable-lyrics-fix`。
-4. 构建成功后，在该次运行页面的 **Artifacts** 下载 `HyperMusicCover-0.9.59` 压缩包，解压得到 `HyperMusicCover-0.9.59.apk`。产物默认保留 14 天。
+4. 构建成功后，在该次运行页面的 **Artifacts** 下载 `HyperMusicCover-0.9.59Plus-A` 压缩包，解压得到 `HyperMusicCover-0.9.59Plus-A.apk`。产物默认保留 14 天。
 
 当前分支基于上游 `v0.9.59`。构建会运行单元测试、Lint，以及 Android 模拟器的歌词渲染和菜单导航检查。
 
