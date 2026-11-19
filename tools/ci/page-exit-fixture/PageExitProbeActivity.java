@@ -153,7 +153,9 @@ public final class PageExitProbeActivity extends Activity {
             backdrop.setColor(0xff596074);
             c.drawRect(0, TOP - 12, WIDTH, TOP - 7, backdrop);
             c.drawRect(0, BOTTOM + 7, WIDTH, BOTTOM + 12, backdrop);
-            if (!glyphs.hasDisplayList()) recordPage();
+            // Android can drop an undisplayed node. The background and clip-only phases
+            // never read it, so they must not record an extra glyph snapshot.
+            if (phase >= -1 && phase < LAST && !glyphs.hasDisplayList()) recordPage();
             if (phase == -1) c.drawRenderNode(glyphs);
             else if (phase == CLIP_FADE) {
                 int saved = c.save();
