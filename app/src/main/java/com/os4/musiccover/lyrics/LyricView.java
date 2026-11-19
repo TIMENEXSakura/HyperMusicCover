@@ -2421,6 +2421,14 @@ final class LyricView extends View {
                 }
                 ok = true;
             }
+            if (capsule && followMusic && !Float.isFinite(expandedPanelBottom)
+                    && Float.isFinite(clock)) {
+                // Navigation's progress bridge can start before a real morph exists. Its
+                // destination is still the resting card layout, never a transient hit box.
+                float resting = ClockCollapse.unzoomY(this, LockLyrics.capsuleLayoutBottomOnScreen());
+                if (Settings.LYRIC_STYLE.get().writeBand(clock, resting, density, textPx, bandBounds))
+                    expandedPanelBottom = bandBounds[1] - me;
+            }
         }
         if (ok && navMorphHandoff.moving()) {
             navMorphBounds[0] = top;
@@ -2454,6 +2462,10 @@ final class LyricView extends View {
                         panelJoinProgress, musicCardProgress);
                 panelScale = LyricBandGeometry.panelScale(panelSourceRoom, clipBottom - pivot);
                 panelFitted = true;
+            } else if (musicBandMorph && bandOk) {
+                // Neither rest endpoint is known yet; the panel's layout rectangle is not
+                // a substitute for the viewport that was actually on screen a frame ago.
+                clipBottom = clipBandBottom;
             }
         }
         boolean changed = ok != bandOk || panelScale != previousScale || panelFitted != wasFitted
