@@ -18,6 +18,9 @@ public final class LyricLine {
     final int start;
     /** Not final: a background vocal hung under this line can outlast it, and extends it. */
     int end;
+    /** This singer's own timing survives attaching another singer to the layout row. */
+    final int voiceEnd;
+    final int highlightEnd;
     /** The second singer's line in a duet: drawn against the other edge. */
     final boolean opposite;
 
@@ -75,6 +78,7 @@ public final class LyricLine {
     void copyBackgrounds(LyricLine from) {
         backgrounds = from.backgrounds;
         backing = from.backing;
+        end = Math.max(end, from.end);
     }
 
     public LyricLine(String text, String translation, int start, int end, boolean opposite,
@@ -123,7 +127,18 @@ public final class LyricLine {
         // cuts its fill off mid-sweep: on a line whose next one starts within a second, the
         // last word gets no sweep at all and the line leaves just as it begins.
         // Every word's end, not the last one's: times are not required to be in order.
-        if (words) for (int e : sylEnd) this.end = Math.max(this.end, e);
+        int wordEnd = this.start;
+        if (words) for (int e : sylEnd) wordEnd = Math.max(wordEnd, e);
+        voiceEnd = this.end = Math.max(this.end, wordEnd);
+        highlightEnd = wordEnd > this.start ? wordEnd : voiceEnd;
+    }
+
+    boolean highlightsAt(int ms) {
+        return ms >= start && ms < highlightEnd;
+    }
+
+    int nextHighlightChange(int ms) {
+        return ms < start ? start : ms < highlightEnd ? highlightEnd : Integer.MAX_VALUE;
     }
 
     /**

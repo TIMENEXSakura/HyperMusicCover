@@ -2143,7 +2143,7 @@ public final class LockLyrics {
     }
 
     /**
-     * Wakes the view at the next line start, or twice a second, whichever is sooner - the view
+     * Wakes the view at the next lyric boundary, or twice a second, whichever is sooner - the view
      * asks for no frames of its own while nothing moves, so this is what moves the focus on a
      * line-timed file.
      */
@@ -2176,9 +2176,8 @@ public final class LockLyrics {
                 if (playing()) {
                     delay = 500L;
                     int pos = positionMs();
-                    // The stack moves a second ahead of each line's first word (LyricView.LEAD_MS).
-                    int next = nextStartAfter(pos + 1000);
-                    if (next >= 0) delay = Math.max(16L, Math.min(delay, next - 1000L - pos + 8L));
+                    long next = v.nextMoveAfter(pos);
+                    if (next >= 0) delay = Math.max(16L, Math.min(delay, next - pos + 8L));
                 }
             }
             Main.main().postDelayed(this, delay);
@@ -2647,18 +2646,4 @@ public final class LockLyrics {
         return sb.toString();
     }
 
-    private static int nextStartAfter(int pos) {
-        List<LyricLine> l = sLines;
-        int lo = 0, hi = l.size() - 1, best = -1;
-        while (lo <= hi) {
-            int mid = (lo + hi) >>> 1;
-            if (l.get(mid).start > pos) {
-                best = mid;
-                hi = mid - 1;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        return best < 0 ? -1 : l.get(best).start;
-    }
 }

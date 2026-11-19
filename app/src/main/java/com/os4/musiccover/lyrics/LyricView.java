@@ -314,6 +314,7 @@ final class LyricView extends View {
     private float[] emph = new float[0];
     /** A line-timed line's brightness: on while it is sung. */
     private float[] lit = new float[0];
+    private float[][] backingLit = new float[0][];
     private float[] blur = new float[0];
     /** Where the interlude slot before each line sits; NaN where the gap is short. */
     private float[] dotsTop = new float[0];
@@ -552,10 +553,8 @@ final class LyricView extends View {
     }
 
     /**
-     * The playback time after pos at which the stack next moves, or -1 if it will not. The AOD's
-     * still mode wakes the phone for these moments and no others, so every way the focus can move
-     * is here: the next lines' switch times, and the ends that hand over to interlude dots. A
-     * candidate that turns out not to move anything only costs one wake.
+     * The next scroll or highlight boundary after pos, or -1. In still AOD, each of these
+     * gives the held display a chance to publish the freshly settled lyrics.
      */
     long nextMoveAfter(int pos) {
         int n = lines.size();
@@ -566,6 +565,12 @@ final class LyricView extends View {
             int start = LyricFocus.startOf(line), end = LyricFocus.endOf(line);
             if (start > pos && start < best) best = start;
             if (end > pos && end < best) best = end;
+            int highlight = line.nextHighlightChange(pos);
+            if (highlight != Integer.MAX_VALUE) best = Math.min(best, highlight);
+            for (LyricLine vocal : line.backgrounds()) {
+                highlight = vocal.nextHighlightChange(pos);
+                if (highlight != Integer.MAX_VALUE) best = Math.min(best, highlight);
+            }
         }
         for (int k = Math.max(0, idx); k <= Math.min(n - 1, idx + 2); k++) {
             long t = switchAt(k);
@@ -573,6 +578,12 @@ final class LyricView extends View {
             if (k > 0 && !Float.isNaN(dotsTop[k])) {
                 long end = lines.get(k - 1).end;
                 if (end > pos && end < best) best = end;
+            int highlight = line.nextHighlightChange(pos);
+            if (highlight != Integer.MAX_VALUE) best = Math.min(best, highlight);
+            for (LyricLine vocal : line.backgrounds()) {
+                highlight = vocal.nextHighlightChange(pos);
+                if (highlight != Integer.MAX_VALUE) best = Math.min(best, highlight);
+            }
             }
         }
         return best == Long.MAX_VALUE ? -1L : best;
@@ -968,6 +979,7 @@ final class LyricView extends View {
                     vel[i] = 0f;
                     emph[i] = 0f;
                     lit[i] = 0f;
+                    java.util.Arrays.fill(backingLit[i], 0f);
                     blur[i] = 0f;
                 }
                 dropBlurred(i);
@@ -1009,29 +1021,27 @@ final class LyricView extends View {
                 why |= 32;
             }
 
-            // The final line has no successor whose motion could carry it through the clip.
-            if (i == n - 1 && finalHold.completed()) continue;
-            LyricLine l = lines.get(i);
-            boolean focused = dotsFor < 0 && singing.contains(i);
-            boolean on = focused;
-            float eTo = on ? 1f : 0f;
-            float e = approach(emph[i], eTo, dtTo, eTo > emph[i] ? TAU_EMPH_IN : TAU_EMPH_OUT);
-            if (Math.abs(e - eTo) < 0.003f) e = eTo;
-            if (e != emph[i]) {
-                emph[i] = e;
+            LyricLine line = lines.get(i);
+            boolean selected = dotsFor < 0 && singing.contains(i);
+            float lead = stepHighlight(lit[i], selected && line.highlightsAt(ms), dtTo);
+            if (lead != lit[i]) {
+                lit[i] = lead;
                 changed = true;
                 why |= 64;
             }
-            // A line-timed line lights when it is sung, not when the stack arrives a second early.
-            // Still, it lights with the move: there is no frame a second later to light it in.
-            float lTo = on && (still || ms >= l.start) ? 1f : 0f;
-            float lv = approach(lit[i], lTo, dtTo, lTo > lit[i] ? TAU_EMPH_IN : TAU_EMPH_OUT);
-            if (Math.abs(lv - lTo) < 0.003f) lv = lTo;
-            if (lv != lit[i]) {
-                lit[i] = lv;
-                changed = true;
-                why |= 64;
+            float level = lead;
+            LyricLine[] backing = line.backgrounds();
+            float[] highlights = backingLit[i];
+            for (int k = 0; k < backing.length; k++) {
+                float value = stepHighlight(highlights[k], selected && backing[k].highlightsAt(ms), dtTo);
+                if (value != highlights[k]) {
+                    highlights[k] = value;
+                    changed = true;
+                    why |= 64;
+                }
+                level = Math.max(level, value);
             }
+            emph[i] = level;
             float bt = blurTarget(i);
             float b = approach(blur[i], bt, dtTo, bt > blur[i] ? TAU_BLUR_IN : TAU_BLUR_OUT);
             if (Math.abs(b - bt) < 0.05f) b = bt;
@@ -1058,6 +1068,12 @@ final class LyricView extends View {
         if (i == 0) return early;
         long prevEnd = lines.get(i - 1).end;
         return Math.min(l.start, Math.max(early, prevEnd));
+    }
+
+    private static float stepHighlight(float previous, boolean singing, float dt) {
+        float target = singing ? 1f : 0f;
+        float value = approach(previous, target, dt, singing ? TAU_EMPH_IN : TAU_EMPH_OUT);
+        return Math.abs(value - target) < 0.003f ? target : value;
     }
 
     private float blurFor(int rows) {
@@ -1465,11 +1481,13 @@ final class LyricView extends View {
             if ((i < lo || i > hi)
                     && !rowOnScreen(i)) continue;
             if (moving(i) || frameTime < aimAt[i]) return true;
-            if (i == n - 1 && finalHold.completed()) continue;
-            float e = emph[i];
-            if (e != 0f && e != 1f) return true;
-            float lv = lit[i];
-            if (lv != 0f && lv != 1f) return true;
+            LyricLine line = lines.get(i);
+            boolean selected = dotsFor < 0 && singing.contains(i);
+            if (lit[i] != (selected && line.highlightsAt(ms) ? 1f : 0f)) return true;
+            LyricLine[] backing = line.backgrounds();
+            for (int k = 0; k < backing.length; k++) {
+                if (backingLit[i][k] != (selected && backing[k].highlightsAt(ms) ? 1f : 0f)) return true;
+            }
             if (blur[i] != blurTarget(i)) return true;
         }
         // The words move every frame while they are being sung - the fill, the lift, a held
@@ -1578,13 +1596,15 @@ final class LyricView extends View {
         for (int i = Math.max(0, singing.first); i <= focus; i++) {
             if (!singing.contains(i)) continue;
             LyricLine l = lines.get(i);
-            if (wordTimed(l) && emph[i] > 0f && ms >= l.start
-                    && ms < l.end + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) {
+            if (l.hasWords() && lit[i] > 0f && ms >= l.start
+                    && (long) ms < (long) l.highlightEnd + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) {
                 return true;
             }
-            for (LyricLine bg : l.backgrounds()) {
-                if (bg.hasWords() && emph[i] > 0f && ms >= bg.start
-                        && (long) ms < (long) bg.end + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) return true;
+            LyricLine[] backing = l.backgrounds();
+            for (int k = 0; k < backing.length; k++) {
+                LyricLine bg = backing[k];
+                if (bg.hasWords() && backingLit[i][k] > 0f && ms >= bg.start
+                        && (long) ms < (long) bg.highlightEnd + Math.max(LIFT_MIN_MS, GLOW_TAIL_MS)) return true;
             }
         }
         return false;
@@ -1625,6 +1645,7 @@ final class LyricView extends View {
         for (int i = 0; i < scroll.length; i++) {
             emph[i] = 0f;
             lit[i] = 0f;
+            java.util.Arrays.fill(backingLit[i], 0f);
             blur[i] = 0f;
         }
     }
@@ -1882,6 +1903,13 @@ final class LyricView extends View {
         singing.update(lines, ms, Settings.LYRIC_MAX_LINES.get(), Math.max(0, focus), indexAt(ms));
         singing.layout(base, height, lyricGap(GAP_DP), overlapSlots);
         blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
+        if (!preserve) backingLit = new float[n][];
+        for (int i = 0; i < n; i++) {
+            float[] previous = backingLit[i];
+            int voices = bgLay[i].length;
+            if (previous == null) backingLit[i] = new float[voices];
+            else if (previous.length != voices) backingLit[i] = java.util.Arrays.copyOf(previous, voices);
+        }
         if (preserve) {
             transition.rebase(singing, base, scroll, aim, nextAim);
             retargetLayout(reveal);
@@ -2837,7 +2865,7 @@ final class LyricView extends View {
 
     private void drawLine(Canvas canvas, int i, float x, float y, float a) {
         LyricLine l = lines.get(i);
-        float e = emph[i], rowBlur = blur[i], lineLit = lit[i];
+        float e = emph[i], rowBlur = blur[i];
         // In the AOD's still mode a word-timed line is drawn whole, like a line-timed one: a fill
         // frozen at whatever syllable the one frame caught would be wrong for the whole line.
         boolean still = LockLyrics.still();
@@ -2850,12 +2878,11 @@ final class LyricView extends View {
             // - handing over to the word path only once the blur had gone made the first word
             // jump up already half lifted.
             float k = rowBlur <= 0f ? 0f : clamp01(rowBlur / Math.max(0.01f, blurFor(1)));
-            drawWords(canvas, i, a * (1f - k), e, lineLit);
+            drawWords(canvas, i, a * (1f - k), e);
             if (k > 0f) {
                 float r = blurFor(1);
                 for (int d = 1; d <= BLUR_MAX_ROWS && blurFor(d) < rowBlur; d++) r = blurFor(d + 1);
-                float fading = dotsFor < 0 && singing.contains(i) ? 0f : e;
-                drawBlurLevel(canvas, i, r, a * (INACTIVE + (1f - INACTIVE) * fading) * k, r, fading);
+                drawBlurLevel(canvas, i, r, a * voiceOpacity(e) * k);
             }
         } else {
             // The radius sits between two of the fixed ones - sharp, or a distance's blur - and is
@@ -2873,26 +2900,20 @@ final class LyricView extends View {
             }
             if (hi < lo) hi = lo;
             float t = hi > lo ? clamp01((r - lo) / (hi - lo)) : 0f;
-            // A word-timed line that is not the focus is all unsung colour; a line-timed one is
-            // lit while it is sung.
-            float w = l.hasWords() && !still ? 0f : lineLit;
-            float base = a * (INACTIVE + (1f - INACTIVE) * w);
-            if (t < 1f) drawBlurLevel(canvas, i, lo, base * (1f - t), hi, w);
-            if (t > 0f) drawBlurLevel(canvas, i, hi, base * t, lo, w);
+            if (t < 1f) {
+                if (lo == 0f) drawStatic(canvas, i, a * (1f - t), true);
+                else drawBlurLevel(canvas, i, lo, a * voiceOpacity(e) * (1f - t));
+            }
+            if (t > 0f) drawBlurLevel(canvas, i, hi, a * voiceOpacity(e) * t);
         }
         canvas.restoreToCount(save);
     }
 
-    private void drawBlurLevel(Canvas canvas, int i, float radius, float alpha, float keep) {
-        drawBlurLevel(canvas, i, radius, alpha, keep, 0f);
-    }
-
-    private void drawBlurLevel(Canvas canvas, int i, float radius, float alpha, float keep,
-                               float whiteness) {
+    private void drawBlurLevel(Canvas canvas, int i, float radius, float alpha) {
         if (alpha <= 0.002f) return;
-        Bitmap b = radius <= 0f ? null : blurredFor(i, rowsFor(radius));
+        Bitmap b = blurredFor(i, rowsFor(radius));
         if (b == null) {
-            drawStatic(canvas, i, alpha, whiteness);
+            drawStatic(canvas, i, alpha, false);
             return;
         }
         // A blur spreads a glyph's ink over more pixels, so the same alpha reads fainter the more it
@@ -3393,29 +3414,32 @@ final class LyricView extends View {
         return sBlurHandler;
     }
 
-    /** A line at one brightness: the text at a, its translation below it. */
-    private void drawStatic(Canvas c, int i, float a) {
-        drawStatic(c, i, a, 0f);
+    private static float voiceOpacity(float highlight) {
+        return INACTIVE + (1f - INACTIVE) * highlight;
     }
 
-    /** A line at one brightness, white by whiteness and the cover's tint otherwise. */
-    private void drawStatic(Canvas c, int i, float a, float whiteness) {
-        // Each layout's own paint: it draws with the copy it was laid out with, not the view's.
+    /** The sharp row uses each singer's own state; the blur fallback uses saved dim ink. */
+    private void drawStatic(Canvas c, int i, float a, boolean followsPlayback) {
         StaticLayout lay = main[i];
-        lay.getPaint().setColor(ink(a, whiteness, lines.get(i).voice(builtDuet)));
+        float w = followsPlayback ? lit[i] : 0f;
+        lay.getPaint().setColor(ink(a * (followsPlayback ? voiceOpacity(w) : 1f),
+                w, lines.get(i).voice(builtDuet)));
         lay.draw(c);
         lay.getPaint().setColor(0xFFFFFFFF);
         float below = lay.getHeight();
-        for (StaticLayout b : bgLay[i]) {
+        for (int k = 0; k < bgLay[i].length; k++) {
+            StaticLayout b = bgLay[i][k];
             int save = c.save();
             c.translate(0f, below + lyricGap(BG_GAP_DP));
-            b.getPaint().setColor(ink(a, whiteness, LyricLine.Voice.BACKING));
+            w = followsPlayback ? backingLit[i][k] : 0f;
+            b.getPaint().setColor(ink(a * (followsPlayback ? voiceOpacity(w) : 1f),
+                    w, LyricLine.Voice.BACKING));
             b.draw(c);
             b.getPaint().setColor(0xFFFFFFFF);
             c.restoreToCount(save);
             below += lyricGap(BG_GAP_DP) + b.getHeight();
         }
-        drawTranslation(c, i, a);
+        drawTranslation(c, i, a * (followsPlayback ? voiceOpacity(emph[i]) : 1f));
     }
 
     /** How far down the translation starts: under the line and its background vocal. */
@@ -3453,18 +3477,16 @@ final class LyricView extends View {
      * layer of the whole line - a second full-size pass on the render thread every frame, which
      * was a quarter of a core for as long as a word-timed song played (measured 2026-09-16).
      */
-    private void drawWords(Canvas c, int i, float a, float e, float lineLit) {
+    private void drawWords(Canvas c, int i, float a, float e) {
         LyricLine l = lines.get(i);
         StaticLayout lay = main[i];
-        float level = INACTIVE + (1f - INACTIVE) * e;
-        if (l.hasWords()) {
-            drawWordRows(c, i, l, lay, paint, charXFor(i, lay, l, charX), e, a * level,
-                    a * (INACTIVE + (1f - INACTIVE) * e * UNSUNG), 1f, true, 0);
+        float lead = lit[i];
+        if (l.hasWords() && lead > 0f) {
+            drawWordRows(c, i, l, lay, paint, charXFor(i, lay, l, charX), lead, a * voiceOpacity(lead),
+                    a * voiceOpacity(lead * UNSUNG), 1f, true, 0);
         } else {
-            // Here only for its background vocal's words: the line itself is lit whole while it
-            // is sung, as drawLine draws any line-timed one.
-            float w = lineLit;
-            lay.getPaint().setColor(ink(a * (INACTIVE + (1f - INACTIVE) * w), w, l.voice(builtDuet)));
+            // The lead may be line-timed or already finished while its backing vocal continues.
+            lay.getPaint().setColor(ink(a * voiceOpacity(lead), lead, l.voice(builtDuet)));
             lay.draw(c);
             lay.getPaint().setColor(0xFFFFFFFF);
         }
@@ -3475,24 +3497,24 @@ final class LyricView extends View {
             LyricLine bg = backing[k];
             int save = c.save();
             c.translate(0f, below + lyricGap(BG_GAP_DP));
-            if (bg.hasWords()) {
-                drawWordRows(c, i, bg, bl, bgPaint, charXFor(k, bl, bg, charXBg[i]), e,
-                        a * level,
-                        a * (INACTIVE + (1f - INACTIVE) * e * UNSUNG),
+            float voice = backingLit[i][k];
+            if (bg.hasWords() && voice > 0f) {
+                drawWordRows(c, i, bg, bl, bgPaint, charXFor(k, bl, bg, charXBg[i]), voice,
+                        a * voiceOpacity(voice), a * voiceOpacity(voice * UNSUNG),
                         BG_LIFT, false, 1);
             } else {
                 // A backing vocal can arrive without word timing of its own - a provider may
                 // publish its text and nothing else. It used to be handed to the word path
                 // regardless, where the renderer read the missing syllable array and took
-                // SystemUI down (issue #94); whole, at the brightness of its sung lead.
-                bl.getPaint().setColor(ink(a * level, 0f, LyricLine.Voice.BACKING));
+                // SystemUI down (issue #94). Draw it whole with its own brightness.
+                bl.getPaint().setColor(ink(a * voiceOpacity(voice), voice, LyricLine.Voice.BACKING));
                 bl.draw(c);
                 bl.getPaint().setColor(0xFFFFFFFF);
             }
             c.restoreToCount(save);
             below += lyricGap(BG_GAP_DP) + bl.getHeight();
         }
-        drawTranslation(c, i, a * level);
+        drawTranslation(c, i, a * voiceOpacity(e));
     }
 
     /**

@@ -321,7 +321,7 @@ object LyricParse {
 
     /** The same line carrying a translation it did not come with. */
     private fun withTranslation(line: LyricLine, text: String): LyricLine {
-        val copy = LyricLine(line.text, text, line.roma, line.start, line.end, line.opposite,
+        val copy = LyricLine(line.text, text, line.roma, line.start, line.voiceEnd, line.opposite,
             line.sylStart, line.sylEnd, line.charEnd)
         copy.copyBackgrounds(line)
         return copy
@@ -329,7 +329,7 @@ object LyricParse {
 
     /** The same line carrying a romanisation it did not come with. */
     private fun withRoma(line: LyricLine, roma: String): LyricLine {
-        val copy = LyricLine(line.text, line.translation, roma, line.start, line.end,
+        val copy = LyricLine(line.text, line.translation, roma, line.start, line.voiceEnd,
             line.opposite, line.sylStart, line.sylEnd, line.charEnd)
         copy.copyBackgrounds(line)
         return copy
@@ -580,7 +580,7 @@ object LyricParse {
         val ends = line.sylEnd
         val chars = line.charEnd
         if (starts == null || ends == null || chars == null) {
-            val copy = LyricLine(head, translation, line.roma, line.start, line.end,
+            val copy = LyricLine(head, translation, line.roma, line.start, line.voiceEnd,
                 line.opposite, null, null, null)
             copy.copyBackgrounds(line)
             return copy
@@ -604,7 +604,7 @@ object LyricParse {
             from = to
         }
         if (charsOut.isEmpty()) return null
-        val copy = LyricLine(head, translation, line.roma, line.start, line.end,
+        val copy = LyricLine(head, translation, line.roma, line.start, line.voiceEnd,
             line.opposite, startsOut.toIntArray(), endsOut.toIntArray(), charsOut.toIntArray())
         copy.copyBackgrounds(line)
         return copy
@@ -961,7 +961,7 @@ object LyricParse {
         val shown = text.substring(from, until)
         val chars = line.charEnd
         if (chars == null) {
-            return LyricLine(shown, line.translation, line.roma, line.start, line.end,
+            return LyricLine(shown, line.translation, line.roma, line.start, line.voiceEnd,
                 line.opposite, null, null, null).also { it.copyBackgrounds(line) }
         }
         val starts = ArrayList<Int>(chars.size)
@@ -977,12 +977,12 @@ object LyricParse {
             prev = c
         }
         if (cut.isEmpty()) {
-            return LyricLine(shown, line.translation, line.roma, line.start, line.end,
+            return LyricLine(shown, line.translation, line.roma, line.start, line.voiceEnd,
                 line.opposite, null, null, null).also { it.copyBackgrounds(line) }
         }
         // Whatever was left past the last syllable before is drawn by it now.
         cut[cut.size - 1] = shown.length
-        return LyricLine(shown, line.translation, line.roma, line.start, line.end, line.opposite,
+        return LyricLine(shown, line.translation, line.roma, line.start, line.voiceEnd, line.opposite,
             starts.toIntArray(), ends.toIntArray(), cut.toIntArray()).also { it.copyBackgrounds(line) }
     }
 
@@ -1148,14 +1148,14 @@ object LyricParse {
         if (cut == 0 && line.opposite == opposite) return line
         if (cut >= line.text.length && line.backgrounds().isEmpty()) return null
         if (cut >= line.text.length) {
-            val result = LyricLine("", line.translation, line.roma, line.start, line.end,
+            val result = LyricLine("", line.translation, line.roma, line.start, line.voiceEnd,
                 opposite, null, null, null)
             result.copyBackgrounds(line)
             return result
         }
         val text = line.text.substring(cut)
         val result = if (line.sylStart == null) {
-            LyricLine(text, line.translation, line.roma, line.start, line.end, opposite,
+            LyricLine(text, line.translation, line.roma, line.start, line.voiceEnd, opposite,
                 null, null, null)
         } else {
             // Syllables that lay wholly inside the prefix go with it; the rest shift left.
@@ -1170,7 +1170,7 @@ object LyricParse {
                 chars.add(e)
             }
             if (chars.isEmpty()) return null
-            LyricLine(text, line.translation, line.roma, line.start, line.end, opposite,
+            LyricLine(text, line.translation, line.roma, line.start, line.voiceEnd, opposite,
                 starts.toIntArray(), ends.toIntArray(), chars.toIntArray())
         }
         result.copyBackgrounds(line)

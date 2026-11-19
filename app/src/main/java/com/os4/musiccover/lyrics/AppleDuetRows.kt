@@ -86,7 +86,7 @@ internal class AppleDuetRows(
                 val cue = cues[index]
                 val side = voices[cue] ?: continue
                 if (line.opposite == side || occurrences[cue] != 1 || line.voice(true) == LyricLine.Voice.BACKING) continue
-                val updated = LyricLine(line.text, line.translation, line.roma, line.start, line.end,
+                val updated = LyricLine(line.text, line.translation, line.roma, line.start, line.voiceEnd,
                     side, line.sylStart, line.sylEnd, line.charEnd)
                 updated.copyBackgrounds(line)
                 if (out == null) out = primary.toMutableList()
