@@ -148,6 +148,7 @@ public final class PageExitProbeActivity extends Activity {
         private final RenderNode glyphs = new RenderNode("frozen Android lyric layouts");
         private final Paint backdrop = new Paint();
         private final Paint lyricInk = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final LyricBottomFade bottomFade = new LyricBottomFade();
         private final LyricRenderBlur harmonyBlur = new LyricRenderBlur();
         private final int[] glyphCounts = new int[CENTRES.length];
         private int recordings, lastPainted = Integer.MIN_VALUE;
@@ -207,23 +208,27 @@ public final class PageExitProbeActivity extends Activity {
         }
 
         // A three-line verse with a sharp opening and a soft backing line at the foot.
-        // Drive the same fit used by lock-screen rows in both directions.
+        // A phone-sized viewport loses half its reading room during expansion. Feed the
+        // same anchor, edge mask and live backing blur as the lock-screen rows.
         private void drawPanelLyrics(Canvas c, float progress) {
-            float top = 270f, bottom = 520f;
-            float floor = LyricBandGeometry.morphEdge(520f, 422f, progress);
-            float scale = LyricBandGeometry.panelScale(bottom - top, floor - top);
-            int save = c.save();
-            try {
-                LyricPanelFit.apply(c, 92f, top, scale);
-                lyricInk.setColor(Color.WHITE);
-                lyricInk.setTypeface(Typeface.DEFAULT_BOLD);
-                lyricInk.setTextSize(39f);
-                c.drawText("Stay with me", 92f, 320f, lyricInk);
-                c.drawText("Sing again", 104f, 406f, lyricInk);
-                Canvas harmony = harmonyBlur.begin(74, 438, 470, 535, 4f);
-                harmony.drawText("Through the night", 116f, 502f, lyricInk);
-                harmonyBlur.finish(c);
-            } finally { c.restoreToCount(save); }
+            float top = LyricBandGeometry.morphEdge(100, 52, progress);
+            float floor = LyricBandGeometry.morphEdge(660, 340, progress);
+            int base = Math.round(LyricBandGeometry.singingTop(top, floor, 0f, progress) + 20f);
+            lyricInk.setColor(Color.WHITE);
+            lyricInk.setTypeface(Typeface.DEFAULT_BOLD);
+            lyricInk.setTextSize(46f);
+            sampleRow(c, "Stay", 43, base, floor);
+            sampleRow(c, "Again", 43, base + 61, floor);
+            int harmonyBase = base + 169;
+            Canvas layer = harmonyBlur.begin(35, harmonyBase - 63, 481, harmonyBase + 28, 4f);
+            try { sampleRow(layer, "Through the night", 54, harmonyBase, floor); }
+            finally { harmonyBlur.finish(c); }
+        }
+
+        private void sampleRow(Canvas canvas, String text, int x, int base, float floor) {
+            int token = bottomFade.beginRow(canvas, WIDTH, base - 56, base + 16, floor, 58f);
+            try { canvas.drawText(text, x, base, lyricInk); }
+            finally { bottomFade.endRow(canvas, WIDTH, base + 16, token); }
         }
 
         private void recordPage() {

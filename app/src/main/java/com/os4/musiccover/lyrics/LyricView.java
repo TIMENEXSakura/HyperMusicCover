@@ -315,6 +315,7 @@ final class LyricView extends View {
     private final LyricFocus singing = new LyricFocus();
     private final LyricTransition transition = new LyricTransition();
     private final LyricClipFade topFade = new LyricClipFade();
+    private final LyricBottomFade panelFade = new LyricBottomFade();
     private LyricExitMask finalMask;
     private int dotsFor = -1;
     /** The scroll spring for the current move, set per move like AMLL's policy. */
@@ -355,16 +356,10 @@ final class LyricView extends View {
     private boolean musicBandMorph;
     private boolean morphIndependentKnown, morphIndependent;
     private float musicCardProgress;
-    // Folded viewport measured before the first panel frame, in this view's coordinates.
-    // Neither the moving surface's bounds nor a child's alpha changes this source viewport.
-    private float foldedPanelBottom = Float.NaN, foldedPanelRoom = Float.NaN;
-    private float expandedPanelBottom = Float.NaN, panelScale = 1f;
-    private boolean panelFitted;
-    // A reverse drag may begin after orientation/navigation changed on the expanded page.
-    // Join from the actual reading area of its last frame, then reveal the fresh folded area.
-    private float panelJoinRoom = Float.NaN, panelJoinProgress, panelSourceRoom;
-    private long fitRequest = Long.MIN_VALUE;
-    private boolean fitNavigation;
+    // Resting layout endpoints, independent of the moving media surface and its hit bounds.
+    private float foldedPanelBottom = Float.NaN, expandedPanelBottom = Float.NaN;
+    private long panelRequest = Long.MIN_VALUE;
+    private boolean panelNavigation;
     private boolean popped;
     private final LyricPageExit pageExit = new LyricPageExit();
     private final LyricPageExitMask pageMask = new LyricPageExitMask();
@@ -521,9 +516,7 @@ final class LyricView extends View {
         navigationClipBand.clear();
         ordinaryLyricBand.clear();
         musicBandMorph = false;
-        foldedPanelBottom = foldedPanelRoom = expandedPanelBottom = panelJoinRoom = Float.NaN;
-        panelFitted = false;
-        panelScale = 1f;
+        foldedPanelBottom = expandedPanelBottom = Float.NaN;
         morphIndependentKnown = false;
         musicCardProgress = 0f;
         lastStep = 0L;
@@ -618,9 +611,7 @@ final class LyricView extends View {
         navigationClipBand.clear();
         ordinaryLyricBand.clear();
         musicBandMorph = false;
-        foldedPanelBottom = foldedPanelRoom = expandedPanelBottom = panelJoinRoom = Float.NaN;
-        panelFitted = false;
-        panelScale = 1f;
+        foldedPanelBottom = expandedPanelBottom = Float.NaN;
         morphIndependentKnown = false;
         musicCardProgress = 0f;
         appearance = null;
@@ -816,7 +807,7 @@ final class LyricView extends View {
         // When following an oversized line ends, preserve every row's current screen position
         // before normal focus scrolling takes over, including a completed line waiting to fade.
         boolean retainFinal = finalHold.completed() && sf == n - 1;
-        float sourceTop = sourceClipTop(), sourceBottom = sourceClipBottom();
+        float sourceTop = clipBandTop, sourceBottom = clipBandBottom;
         boolean overflowEnded = overflowIndex >= 0 && (sf != overflowIndex || dots >= 0
                 || (singing.count != 1 && !retainFinal) || sf >= main.length
                 || main[sf].getHeight() <= sourceBottom - sourceTop);
@@ -2065,13 +2056,13 @@ final class LyricView extends View {
             diagnosticReferenceTop = diagnosticReferenceBottom = Float.NaN;
             diagnosticReferenceSource = "none";
             long request = LockLyrics.contrastRequestId();
-            if (!capsule || request != fitRequest || navigation != fitNavigation
+            if (!capsule || request != panelRequest || navigation != panelNavigation
                     || navFoldStyle != Settings.LYRIC_STYLE.get() || navFoldWidth != getWidth()
                     || navFoldHeight != getHeight() || morphIndependent != Settings.LYRIC_CLOCK_INDEPENDENT.on()) {
-                foldedPanelBottom = foldedPanelRoom = expandedPanelBottom = panelJoinRoom = Float.NaN;
+                foldedPanelBottom = expandedPanelBottom = Float.NaN;
             }
-            fitRequest = request;
-            fitNavigation = navigation;
+            panelRequest = request;
+            panelNavigation = navigation;
             if (navFoldStyle != Settings.LYRIC_STYLE.get() || navFoldWidth != getWidth() || navFoldHeight != getHeight()) {
                 navFoldClipBottom = Float.NaN;
                 navMorphEndpointKnown = false;
@@ -2189,8 +2180,7 @@ final class LyricView extends View {
                     float miniFloor = Float.isFinite(navFoldClipBottom) ? navFoldClipBottom
                             : LyricBandGeometry.visibleBottom(navMorphCardBand.top(), navMorphCardBand.bottom(),
                                     cardFloor, ClockCollapse.unzoomY(this, miniEdge));
-                    seedPanelFit(miniFloor - me, (navMorphUseMini ? navMorphMiniBand.top() : navMorphCardBand.top()) - me,
-                            (navMorphUseMini ? navMorphMiniBand.bottom() : navMorphCardBand.bottom()) - me, previousCardProgress);
+                    if (!Float.isFinite(foldedPanelBottom)) foldedPanelBottom = miniFloor - me;
                     float navFloor = Float.isFinite(foldedPanelBottom)
                             ? LyricBandGeometry.morphEdge(foldedPanelBottom + me, navMorphCardBand.bottom(), musicCardProgress)
                             : navMorphCardBand.bottom();
@@ -2264,7 +2254,7 @@ final class LyricView extends View {
                     float miniClip = Float.isFinite(foldedPanelBottom) ? foldedPanelBottom + me
                             : screenMini ? morphMiniBand.bottom() : LyricBandGeometry.visibleBottom(
                                     morphMiniBand.top(), morphMiniBand.bottom(), cardFloor, miniFloor);
-                    seedPanelFit(miniClip - me, morphMiniBand.top() - me, morphMiniBand.bottom() - me, previousCardProgress);
+                    if (!Float.isFinite(foldedPanelBottom)) foldedPanelBottom = miniClip - me;
                     clipBottom = LyricBandGeometry.morphEdge(miniClip, morphCardBand.bottom(), musicCardProgress) - me;
                     expandedPanelBottom = morphCardBand.bottom() - me;
                     layoutClockSource = "music-morph";
@@ -2441,34 +2431,17 @@ final class LyricView extends View {
             clipTop = navMorphBounds[2];
             clipBottom = Math.min(clipBottom, navMorphBounds[3]);
         }
-        float previousScale = panelScale;
-        boolean wasFitted = panelFitted;
-        panelScale = 1f;
-        panelFitted = false;
         if (ok && capsule) {
-            float pivot = LyricBandGeometry.singingTop(top, bottom, 0f, musicCardProgress);
             if (!musicBandMorph && Main.capsuleKeepsMini() && musicCardProgress == 0f) {
-                foldedPanelRoom = clipBottom - pivot;
                 foldedPanelBottom = clipBottom;
-                panelJoinRoom = Float.NaN;
-            } else if (foldedPanelRoom > 0f && (musicBandMorph || musicCardProgress > 0f)) {
-                // The moving hit box may already report full card height on the FIRST drag
-                // frame. Interpolate only settled endpoints, in either drag direction. If the
-                // card's layout is late, keep the last geometry instead of guessing its edge.
-                clipBottom = Float.isFinite(expandedPanelBottom)
-                        ? LyricBandGeometry.morphEdge(foldedPanelBottom, expandedPanelBottom, musicCardProgress)
-                        : (bandOk ? clipBandBottom : foldedPanelBottom);
-                panelSourceRoom = LyricBandGeometry.panelSourceRoom(foldedPanelRoom, panelJoinRoom,
-                        panelJoinProgress, musicCardProgress);
-                panelScale = LyricBandGeometry.panelScale(panelSourceRoom, clipBottom - pivot);
-                panelFitted = true;
-            } else if (musicBandMorph && bandOk) {
-                // Neither rest endpoint is known yet; the panel's layout rectangle is not
-                // a substitute for the viewport that was actually on screen a frame ago.
-                clipBottom = clipBandBottom;
+            } else if (musicBandMorph || musicCardProgress > 0f) {
+                // Only the number of visible rows changes. Keep the current font size,
+                // column width and duet positions through a drag, reversal or late handoff.
+                clipBottom = LyricBandGeometry.panelReadingFloor(foldedPanelBottom, expandedPanelBottom,
+                        musicCardProgress, musicBandMorph && bandOk ? clipBandBottom : clipBottom);
             }
         }
-        boolean changed = ok != bandOk || panelScale != previousScale || panelFitted != wasFitted
+        boolean changed = ok != bandOk
                 || Math.abs(top - bandTop) >= 0.5f || Math.abs(bottom - bandBottom) >= 0.5f
                 || Math.abs(clipTop - clipBandTop) >= 0.5f
                 || Math.abs(clipBottom - clipBandBottom) >= 0.5f;
@@ -2526,7 +2499,7 @@ final class LyricView extends View {
         }
         if (centring() && dotsFor < 0 && singing.first >= 0 && singing.last < lines.size()) {
             float bandHeight = bandBottom - bandTop;
-            return LyricBandGeometry.singingAnchorFix(bandHeight, panelScale, singing.height(base, height),
+            return LyricBandGeometry.singingAnchorFix(bandHeight, singing.height(base, height),
                     height[focus], singing.position(focus, base) - singing.position(singing.first, base),
                     musicCardProgress, ANCHOR);
         }
@@ -2624,32 +2597,7 @@ final class LyricView extends View {
         boolean singingNow = ms >= LyricFocus.startOf(line) && ms < LyricFocus.endOf(line);
         if (!singingNow && transition.alpha(index) <= 0.003f) return false;
         float y = anchorY() + pageFloatOffset() + transition.position(index) - scroll[index] + presentationOffset();
-        return y < sourceClipBottom() && y + height[index] + blurPad > sourceClipTop();
-    }
-
-    private void seedPanelFit(float floor, float top, float bottom, float previousProgress) {
-        if (foldedPanelRoom > 0f || !Float.isFinite(floor) || !(bottom > top)) return;
-        float room = floor - LyricBandGeometry.singingTop(top, bottom, 0f);
-        if (!(room > 0f)) return;
-        foldedPanelBottom = floor;
-        foldedPanelRoom = room;
-        if (bandOk && previousProgress > 0f) {
-            float previousPivot = LyricBandGeometry.singingTop(bandTop, bandBottom, 0f, previousProgress);
-            panelJoinRoom = clipBandBottom - previousPivot;
-            panelJoinProgress = previousProgress;
-        }
-    }
-
-    private float panelPivot() {
-        return LyricBandGeometry.singingTop(bandTop, bandBottom, 0f, musicCardProgress);
-    }
-
-    private float sourceClipTop() {
-        return panelFitted ? LyricPanelFit.sourceY(clipBandTop, panelPivot(), panelScale) : clipBandTop;
-    }
-
-    private float sourceClipBottom() {
-        return panelFitted ? panelPivot() + panelSourceRoom : clipBandBottom;
+        return y < clipBandBottom && y + height[index] + blurPad > clipBandTop;
     }
 
     // ------------------------------------------------------------------ drawing
@@ -2721,11 +2669,7 @@ final class LyricView extends View {
         float anchor = frozen ? lastPageAnchor : anchorY() + pageFloatOffset();
         float vis = show * clamp01(popA.x);
         float side = sidePx;
-        float pivot = panelPivot();
-        // All row decisions below are in lyric coordinates. In particular their bottom
-        // remains the folded reading extent relative to the singer; dragging a rectangle
-        // past a word cannot trim that word, its blur, or the other singer's line.
-        float sourceTop = sourceClipTop(), sourceBottom = sourceClipBottom();
+        float sourceTop = clipBandTop, sourceBottom = clipBandBottom;
         float sourceHeight = sourceBottom - sourceTop;
         float bottomFade = Math.min(BOTTOM_FADE_DP * density, sourceHeight / 3f);
         float feather = Math.min(Math.max(TOP_FADE_DP * density, textPx * 1.4f), sourceHeight / 3f);
@@ -2734,11 +2678,10 @@ final class LyricView extends View {
 
         int save = canvas.save();
         if (popped) canvas.translate(popX.x, popY.x);
-        // The capsule floor limits the text fed into the blur, not the already blurred
-        // output. Keep its halo in the gap without changing the reading or touch bounds.
-        boolean softFloor = LockLyrics.capsuleLayoutOrigin() && canvas.isHardwareAccelerated();
+        // A shrinking viewport reveals fewer full-size rows. Fade the ink before applying
+        // its blur: the moving card is neither a scissor for glyphs nor a blur surface.
+        boolean softFloor = LockLyrics.capsuleLayoutOrigin();
         float outputBottom = sourceBottom + (softFloor ? blurPad : 0f);
-        LyricPanelFit.apply(canvas, getWidth() / 2f, pivot, panelScale);
         canvas.clipRect(0f, sourceTop, getWidth(), outputBottom);
         float offset = frozen ? lastPageOffset : presentationOffset();
         if (offset != 0f) canvas.translate(0f, offset);
@@ -2754,7 +2697,7 @@ final class LyricView extends View {
             lastPageOffset = offset;
             float dy = popped ? popY.x : 0f;
             lastBandTop = Math.max(0f, dy + clipBandTop);
-            lastBandBottom = Math.min(getHeight(), dy + pivot + (outputBottom - pivot) * panelScale);
+            lastBandBottom = Math.min(getHeight(), dy + outputBottom);
         }
         float separationDt = separationAt == 0L ? 0f : Math.min(0.05f, Math.max(0f, (drawAt - separationAt) / 1000f));
         separationAt = drawAt;
@@ -2807,8 +2750,8 @@ final class LyricView extends View {
             }
             float shownY = y + offset;
             float bottom = y + height[i];
-            if (shownY >= sourceBottom || bottom + offset + blurPad <= sourceTop) continue;
-            float edge = clamp01((sourceBottom - shownY) / bottomFade);
+            if (shownY - (softFloor ? blurPad : 0f) >= sourceBottom || bottom + offset + blurPad <= sourceTop) continue;
+            float edge = softFloor ? 1f : clamp01((sourceBottom - shownY) / bottomFade);
             float alpha = vis * edge * rowTransitionAlpha * (last ? 1f : finalHold.alpha());
             if (alpha <= 0.003f) continue;
             previousBottom = Math.max(previousBottom, bottom);
@@ -2816,8 +2759,8 @@ final class LyricView extends View {
                     Math.min(outputBottom - offset, bottom + blurPad));
             try {
                 float inkFloor = softFloor ? sourceBottom - offset : Float.POSITIVE_INFINITY;
-                if (last && finishingLast) drawFinalFields(canvas, i, side, y, alpha, inkFloor);
-                else drawLine(canvas, i, side, y, alpha, inkFloor);
+                if (last && finishingLast) drawFinalFields(canvas, i, side, y, alpha, inkFloor, bottomFade);
+                else drawLine(canvas, i, side, y, alpha, inkFloor, bottomFade);
             } finally {
                 topFade.endRow(canvas, getWidth(), layer);
             }
@@ -2895,7 +2838,7 @@ final class LyricView extends View {
     private final android.graphics.Rect exitClip = new android.graphics.Rect();
     private final Paint exitEraser = new Paint();
 
-    private void drawFinalFields(Canvas canvas, int i, float x, float y, float alpha, float inkFloor) {
+    private void drawFinalFields(Canvas canvas, int i, float x, float y, float alpha, float inkFloor, float feather) {
         int pose = canvas.save();
         try {
             canvas.translate(x, y);
@@ -2923,7 +2866,7 @@ final class LyricView extends View {
             }
             int layer = canvas.saveLayer(exitClip.left, top, exitClip.right, bottom, null);
             try {
-                drawLine(canvas, i, 0f, 0f, alpha, inkFloor - y);
+                drawLine(canvas, i, 0f, 0f, alpha, inkFloor - y, feather);
                 exitEraser.setBlendMode(android.graphics.BlendMode.DST_OUT);
                 mask.erase(canvas, exitEraser, finalHold.progress(), 1f);
             } finally {
@@ -2934,16 +2877,10 @@ final class LyricView extends View {
         }
     }
 
-    private void drawLine(Canvas canvas, int i, float x, float y, float a, float inkFloor) {
+    private void drawLine(Canvas canvas, int i, float x, float y, float a, float inkFloor, float feather) {
         float pixels = blur[i];
         if (pixels < 0.05f || !canvas.isHardwareAccelerated()) {
-            if (Float.isFinite(inkFloor) && y + height[i] + blurPad > inkFloor) {
-                int saved = canvas.save();
-                try {
-                    if (canvas.getClipBounds(rowClip) && canvas.clipRect(rowClip.left, rowClip.top,
-                            rowClip.right, inkFloor)) drawInkAt(canvas, i, x, y, a);
-                } finally { canvas.restoreToCount(saved); }
-            } else drawInkAt(canvas, i, x, y, a);
+            drawPanelInk(canvas, i, x, y, a, inkFloor, feather);
             return;
         }
         if (!canvas.getClipBounds(rowClip)) return;
@@ -2954,12 +2891,19 @@ final class LyricView extends View {
         if (right <= left || bottom <= top) return;
         LyricRenderBlur effect = rowEffects[i];
         if (effect == null) effect = rowEffects[i] = new LyricRenderBlur();
-        Canvas layer = effect.begin(left, top, right, bottom, pixels, inkFloor);
+        Canvas layer = effect.begin(left, top, right, bottom, pixels);
         try {
-            drawInkAt(layer, i, x, y, a);
+            drawPanelInk(layer, i, x, y, a, inkFloor, feather);
         } finally {
             effect.finish(canvas);
         }
+    }
+
+    private void drawPanelInk(Canvas canvas, int i, float x, float y, float a, float floor, float feather) {
+        float bottom = y + height[i] + blurPad;
+        int layer = panelFade.beginRow(canvas, getWidth(), y - blurPad, bottom, floor, feather);
+        try { drawInkAt(canvas, i, x, y, a); }
+        finally { panelFade.endRow(canvas, getWidth(), bottom, layer); }
     }
 
     private void drawInkAt(Canvas canvas, int i, float x, float y, float a) {
@@ -3563,6 +3507,9 @@ final class LyricView extends View {
         return " build=" + com.os4.musiccover.BuildConfig.VERSION_CODE
                 + " nav=" + diagnosticNavigation + " independent=" + Settings.LYRIC_CLOCK_INDEPENDENT.on()
                 + " keptMini=" + Main.capsuleKeepsMini() + " unstable=" + diagnosticUnstable
+                + " textPx=" + r2(textPx) + " marginPx=" + r2(sidePx)
+                + " columnPx=" + (focus >= 0 && focus < main.length && main[focus] != null
+                        ? main[focus].getWidth() : 0) + " cardProgress=" + r2(musicCardProgress)
                 + " anchor=" + diagCoordinate(anchorY()) + " obstacle=" + diagCoordinate(diagnosticObstacle)
                 + " viewOffset=" + diagCoordinate(diagnosticViewOffset) + " normalRef=" + diagnosticReferenceSource
                 + " refBand=" + diagCoordinate(diagnosticReferenceTop) + ".." + diagCoordinate(diagnosticReferenceBottom);

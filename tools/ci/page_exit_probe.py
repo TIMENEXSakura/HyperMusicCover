@@ -181,31 +181,50 @@ def analyse():
     assert abs(halo[-1]) < 2, halo[-1]
     matching_pixels(wide[339:397, 415:465], background[339:397, 415:465],
                     "Ink behind the capsule contributed to the blur")
-    # Lower lines must shrink with the full verse and retain their ink, including
-    # the blurred harmony. A moving scissor can satisfy a bottom-bound check alone.
-    def ink_bands(frame):
-        sig = np.maximum((frame - background).mean(axis=2), 0)
-        spans = np.flatnonzero(np.diff(np.r_[False, (sig > 9).any(axis=1), False]))
-        assert spans.size == 6, f"Expected three complete lyric lines: {spans}"
-        return [(sig[a:b].sum(), a, b) for a, b in spans.reshape(-1, 2)]
+    # The viewport moves, not the glyph mesh. Use flat-background crops, so the
+    # native raster of both clear rows can be compared before/after an integer translation.
+    def panel_base(progress):
+        top, floor = 100 - 48 * progress, 660 - 320 * progress
+        return int(np.floor(top + (floor - top) * (.3 + .2 * progress) + 20 + .5))
 
-    original = ink_bands(rgb("panel-0"))
+    panel0 = rgb("panel-0")
+    original_base = panel_base(0)
+    def clear_voice(frame, base):
+        return frame[base - 51:base + 10, 26:228]
+
     for i in range(5):
         opened = rgb(f"panel-{i}")
-        matching_pixels(opened, rgb(f"panel-{8-i}"), f"Panel reversal changed the lyric pose at {i}")
-        measured = ink_bands(opened)
-        scale = (520 - 98 * i / 4 - 270) / 250
-        for (energy, y1, y2), (base_energy, b1, b2) in zip(measured, original):
-            assert abs(y1 - (270 + (b1 - 270) * scale)) <= 3
-            assert abs(y2 - (270 + (b2 - 270) * scale)) <= 3
-            assert .78 < energy / (base_energy * scale**2) < 1.25, "Lyric or blur was clipped during panel travel"
-        assert measured[-1][2] < 521 - 98 * i / 4, "Harmony overlaps the settled card boundary"
+        matching_pixels(opened, rgb(f"panel-{8-i}"), f"Reversing changed the lyrics at step {i}")
+        base = panel_base(i / 4)
+        for gap in (0, 61):
+            reference_voice = clear_voice(panel0, original_base + gap)
+            assert np.count_nonzero(reference_voice > 150) > 1000
+            matching_pixels(clear_voice(opened, base + gap), reference_voice,
+                            f"Font width/height, position or inter-line spacing changed at step {i}")
+
+    def harmony_profile(frame, base):
+        # Strip away the backdrop so this measures glyph ink, not a changing crop of the scene.
+        area = (slice(base + 169 - 46, base + 169 + 16), slice(35, 475))
+        return ((frame[area] - background[area]) / (255 - background[area])).sum(axis=(1, 2))
+
+    profile = harmony_profile(panel0, original_base)
+    mid = harmony_profile(rgb("panel-3"), panel_base(.75))
+    # Progress 75% brings the backing into the feather. Its lower strokes must lose
+    # more ink than its upper strokes (a whole-row fade or a hard scissor fails).
+    strong = np.flatnonzero(profile > profile.max() * .20)
+    assert len(strong) > 15
+    thirds = np.array_split(strong, 3)
+    ratios = [mid[idx].sum() / profile[idx].sum() for idx in thirds]
+    assert 1.02 >= ratios[0] > ratios[1] + .045 > ratios[2] + .09 and ratios[2] > .01, ratios
+    end_harmony = harmony_profile(rgb("panel-4"), panel_base(1))
+    assert end_harmony.sum() < .01 * profile.sum(), "Hidden harmony still paints inside the card"
+    assert panel_base(1) < original_base - 50, "The singer must move along with the viewport"
 
     panel_strip = Image.new("RGB", (5 * 226, 177), "#121622")
     labels = ImageDraw.Draw(panel_strip)
     for slot, frame_no in enumerate((0, 2, 4, 6, 8)):
         with Image.open(OUT / f"panel-{frame_no}.png") as image:
-            panel_strip.paste(image.crop((65, 249, 517, 549)).resize((226, 150), Image.Resampling.LANCZOS),
+            panel_strip.paste(image.crop((20, 170, 472, 470)).resize((226, 150), Image.Resampling.LANCZOS),
                               (slot * 226, 27))
         labels.text((slot * 226 + 5, 7), ("Folded", "Opening", "Expanded", "Closing", "Folded")[slot],
                     fill="white")

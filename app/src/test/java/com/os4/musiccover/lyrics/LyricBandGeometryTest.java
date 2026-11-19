@@ -5,36 +5,17 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricBandGeometryTest {
-    @Test public void panelFitReversesFromExactlyTheSameInkGeometry() {
-        float room = 500f;
-        for (float progress : new float[]{0f, .3f, .85f, 1f, .85f, .3f, 0f}) {
-            float floor = LyricBandGeometry.morphEdge(900f, 630f, progress);
-            float pivot = LyricBandGeometry.morphEdge(400f, 360f, progress);
-            float scale = LyricBandGeometry.panelScale(room, floor - pivot);
-            assertEquals(floor, pivot + room * scale, .001f);
-            // The physical card edge corresponds to the same part of the original stack,
-            // including a wrapped group that straddled that edge before the gesture.
-            assertEquals(pivot + room, LyricPanelFit.sourceY(floor, pivot, scale), .001f);
-            assertEquals(progress == 0f, scale == 1f);
-        }
-        assertEquals(1f, LyricBandGeometry.panelScale(400f, 600f), 0f);
+    @Test public void reversingThePanelRevisitsTheSameReadingEdge() {
+        float folded = 880f, expanded = 570f;
+        float[] samples = {0f, .6f, 1f, .6f, 0f};
+        float[] expected = {880f, 694f, 570f, 694f, 880f};
+        for (int i = 0; i < samples.length; i++)
+            assertEquals(expected[i], LyricBandGeometry.panelReadingFloor(folded, expanded, samples[i], 200f), .001f);
     }
 
-    @Test public void collapseAfterRotationJoinsThePreviouslyDisplayedCardAtItsNativeScale() {
-        assertEquals(220f, LyricBandGeometry.panelSourceRoom(500f, 220f, 1f, 1f), 0f);
-        assertEquals(360f, LyricBandGeometry.panelSourceRoom(500f, 220f, 1f, .5f), 0f);
-        assertEquals(500f, LyricBandGeometry.panelSourceRoom(500f, 220f, 1f, 0f), 0f);
-        assertEquals(500f, LyricBandGeometry.panelSourceRoom(500f, Float.NaN, 0f, 1f), 0f);
-    }
-
-    @Test public void twoVoicesThatFitAfterScalingStillUseTheirSharedCentre() {
-        float physical = 300f, scale = .6f, group = 460f, focus = 120f, offset = 340f;
-        float fix = LyricBandGeometry.singingAnchorFix(physical, scale, group, focus, offset, 1f, .3f);
-        float pivot = physical / 2f;
-        float firstTop = physical * .3f + fix - offset;
-        float paintedTop = pivot + (firstTop - pivot) * scale;
-        assertEquals(pivot, paintedTop + group * scale / 2f, .001f);
-        assertTrue(paintedTop >= 0f && paintedTop + group * scale <= physical);
+    @Test public void aLateEndpointDoesNotReplaceTheDisplayedViewportWithTheCardsHitBox() {
+        assertEquals(810f, LyricBandGeometry.panelReadingFloor(900f, Float.NaN, .4f, 810f), 0f);
+        assertEquals(610f, LyricBandGeometry.panelReadingFloor(Float.NaN, 580f, .85f, 610f), 0f);
     }
 
     @Test public void interludeDotsFollowSingingAnchorThroughoutCardMorph() {

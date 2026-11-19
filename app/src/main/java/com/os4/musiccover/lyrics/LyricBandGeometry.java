@@ -32,14 +32,6 @@ public final class LyricBandGeometry {
                 - anchorFraction * bandHeight + focusOffset;
     }
 
-    /** Row metrics are in the unscaled text canvas, but the pivot follows the physical band. */
-    static float singingAnchorFix(float bandHeight, float scale, float groupHeight, float focusHeight,
-                                  float focusOffset, float cardProgress, float anchorFraction) {
-        float fittedHeight = bandHeight / scale;
-        return singingAnchorFix(fittedHeight, groupHeight, focusHeight, focusOffset, cardProgress, anchorFraction)
-                + (bandHeight - fittedHeight) * (singingFraction(cardProgress) - anchorFraction);
-    }
-
     /** Align the interlude slot's centre with the current singing position. */
     static float interludeAnchorFix(float bandHeight, float slotHeight, float cardProgress,
                                    float positionDelta) {
@@ -53,16 +45,11 @@ public final class LyricBandGeometry {
         return mini + (card - mini) * p;
     }
 
-    /** Uniformly fit the same folded reading area around the current singer. A taller
-     * destination never enlarges text. No live card or row bounds enter this calculation. */
-    static float panelScale(float foldedRoomBelowAnchor, float currentRoomBelowAnchor) {
-        if (!(foldedRoomBelowAnchor > 0f) || !(currentRoomBelowAnchor > 0f)
-                || !Float.isFinite(foldedRoomBelowAnchor) || !Float.isFinite(currentRoomBelowAnchor)) return 1f;
-        return Math.min(1f, currentRoomBelowAnchor / foldedRoomBelowAnchor);
-    }
-
-    static float panelSourceRoom(float folded, float joinedRoom, float joinedProgress, float progress) {
-        return joinedRoom > 0f && joinedProgress > 0f ? morphEdge(folded, joinedRoom, progress / joinedProgress) : folded;
+    /** Keep the last displayed floor until both resting panel layouts are available.
+     * A transient native card hit box can be at its destination before its first drawn frame. */
+    static float panelReadingFloor(float folded, float expanded, float progress, float previous) {
+        return Float.isFinite(folded) && Float.isFinite(expanded)
+                ? morphEdge(folded, expanded, progress) : previous;
     }
 
     /** Navigation keeps its own live bottom clip while both reading endpoints follow music. */
