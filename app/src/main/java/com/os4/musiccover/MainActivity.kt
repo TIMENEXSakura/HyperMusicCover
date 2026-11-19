@@ -2,13 +2,10 @@ package com.os4.musiccover
 
 import com.os4.musiccover.app.AppNightMode
 import com.os4.musiccover.app.AppSettings
-import com.os4.musiccover.app.CreditsActivity
 import com.os4.musiccover.app.LaunchBackground
-import com.os4.musiccover.app.LicenseActivity
 import com.os4.musiccover.app.LocaleHelper
 import com.os4.musiccover.app.LsposedService
 import android.content.Context
-import android.content.Intent
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -26,7 +23,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,18 +38,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.os4.musiccover.ui.component.PagerNavigationSpringSpec
 import com.os4.musiccover.ui.component.liquid.IosLiquidGlassNavigationBar
-import com.os4.musiccover.ui.screen.about.AboutPageContent
 import com.os4.musiccover.updater.UpdateCheck
-import com.os4.musiccover.ui.screen.features.FeaturesPageView
 import com.os4.musiccover.ui.screen.home.HomePageView
 import com.os4.musiccover.ui.screen.settings.SettingsPageView
 import com.os4.musiccover.ui.theme.AppTheme
@@ -60,8 +56,10 @@ import com.os4.musiccover.ui.util.LocalPageBackdrop
 import com.os4.musiccover.ui.util.isInDarkTheme
 import com.os4.musiccover.ui.welcome.SplashIcon
 import com.os4.musiccover.ui.welcome.WelcomeScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Badge
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
 import top.yukonga.miuix.kmp.basic.FloatingToolbarDefaults
@@ -79,9 +77,7 @@ import top.yukonga.miuix.kmp.glass.GlassNavigationBar
 import top.yukonga.miuix.kmp.glass.GlassNavigationItem
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Home
-import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Settings
-import top.yukonga.miuix.kmp.icon.extended.Tune
 import top.yukonga.miuix.kmp.material.EdgeStrokes
 import top.yukonga.miuix.kmp.material.GlassDefaults
 import top.yukonga.miuix.kmp.material.edgeStroke
@@ -447,22 +443,33 @@ private fun MainScreen(
     onBlurEnabledChange: (Boolean) -> Unit,
     onShowWelcome: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val pagerState = rememberPagerState(pageCount = { 4 })
+    val pagerState = rememberPagerState(pageCount = { 2 })
     var selectedIndex by remember { mutableIntStateOf(0) }
     var isNavigating by remember { mutableStateOf(false) }
     var navJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
     val items = listOf(
         stringResource(R.string.tab_home),
-        stringResource(R.string.tab_features),
         stringResource(R.string.tab_settings),
-        stringResource(R.string.tab_about),
     )
-    val icons = listOf(MiuixIcons.Home, MiuixIcons.Tune, MiuixIcons.Settings, MiuixIcons.Info)
+    val icons = listOf(MiuixIcons.Home, MiuixIcons.Settings)
+
+    // The settings tab carries a dot while a release is waiting. The check runs once when the
+    // app starts (see below); this only picks up its answer. `UpdateCheck.result` is a plain
+    // volatile field rather than Compose state, so an answer that lands after this composed is
+    // polled for, bounded, and the poll also stops once a check has been recorded either way.
+    var hasUpdate by remember { mutableStateOf(UpdateCheck.result != null) }
+    LaunchedEffect(resumeKey) {
+        hasUpdate = UpdateCheck.result != null
+        repeat(120) {
+            if (hasUpdate || UpdateCheck.isFresh()) return@LaunchedEffect
+            delay(500)
+            hasUpdate = UpdateCheck.result != null
+        }
+    }
 
     /**
-     * One flag per page rather than one counter shared by all four.
+     * One flag per page rather than one counter shared by all of them.
      *
      * The pages re-ask the module when they come to the front, and a single counter bumped on
      * every tab change made that *every* page: a tap re-composed and re-queried the pages nobody
@@ -476,9 +483,7 @@ private fun MainScreen(
      * otherwise every page is unskippable and the split buys nothing.
      */
     val onHomePage = remember { derivedStateOf { pagerState.currentPage == 0 } }
-    val onAboutPage = remember { derivedStateOf { pagerState.currentPage == 3 } }
     val isHomeCurrent: () -> Boolean = remember(onHomePage) { { onHomePage.value } }
-    val isAboutCurrent: () -> Boolean = remember(onAboutPage) { { onAboutPage.value } }
 
     LaunchedEffect(pagerState.currentPage) {
         if (!isNavigating && selectedIndex != pagerState.currentPage) {
@@ -550,6 +555,7 @@ private fun MainScreen(
                 selectedIndex = selectedIndex,
                 backdrop = backdrop,
                 blurActive = isBlurEnabled,
+                showSettingsBadge = hasUpdate,
                 onItemSelected = { index -> goToPage(index) },
             )
         }
@@ -585,26 +591,10 @@ private fun MainScreen(
                             extraBottomPadding = navBarHeight,
                         )
 
-                        1 -> FeaturesPageView(
-                            isBlurEnabled = isBlurEnabled,
-                            extraBottomPadding = navBarHeight,
-                        )
-
-                        2 -> SettingsPageView(
+                        1 -> SettingsPageView(
                             isBlurEnabled = isBlurEnabled,
                             extraBottomPadding = navBarHeight,
                             onShowWelcome = onShowWelcome,
-                        )
-
-                        3 -> AboutPageContent(
-                            openLicensePage = {
-                                context.startActivity(Intent(context, LicenseActivity::class.java))
-                            },
-                            openCreditsPage = {
-                                context.startActivity(Intent(context, CreditsActivity::class.java))
-                            },
-                            isBlurEnabled = isBlurEnabled,
-                            isCurrent = isAboutCurrent,
                         )
                     }
                 }
@@ -621,8 +611,20 @@ private fun BottomNavigationBar(
     selectedIndex: Int,
     backdrop: LayerBackdrop?,
     blurActive: Boolean,
+    showSettingsBadge: Boolean,
     onItemSelected: (Int) -> Unit,
 ) {
+    // The settings tab is always the last one, which is what the update dot hangs on.
+    val settingsTab = items.lastIndex
+    val badge: (@Composable () -> Unit)? =
+        if (showSettingsBadge) ({ Badge() }) else null
+
+    // miuix's demo lets the floating capsule bars size themselves and leaves the standard bar to
+    // its container. With four tabs the capsule bars gave each tab the width the demo shows; with
+    // two it doubles it, so the capsules are given the width they had and centred instead of
+    // stretched. The standard bar stays full width - it is a surface, not a capsule.
+    val liquidWidth = (items.size * 74).dp + 96.dp
+
     // In OS4 the bar is glass, whatever the OS3 trio was set to. Those settings stay stored,
     // untouched, and come back with the OS3 interface.
     if (LocalOs4Ui.current) {
@@ -631,6 +633,7 @@ private fun BottomNavigationBar(
             icons = icons,
             selectedIndex = selectedIndex,
             backdrop = backdrop,
+            showSettingsBadge = showSettingsBadge,
             onItemSelected = onItemSelected,
         )
         return
@@ -641,14 +644,20 @@ private fun BottomNavigationBar(
             val navigationItems = remember(items, icons) {
                 List(items.size) { i -> NavigationItem(items[i], icons[i]) }
             }
-            IosLiquidGlassNavigationBar(
-                modifier = Modifier.padding(horizontal = 12.dp),
-                items = navigationItems,
-                selectedIndex = selectedIndex,
-                onItemClick = onItemSelected,
-                backdrop = backdrop,
-                isBlurActive = blurActive,
-            )
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                IosLiquidGlassNavigationBar(
+                    modifier = Modifier.width(liquidWidth),
+                    items = navigationItems,
+                    selectedIndex = selectedIndex,
+                    onItemClick = onItemSelected,
+                    backdrop = backdrop,
+                    isBlurActive = blurActive,
+                    badge = { index -> if (index == settingsTab) badge else null },
+                )
+            }
         }
 
         1 -> {
@@ -682,13 +691,17 @@ private fun BottomNavigationBar(
                         onClick = { onItemSelected(index) },
                         icon = icons[index],
                         label = label,
-                        enabled = true
+                        enabled = true,
+                        badge = if (index == settingsTab) badge else null,
                     )
                 }
             }
         }
 
         else -> {
+            // The standard bar is a full-width surface under the page, not a floating capsule:
+            // narrowing it left the blur and the colour only under the two tabs and the page
+            // showing through on either side. It keeps its width and stretches its two tabs.
             val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
             Box(
                 modifier = Modifier
@@ -722,7 +735,8 @@ private fun BottomNavigationBar(
                             onClick = { onItemSelected(index) },
                             icon = icons[index],
                             label = label,
-                            enabled = true
+                            enabled = true,
+                            badge = if (index == settingsTab) badge else null,
                         )
                     }
                 }
@@ -744,22 +758,31 @@ private fun BottomNavigationBarOs4(
     icons: List<androidx.compose.ui.graphics.vector.ImageVector>,
     selectedIndex: Int,
     backdrop: LayerBackdrop?,
+    showSettingsBadge: Boolean,
     onItemSelected: (Int) -> Unit,
 ) {
-    val glassItems = remember(items, icons) {
+    val settingsTab = items.lastIndex
+    val glassItems = remember(items, icons, showSettingsBadge) {
         List(items.size) { i ->
             GlassNavigationItem(
                 icon = icons[i],
                 label = items[i],
+                badge = if (showSettingsBadge && i == settingsTab) ({ Badge() }) else null,
             )
         }
     }
-    GlassNavigationBar(
-        items = glassItems,
-        selectedIndex = selectedIndex,
-        onSelect = onItemSelected,
-        backdrop = backdrop,
-        modifier = Modifier.padding(horizontal = 24.dp),
-        style = GlassDefaults.style(isInDarkTheme()),
-    )
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        GlassNavigationBar(
+            items = glassItems,
+            selectedIndex = selectedIndex,
+            onSelect = onItemSelected,
+            backdrop = backdrop,
+            // The demo's four-tab bar: 8dp of content padding each side plus 84dp a tab.
+            modifier = Modifier.width((items.size * 84).dp + 16.dp),
+            style = GlassDefaults.style(isInDarkTheme()),
+        )
+    }
 }

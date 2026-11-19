@@ -1,4 +1,5 @@
-"""Exercise the Compose editor through its launcher on a disposable Android emulator."""
+"""Exercise app navigation and the Compose editor through the real launcher on an emulator."""
+import argparse
 import colorsys
 import json
 import os
@@ -210,7 +211,7 @@ def select_lyrics_tab():
 
 def open_lyrics_tab():
     start_main()
-    tap(labels("tab_features"), bottom_tab=True)
+    tap(labels("tab_home"), bottom_tab=True)
     tap(labels("features_cover_title"), scroll=True)
     select_lyrics_tab()
     locate(labels("lyrics_style_title"), scroll=True)
@@ -237,6 +238,49 @@ def return_to_lyrics():
     shell("input", "keyevent", "KEYCODE_BACK")
     locate(labels("lyrics_style_title"), scroll="up")
     assert "CoverActivity" in activity(), activity()
+
+
+def expect_activity(name):
+    deadline = time.monotonic() + 10
+    while True:
+        current = activity()
+        if PKG in current and "." + name in current:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Expected {name}, last resumed activity was {current}")
+        time.sleep(.25)
+
+
+def check_navigation():
+    start_main()
+    tap(labels("tab_settings"), bottom_tab=True)
+    tap(labels("app_name"), scroll=True)
+    expect_activity("AboutActivity")
+    shot("about")
+    shell("input", "keyevent", "KEYCODE_BACK")
+    expect_activity("MainActivity")
+    locate(labels("donate_title"), scroll=True)
+    tap(labels("tab_home"), bottom_tab=True)
+
+    routes = {"mini": "MiniPlayerActivity", "cover": "CoverActivity", "shade": "ShadeActivity",
+              "transit": "TransitActivity", "fpquick": "FpQuickActivity"}
+    for key, name in routes.items():
+        tap(labels(f"features_{key}_title"), scroll=True)
+        expect_activity(name)
+        if key == "cover":
+            select_lyrics_tab()
+            locate(labels("lyrics_style_title"), scroll=True)
+            enter_editor()
+            shot("lyric-preview")
+            return_to_lyrics()
+        shell("input", "keyevent", "KEYCODE_BACK")
+        expect_activity("MainActivity")
+        print(f"Verified home opens {name} and back returns to the launcher", flush=True)
+
+    (OUT / "verified.json").write_text(json.dumps({
+        "commit": os.environ.get("GITHUB_SHA"), "settingsAbout": True,
+        "homeActivities": list(routes.values()), "lyricPreview": True,
+    }, indent=2))
 
 
 def editor_shot(name):
@@ -404,7 +448,7 @@ def set_duet(enabled):
 
 
 
-def run():
+def run(navigation_only=False):
     OUT.mkdir(exist_ok=True)
     serial = adb("get-serialno").decode().strip()
     if not serial.startswith("emulator-") or "1" not in (shell("getprop", "ro.boot.qemu"), shell("getprop", "ro.kernel.qemu")):
@@ -420,6 +464,9 @@ def run():
     seed("shared_prefs/app_prefs.xml", '<map><string name="language_code">zh-CN</string></map>')
     # A fresh installation can try the editor before the first SystemUI settings migration.
     adb("logcat", "-c")
+    if navigation_only:
+        check_navigation()
+        return
     open_lyrics_tab()
     enter_editor()
     pick("main")
@@ -491,8 +538,10 @@ def run():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--navigation", action="store_true", help="check About, feature entries and lyric preview")
     try:
-        run()
+        run(parser.parse_args().navigation)
     except Exception:
         OUT.mkdir(exist_ok=True)
         try:

@@ -25,18 +25,18 @@ jobs:
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
       - name: Check module entry points and record artifact identity
         run: |
-          jq -e '.elements[0] | .versionName == "0.9.58" and .versionCode == 958009' app/build/outputs/apk/release/output-metadata.json
+          jq -e '.elements[0] | .versionName == "0.9.59" and .versionCode == 959001' app/build/outputs/apk/release/output-metadata.json
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.58.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.59.apk
           cd dist
-          apk=HyperMusicCover-0.9.58.apk
+          apk=HyperMusicCover-0.9.59.apk
           unzip -p "$apk" META-INF/xposed/java_init.list | grep -Fx 'com.os4.musiccover.Main'
           unzip -p "$apk" META-INF/xposed/scope.list | grep -Fx 'com.android.systemui'
           sha256sum "$apk" > SHA256SUMS.txt
           git rev-parse HEAD > commit.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: HyperMusicCover-0.9.58
+          name: HyperMusicCover-0.9.59
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -85,11 +85,20 @@ jobs:
           heap-size: 384M
           profile: pixel_7
           disable-animations: true
-          script: python3 tools/ci/page_exit_probe.py run
+          script: |
+            python3 tools/ci/page_exit_probe.py run
+            python3 tools/ci/lyric_editor_smoke.py --navigation
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: page-exit-render-diagnostics
           path: page-exit-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: navigation-diagnostics
+          path: diagnostics/
           if-no-files-found: ignore
           retention-days: 14
