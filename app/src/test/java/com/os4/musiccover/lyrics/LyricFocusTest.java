@@ -18,13 +18,11 @@ public class LyricFocusTest {
         assertEquals(2, focus.count);
         assertTrue(focus.contains(0));
         assertTrue(focus.contains(4));
-        assertFalse(focus.visible(2));
+        assertFalse(focus.contains(2));
         assertEquals(0, focus.distance(0));
         float[] base = {0, 120, 240, 360, 480};
         float[] heights = {100, 100, 100, 100, 100};
-        focus.layout(base, heights, 20);
-        assertEquals(120, focus.position(4, base), 0);
-        assertEquals(220, focus.height(base, heights), 0);
+        assertEquals(580, focus.height(base, heights), 0);
     }
 
     @Test public void newestFourWinAndLimitOneIsRespected() {
@@ -112,77 +110,48 @@ public class LyricFocusTest {
         LyricFocus focus = new LyricFocus();
         focus.update(Arrays.asList(line(0, 100), line(0, 100)), 50, 4, 1, 1);
         float[] base = {0, 320};
-        focus.layout(base, new float[]{300, 200}, 20);
         assertEquals(520, focus.height(base, new float[]{300, 200}), 0);
     }
 
-    @Test public void staggeredBackingKeepsFinishedMiddleRowApartUntilItActuallyLeaves() {
+    @Test public void staggeredBackingsKeepTheirMeasuredRowsWhenTheMiddleGroupFinishes() {
         LyricLine first = line(0, 10000);
-        LyricLine middle = line(2000, 4000);
-        LyricLine last = line(3000, 8000);
-        last.addBackground(line(1000, 8000)); // voice three starts before the second lead
-        List<LyricLine> lines = Arrays.asList(first, middle, last);
+        LyricLine middle = line(2000, 3000);
+        middle.addBackground(line(1500, 3500));
+        middle.addBackground(line(2600, 4000));
+        LyricLine third = line(3000, 8000);
+        third.addBackground(line(1000, 8000)); // third group can sing before the second lead
+        List<LyricLine> lines = Arrays.asList(first, middle, third, line(6000, 12000));
         LyricFocus focus = new LyricFocus();
-        float[] heights = {100, 300, 160}; // middle includes its translation/backing rows
-        float[] base = {0, 120, 440};
-        boolean[] retained = new boolean[3];
-        focus.update(lines, 1500, 3, 0, 0);
-        assertTrue(focus.contains(0));
-        assertTrue(focus.contains(2));
-        focus.update(lines, 3000, 3, 2, 2);
-        assertEquals(3, focus.count);
-        focus.layout(base, heights, 20, retained);
-        assertEquals(320, focus.position(2, base) - focus.position(1, base), 0);
-
-        // Its ink fades while the middle slot is still on screen.
-        focus.update(lines, 4100, 3, 2, 2);
-        assertFalse(focus.contains(1));
-        retained[1] = LyricFocus.retainSlot(false, true, 0.5f);
-        focus.layout(base, heights, 20, retained);
-        assertEquals(320, focus.position(2, base) - focus.position(1, base), 0);
-        retained[1] = LyricFocus.retainSlot(false, true, 0f);
-        focus.layout(base, heights, 20, retained);
-        assertEquals(focus.position(1, base), focus.position(2, base), 0);
-    }
-
-    @Test public void fadingAndUnfinishedUnselectedRowsRetainSpaceButHiddenRowsDoNot() {
-        assertTrue(LyricFocus.retainSlot(true, false, 0f));
-        assertTrue(LyricFocus.retainSlot(false, true, 0.1f));
-        assertFalse(LyricFocus.retainSlot(false, false, 0.1f));
-        assertFalse(LyricFocus.retainSlot(false, true, 0.003f));
+        float[] heights = {100, 300, 160, 120};
+        float[] base = {0, 120, 440, 620};
+        for (int limit : new int[]{3, 0}) {
+            focus.update(lines, 3999, limit, 2, 2);
+            assertTrue(focus.contains(1));
+            assertEquals(600, focus.height(base, heights), 0);
+            for (int ms : new int[]{4000, 4900, 5999}) {
+                focus.update(lines, ms, limit, 2, 2);
+                assertFalse(focus.contains(1));
+                assertEquals(2, focus.last);
+                assertEquals(600, focus.height(base, heights), 0);
+            }
+            focus.update(lines, 6000, limit, 3, 3);
+            assertEquals(3, focus.last);
+            assertEquals(740, focus.height(base, heights), 0);
+        }
     }
 
     @Test public void enteringVoiceAndUnequalSpringFramesDoNotCrossOnScreen() {
-        LyricLine third = line(3000, 8000);
-        third.addBackground(line(1000, 8000));
-        List<LyricLine> lines = Arrays.asList(line(0, 10000), line(2000, 4000), third);
         float[] base = {0, 120, 440};
         float[] heights = {100, 300, 160};
-        float[] scroll = {0, 0, 0}, aim = {0, 0, 0}, nextAim = {0, 0, 0};
-        LyricFocus focus = new LyricFocus();
-        focus.update(lines, 1500, 3, 0, 0);
-        focus.layout(base, heights, 20);
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        transition.rebase(focus, base, scroll, aim, nextAim);
-        // The previous group's springs have already settled at their common target.
-        Arrays.fill(scroll, 0f);
-        // The middle row begins after the background of the third row. Rebase preserves
-        // their formerly identical screen pose on the first frame of the new group.
-        focus.update(lines, 2500, 3, 1, 1);
-        focus.layout(base, heights, 20);
-        transition.rebase(focus, base, scroll, aim, nextAim);
-        assertEquals(transition.position(1) - scroll[1],
-                transition.position(2) - scroll[2], 0f);
 
         // Apply the drawing constraint to the actual intermediate spring poses.
         float[][] intermediateScroll = {
-                scroll.clone(), {0, 40, 200}, {50, 250, 100}, {100, 100, 100}
+                {0, 0, 0}, {0, 40, 200}, {50, 250, 100}, {100, 100, 100}
         };
         for (float[] frame : intermediateScroll) {
             float previousBottom = -Float.MAX_VALUE;
             for (int i = 0; i < 3; i++) {
-                float top = transition.position(i) - frame[i];
+                float top = base[i] - frame[i];
                 top += LyricFocus.separationOffset(top, previousBottom);
                 assertTrue(top >= previousBottom);
                 previousBottom = top + heights[i];

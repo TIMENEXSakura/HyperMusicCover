@@ -19,6 +19,7 @@ def prepare():
     for name, dest in (
         ("AndroidManifest.xml", debug / "AndroidManifest.xml"),
         ("PageExitProbeActivity.java", debug / "java/com/os4/musiccover/lyrics/PageExitProbeActivity.java"),
+        ("OverlapExitProbe.java", debug / "java/com/os4/musiccover/lyrics/OverlapExitProbe.java"),
     ):
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists() and dest.read_bytes() != (FIXTURE / name).read_bytes():
@@ -66,6 +67,7 @@ def collect():
     for name in ["background", "reference", "capsule-half", "clip-fade", "blur-soft", "blur-wide",
                  *(f"landing-{i}" for i in range(9)),
                  *(f"pull-{i}" for i in range(9)),
+                 *(f"overlap-{i}" for i in range(7)),
                  *(f"panel-{i}" for i in range(9)),
                  *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
@@ -273,6 +275,36 @@ def analyse():
         assert 1 <= pull_tops[i - 1] - pull_tops[i] <= 20, pull_tops
         assert 1 <= pull_widths[i] - pull_widths[i - 1] <= 16, pull_widths
 
+    # The short group (lead + two backing rows) occupies a separate screen column.
+    # Isolate its ink without predicting its top from the same helper under test.
+    overlap = [rgb(f"overlap-{i}") for i in range(7)]
+    def middle_ink(frame):
+        return np.maximum((frame[:, 20:220] - background[:, 20:220]).mean(axis=2), 0)
+    voices = [middle_ink(frame) for frame in overlap]
+    scan = np.flatnonzero(voices[0].max(axis=1) > 90)
+    assert len(np.split(scan, np.flatnonzero(np.diff(scan) > 3) + 1)) == 3, "Expected three printed voices"
+    for i in (1, 2):
+        matching_pixels(voices[0], voices[i], "Middle group lost ink at its end or while held")
+    top_of = lambda ink: int(np.where(ink > 90)[0].min())
+    up = top_of(voices[0]) - top_of(voices[3])
+    assert up > 0, "The next group did not push its predecessor up"
+    matching_pixels(voices[0][up:], voices[3][:-up], "The moving group changed or lost a voice")
+
+    # At the last line, older groups still painted below the top feather move upwards;
+    # the last stays put and erases its fields. Check the unmasked part of the older ink.
+    clear = 98
+    costs = [np.abs(voices[4][clear + dy:380 + dy] - voices[5][clear:380]).sum() for dy in range(150)]
+    departing = int(np.argmin(costs))
+    assert departing > 0 and voices[5][clear:380].max() > 150
+    matching_pixels(voices[4][clear + departing:380 + departing], voices[5][clear:380],
+                    "The previous group faded during the last line's wipe")
+    assert voices[6].max() < 2
+    def final_ink(frame):
+        return (frame[:, 300:, 0] > 175) & (frame[:, 300:, 0] > frame[:, 300:, 1] + 30)
+    final_poses = [final_ink(overlap[i]) for i in (4, 5, 6)]
+    assert 0 < final_poses[1].sum() < final_poses[0].sum() and not final_poses[2].any()
+    assert not np.any(final_poses[1] & ~final_poses[0]), "The terminal line moved during its wipe"
+
     panel_strip = Image.new("RGB", (5 * 226, 177), "#121622")
     labels = ImageDraw.Draw(panel_strip)
     for slot, frame_no in enumerate((0, 2, 4, 6, 8)):
@@ -294,6 +326,7 @@ def analyse():
     strip.save(OUT / "sequence.png")
     (OUT / "verified.json").write_text(json.dumps({"renderer": "Android HWUI / Window PixelCopy",
         "fixture": "Frozen multi-line StaticLayout display list through production LyricPageExitMask.draw",
+        "overlapPushPx": up, "terminalPushPx": departing,
         "halfFadeFrames": halves, "rows": metrics,
         "clipOpacity": [float(opacity[i]) for i in (0, feather // 2, len(opacity) - 1)],
         "blurRimInk": [soft_rim, wide_rim], "notificationPullTops": pull_tops,

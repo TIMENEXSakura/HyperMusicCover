@@ -11,7 +11,6 @@ final class LyricFocus {
     int count;
     int first;
     int last;
-    private float[] positions = new float[0];
 
     static int clampLimit(int value) {
         return value == 0 ? 0 : Math.max(1, Math.min(4, value));
@@ -79,10 +78,6 @@ final class LyricFocus {
         return index >= 0 && index < selectedIndex.length && selectedIndex[index];
     }
 
-    boolean visible(int index) {
-        return index <= first || index >= last || contains(index);
-    }
-
     int distance(int index) {
         if (contains(index)) return 0;
         int nearest = Math.min(Math.abs(index - first), Math.abs(index - last));
@@ -99,47 +94,19 @@ final class LyricFocus {
         return nearest + (index < first ? 1 : 0);
     }
 
-    /** A row keeps its slot while unfinished or while its visible ink is fading. */
-    static boolean retainSlot(boolean unfinished, boolean visible, float alpha) {
-        return unfinished || visible && alpha > 0.003f;
-    }
-
     /** Prevent independently moving rows from crossing before their springs have settled. */
     static float separationOffset(float top, float previousBottom) {
         return Math.max(0f, previousBottom - top);
     }
 
-    void layout(float[] base, float[] heights, float gap) {
-        layout(base, heights, gap, null);
-    }
-
-    /** Keep a slot for a row which is still drawn between simultaneously singing rows. */
-    void layout(float[] base, float[] heights, float gap, boolean[] retained) {
-        if (positions.length != base.length) positions = new float[base.length];
-        System.arraycopy(base, 0, positions, 0, base.length);
-        if (count < 2) return;
-        float cursor = base[first];
-        for (int index = first; index <= last; index++) {
-            positions[index] = cursor;
-            if (contains(index) || retained != null && retained[index])
-                cursor += heights[index] + gap;
-        }
-        float removed = base[last] - positions[last];
-        for (int index = last + 1; index < base.length; index++) positions[index] -= removed;
-    }
-
-    float position(int index, float[] base) {
-        return positions.length == base.length ? positions[index] : base[index];
-    }
-
+    /** Finished passages between two active voices keep their measured places in the stack. */
     float height(float[] base, float[] heights) {
-        return position(last, base) - position(first, base) + heights[last];
+        return base[last] - base[first] + heights[last];
     }
 
     void reset() {
         count = 0;
         first = last = -1;
-        positions = new float[0];
         Arrays.fill(selected, -1);
         Arrays.fill(selectedIndex, false);
     }

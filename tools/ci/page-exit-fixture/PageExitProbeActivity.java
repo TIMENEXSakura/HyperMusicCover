@@ -50,6 +50,8 @@ public final class PageExitProbeActivity extends Activity {
     private static final float[] LANDING = {.55f, .25f, 0f, -.14f, .15f, -.03f, .05f, 0f, .30f};
     private static final int LANDING_START = MORPH_LAST + 1, LANDING_LAST = MORPH_LAST + LANDING.length;
     private static final int PULL_START = LANDING_LAST + 1, PULL_LAST = PULL_START + 8;
+    private static final int OVERLAP_START = PULL_LAST + 1;
+    private static final int OVERLAP_LAST = OVERLAP_START + OverlapExitProbe.TIMES.length - 1;
     private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
@@ -103,6 +105,7 @@ public final class PageExitProbeActivity extends Activity {
                     }
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
                     String name = requested == FIRST ? "background" : requested == CAPSULE_HALF ? "capsule-half" : requested == -1 ? "reference"
+                            : requested >= OVERLAP_START ? "overlap-" + (requested - OVERLAP_START)
                             : requested >= PULL_START ? "pull-" + (requested - PULL_START)
                             : requested >= LANDING_START ? "landing-" + (requested - LANDING_START)
                             : requested >= MORPH_START ? "panel-" + (requested - MORPH_START)
@@ -114,7 +117,7 @@ public final class PageExitProbeActivity extends Activity {
                         if (!frame.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IllegalStateException("PNG write failed");
                     }
                     retries = 0;
-                    if (phase == PULL_LAST) {
+                    if (phase == OVERLAP_LAST) {
                         JSONObject report = new JSONObject();
                         report.put("width", WIDTH).put("height", HEIGHT).put("hardwareCanvas", page.hardwareCanvas);
                         report.put("clipTop", TOP).put("clipBottom", BOTTOM).put("steps", LAST);
@@ -155,6 +158,7 @@ public final class PageExitProbeActivity extends Activity {
 
     private final class Page extends View {
         private final LyricPageExitMask mask = new LyricPageExitMask();
+        private final OverlapExitProbe overlap = new OverlapExitProbe();
         private final LyricClipFade clipFade = new LyricClipFade();
         private final LyricRenderBlur liveBlur = new LyricRenderBlur();
         private final LyricRenderBlur floorBlur = new LyricRenderBlur();
@@ -214,6 +218,8 @@ public final class PageExitProbeActivity extends Activity {
                     floor.drawRect(422, 340, 454, 386, backdrop); // a fully occluded line
                     floorBlur.finish(c);
                 }
+            } else if (phase >= OVERLAP_START) {
+                overlap.draw(c, phase - OVERLAP_START, WIDTH);
             } else if (phase >= PULL_START) {
                 drawLatePull(c, phase - PULL_START);
             } else if (phase >= LANDING_START) {

@@ -1,7 +1,6 @@
 package com.os4.musiccover.lyrics;
 
 import org.junit.Test;
-import java.util.Arrays;
 import static org.junit.Assert.*;
 
 public class LyricTransitionTest {
@@ -23,94 +22,14 @@ public class LyricTransitionTest {
         assertEquals(20, next[1] - aim[1], 0);
     }
 
-    private LyricFocus focusAt(int position, float[] base, float[] heights) {
-        LyricFocus focus = new LyricFocus();
-        focus.update(Arrays.asList(
-                new LyricLine("held", null, 0, 1000, false, null, null, null),
-                new LyricLine("short", null, 0, 100, false, null, null, null),
-                new LyricLine("new", null, 50, 1000, false, null, null, null)), position, 4, 2,
-                position >= 50 ? 2 : 1);
-        focus.layout(base, heights, 20);
-        return focus;
-    }
-
-    @Test public void compactAndExpandPreserveScreenPositionsAndSpringDisplacement() {
-        for (float font : new float[]{18, 25, 36}) {
-            float height = 100 * font / 25;
-            float[] base = {0, height + 20, 2 * (height + 20)};
-            float[] heights = {height, height, height};
-            LyricTransition transition = new LyricTransition();
-            transition.reset(base);
-            float[] scroll = {30, 40, 50}, aim = {60, 60, 60}, next = {70, 70, 70};
-            float oldY = base[2] - scroll[2];
-            float displacement = scroll[2] - aim[2];
-            float pending = next[2] - aim[2];
-            transition.rebase(focusAt(150, base, heights), base, scroll, aim, next);
-            assertEquals(oldY, transition.position(2) - scroll[2], 0.0001f);
-            assertEquals(displacement, scroll[2] - aim[2], 0.0001f);
-            assertEquals(pending, next[2] - aim[2], 0.0001f);
-            transition.rebase(focusAt(75, base, heights), base, scroll, aim, next);
-            assertEquals(oldY, transition.position(2) - scroll[2], 0.0001f);
-        }
-    }
-
-    @Test public void fadeCanReverseWithoutJumpAndEventuallyStops() {
-        float[] base = {0, 120, 240}, heights = {100, 100, 100};
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        LyricFocus compact = focusAt(150, base, heights);
-        transition.update(compact, base, -1, 0.6f, 0.016f, false);
-        assertTrue(transition.alpha(1) > 0 && transition.alpha(1) < 1);
-        float previousAlpha = transition.alpha(1);
-        LyricFocus expanded = focusAt(75, base, heights);
-        transition.update(expanded, base, -1, 0.6f, 0, false);
-        assertEquals(previousAlpha, transition.alpha(1), 0);
-        for (int frame = 0; frame < 200; frame++) {
-            transition.update(expanded, base, -1, 0.6f, 0.016f, false);
-        }
-        assertEquals(1, transition.alpha(1), 0);
-        assertFalse(transition.moving);
-    }
-
-    @Test public void tallWrappedRowsKeepTheirFullLayoutDuringEntryAndRetarget() {
-        for (float height : new float[]{400f, 4000f, 40000f}) {
-            float[] base = {0, height + 20, 2 * (height + 20)};
-            float[] heights = {height, height, height};
-            LyricFocus focus = focusAt(75, base, heights);
-            LyricTransition transition = new LyricTransition();
-            transition.reset(base);
-            transition.update(focus, base, -1, 0.6f, 0f, true);
-            for (int frame = 0; frame < 120; frame++) {
-                transition.update(focus, base, -1, 0.6f, 1f / 120f, false);
-                assertEquals(height + 20, transition.position(1) - transition.position(0), 0f);
-                assertEquals(1f, transition.alpha(0), 0f);
-            }
-        }
-    }
-
-    @Test public void departingOverlapRemainsVisibleDuringFade() {
-        float[] base = {0, 120, 240}, heights = {100, 100, 100};
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        LyricFocus compact = focusAt(150, base, heights);
-        for (int frame = 0; frame < 15; frame++) {
-            transition.update(compact, base, -1, 0.6f, 0.016f, false);
-        }
-        assertTrue(transition.alpha(1) > 0.15f && transition.alpha(1) < 0.9f);
-        for (int frame = 0; frame < 200; frame++) {
-            transition.update(compact, base, -1, 0.6f, 0.016f, false);
-        }
-        assertEquals(0, transition.alpha(1), 0);
-        assertFalse(transition.moving);
-    }
-
-    @Test public void stillModeSettlesImmediately() {
-        float[] base = {0, 120, 240}, heights = {100, 100, 100};
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        transition.update(focusAt(150, base, heights), base, -1, 0.6f, 0, true);
-        assertEquals(0, transition.alpha(1), 0);
-        assertFalse(transition.moving);
+    @Test public void relayoutPreservesEveryRowsScreenPoseAndRunningSpring() {
+        float[] oldBase = {0, 100, 200}, measured = {0, 140, 320};
+        float[] scroll = {30, 40, 50}, aim = {60, 60, 60}, pending = {70, 70, 70};
+        LyricTransition.rebase(oldBase, measured, scroll, aim, pending);
+        assertArrayEquals(new float[]{30, 80, 170}, scroll, 0f);
+        assertArrayEquals(new float[]{60, 100, 180}, aim, 0f);
+        assertArrayEquals(new float[]{70, 110, 190}, pending, 0f);
+        assertEquals(150f, measured[2] - scroll[2], 0f);
     }
 
     @Test public void uninitializedSeekTimestampCannotOverflowIntoRecentSeek() {
@@ -127,41 +46,4 @@ public class LyricTransitionTest {
         assertTrue(LyricTransition.motionWeight(4, 660, 600) > four);
         assertTrue(LyricTransition.motionWeight(4, 660, 0) < 2);
     }
-    @Test public void sharedFrameCoefficientsMatchPerRowEasingAcrossFocusChanges() {
-        int count = 180;
-        float[] base = new float[count], heights = new float[count], expected = new float[count];
-        java.util.List<LyricLine> lines = new java.util.ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            base[i] = i * 90f;
-            heights[i] = 70f;
-            expected[i] = 1f;
-            // Overlap consecutive lines to exercise the compacted group's fades.
-            lines.add(new LyricLine("line", null, i * 110, i * 110 + 320,
-                    false, null, null, null));
-        }
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        LyricFocus focus = new LyricFocus();
-        for (int frame = 0; frame < 260; frame++) {
-            int ms = frame * 75;
-            int fallback = Math.min(count - 1, ms / 110);
-            focus.update(lines, ms, 4, fallback, fallback);
-            focus.layout(base, heights, 20f);
-            int dots = frame % 19 == 0 ? fallback : -1;
-            boolean snap = frame % 71 == 0;
-            float dt = frame % 29 == 0 ? 0f : frame % 23 == 0 ? 0.05f : 1f / 120f;
-            transition.update(focus, base, dots, 0.6f, dt, snap);
-            for (int i = 0; i < count; i++) {
-                float target = !focus.visible(i) ? 0f
-                        : (dots >= 0 ? i < dots : i < focus.last && !focus.contains(i)) ? 0.6f : 1f;
-                float tau = target < expected[i] ? 0.22f : 0.10f;
-                float next = snap ? target : expected[i] + (target - expected[i])
-                        * (1f - (float) Math.exp(-Math.max(0f, dt) / tau));
-                if (!snap && Math.abs(next - target) < 0.003f) next = target;
-                expected[i] = next;
-                assertEquals("frame " + frame + ", row " + i, next, transition.alpha(i), 0f);
-            }
-        }
-    }
-
 }

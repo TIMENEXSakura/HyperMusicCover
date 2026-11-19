@@ -1,25 +1,13 @@
 package com.os4.musiccover.lyrics;
 
 final class LyricTransition {
-    private float[] positions = new float[0];
-    private float[] alpha = new float[0];
-    boolean moving;
-
-    void reset(float[] base) {
-        positions = base.clone();
-        alpha = new float[base.length];
-        java.util.Arrays.fill(alpha, 1f);
-        moving = false;
-    }
-
-    void rebase(LyricFocus focus, float[] base, float[] scroll, float[] aim, float[] nextAim) {
+    /** A measured layout changed under the lyric springs (e.g. new translations or font size). */
+    static void rebase(float[] previousBase, float[] base, float[] scroll, float[] aim, float[] nextAim) {
         for (int index = 0; index < base.length; index++) {
-            float position = focus.position(index, base);
-            float delta = position - positions[index];
+            float delta = base[index] - previousBase[index];
             scroll[index] += delta;
             aim[index] += delta;
             nextAim[index] += delta;
-            positions[index] = position;
         }
     }
 
@@ -41,53 +29,5 @@ final class LyricTransition {
             aim[index] += delta;
             nextAim[index] += delta;
         }
-    }
-
-    boolean update(LyricFocus focus, float[] base, int dots, float aboveAlpha,
-                   float dt, boolean snap) {
-        if (positions.length != base.length) reset(base);
-        moving = false;
-        boolean changed = false;
-        // One easing coefficient per direction and frame, not an exponential per lyric row.
-        float fadeIn = Float.NaN, fadeOut = Float.NaN;
-        for (int index = 0; index < base.length; index++) {
-            float targetAlpha = !focus.visible(index) ? 0f
-                    : (dots >= 0 ? index < dots : index < focus.last && !focus.contains(index))
-                    ? aboveAlpha : 1f;
-            float targetPosition = focus.position(index, base);
-            float nextAlpha;
-            if (snap || alpha[index] == targetAlpha) {
-                nextAlpha = targetAlpha;
-            } else {
-                boolean decreasing = targetAlpha < alpha[index];
-                if (decreasing && Float.isNaN(fadeOut)) fadeOut = factor(dt, 0.22f);
-                if (!decreasing && Float.isNaN(fadeIn)) fadeIn = factor(dt, 0.10f);
-                nextAlpha = ease(alpha[index], targetAlpha,
-                        decreasing ? fadeOut : fadeIn, 0.003f);
-            }
-            float nextPosition = targetPosition;
-            changed |= nextAlpha != alpha[index] || nextPosition != positions[index];
-            alpha[index] = nextAlpha;
-            positions[index] = nextPosition;
-            moving |= nextAlpha != targetAlpha;
-        }
-        return changed;
-    }
-
-    float position(int index) {
-        return positions[index];
-    }
-
-    float alpha(int index) {
-        return alpha[index];
-    }
-
-    private static float factor(float dt, float tau) {
-        return 1f - (float) Math.exp(-Math.max(0f, dt) / tau);
-    }
-
-    private static float ease(float value, float target, float factor, float epsilon) {
-        float next = value + (target - value) * factor;
-        return Math.abs(next - target) < epsilon ? target : next;
     }
 }
