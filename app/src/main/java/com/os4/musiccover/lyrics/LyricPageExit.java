@@ -12,13 +12,20 @@ final class LyricPageExit {
         last = now;
     }
 
-    void step(long now, boolean hide) {
+    void setClosing(boolean hide, long now) {
+        if (!active || closing == hide) return;
+        // Reverse from the last displayed progress. An input between vsyncs must
+        // not advance the mask in the old direction on the next frame.
+        closing = hide;
+        last = Math.max(last, now);
+    }
+
+    void step(long now) {
         if (!active) return;
         long elapsed = Math.max(0L, Math.min(DURATION_MS, now - last));
         travel = Math.max(0L, Math.min(DURATION_MS, travel + (closing ? elapsed : -elapsed)));
-        closing = hide;
-        last = now;
-        active = hide ? travel < DURATION_MS : travel > 0;
+        last = Math.max(last, now);
+        active = closing ? travel < DURATION_MS : travel > 0;
     }
 
     float progress() { return travel / (float) DURATION_MS; }

@@ -381,7 +381,6 @@ final class LyricView extends View {
     private final LyricPageExitMask pageMask = new LyricPageExitMask();
     private final LyricPageExitMask.Content departingPage = this::drawDepartingPage;
     private RenderNode pagePicture;
-    private boolean closingPage;
     private String lastPageTrack;
     private long lastPageDrawAt;
     private float lastFloatOffset, lastPageAnchor, lastPageScale, lastPageOffset;
@@ -684,7 +683,10 @@ final class LyricView extends View {
         pageWanted = LockLyrics.wantsWindow();
         // Before gesture, band, entry, scroll or layout changes: the departing page keeps the
         // exact group pose which was visible when the user closed it.
+        boolean hadPageExit = pageExit.active();
         if (advancePageExit(now, still || gone || !Main.screenOnCached())) return true;
+        // Its endpoint must replace the last masked frame even when the live lyrics are paused.
+        changed |= hadPageExit;
         // A paused line may have no movement to invalidate it. Observe color changes on the
         // existing tick/pre-draw as well, so ending navigation restores the saved colors.
         try { changed |= updateTint(); } catch (Throwable error) { reportDrawFailure(error); }
@@ -990,8 +992,7 @@ final class LyricView extends View {
         float speedCap = (band > 1f ? band : Math.max(1, getHeight())) * SEEK_SPEED_BANDS;
         int lo = Math.max(0, singing.first - 6), hi = Math.min(n - 1, focus + 12);
         for (int i = 0; i < n; i++) {
-            boolean visibleTail = rowOnScreen(i);
-            if ((i < lo || i > hi) && !visibleTail) {
+            if ((i < lo || i > hi) && !rowOnScreen(i)) {
                 if (scroll[i] != target || emph[i] != 0f || blur[i] != 0f) {
                     scroll[i] = aim[i] = nextAim[i] = target;
                     vel[i] = 0f;
@@ -1421,14 +1422,19 @@ final class LyricView extends View {
     void beginPageExit() {
         if (lastPageDrawAt == 0 || show <= 0.003f || !bandOk || LockLyrics.still()
                 || !Main.screenOnCached() || !isAttachedToWindow() || getAlpha() <= 0f) return;
-        closingPage = true;
-        if (!pageExit.active()) pageExit.start(now());
+        long at = now();
+        if (pageExit.active()) {
+            pageExit.setClosing(true, at);
+        } else {
+            pageExit.start(at);
+            recordDepartingPage();
+        }
         kick();
     }
 
     void reopenPage() {
         if (!pageExit.active()) return;
-        closingPage = false;
+        pageExit.setClosing(false, now());
         kick();
     }
 
@@ -1443,7 +1449,7 @@ final class LyricView extends View {
             resetPageExit();
             return false;
         }
-        pageExit.step(now, closingPage);
+        pageExit.step(now);
         if (pageExit.active()) return true;
         if (pageExit.closed()) {
             show = 0f;
@@ -1592,11 +1598,12 @@ final class LyricView extends View {
         if (overflowMoving) return true;
         if (transition.moving) return true;
         int n = lines.size();
-        int lo = 0, hi = n - 1;
-        for (int i = lo; i <= hi; i++) {
-            if ((i < singing.first - 6 || i > focus + 12)
+        long frameTime = now();
+        int lo = singing.first - 6, hi = focus + 12;
+        for (int i = 0; i < n; i++) {
+            if ((i < lo || i > hi)
                     && !rowOnScreen(i)) continue;
-            if (moving(i) || now() < aimAt[i]) return true;
+            if (moving(i) || frameTime < aimAt[i]) return true;
             if (lineExits.row(i).holdsAppearance() || i == n - 1 && finalHold.completed()) continue;
             float e = emph[i];
             if (e != 0f && e != 1f) return true;
@@ -2762,21 +2769,26 @@ final class LyricView extends View {
         }
     }
 
-    private void drawDepartingPage(Canvas canvas) {
-        if (!canvas.isHardwareAccelerated()) {
-            drawLyrics(canvas);
-            return;
-        }
-        // Record once on dismissal rather than copying a full-screen bitmap or re-shaping
-        // every glyph for each mask frame. HDR ink and the current per-word poses stay intact.
-        if (pagePicture == null) pagePicture = new RenderNode("Departing lyrics");
-        if (!pagePicture.hasDisplayList()) {
+    private void recordDepartingPage() {
+        if (!isHardwareAccelerated()) return;
+        try {
+            if (pagePicture == null) pagePicture = new RenderNode("Departing lyrics");
             pagePicture.setPosition(0, 0, getWidth(), getHeight());
             Canvas frameCanvas = pagePicture.beginRecording(getWidth(), getHeight());
             try { drawLyrics(frameCanvas); }
             finally { pagePicture.endRecording(); }
+        } catch (Throwable error) {
+            if (pagePicture != null) pagePicture.discardDisplayList();
+            reportDrawFailure(error);
         }
-        canvas.drawRenderNode(pagePicture);
+    }
+
+    private void drawDepartingPage(Canvas canvas) {
+        if (canvas.isHardwareAccelerated() && pagePicture != null && pagePicture.hasDisplayList()) {
+            canvas.drawRenderNode(pagePicture);
+        } else {
+            drawLyrics(canvas);
+        }
     }
 
     private void drawLyrics(Canvas canvas) {
@@ -2884,8 +2896,12 @@ final class LyricView extends View {
                     shift = Math.max(shift, LyricFocus.separationOffset(dotsY, previousBottom));
             }
             float needed = shift;
-            shift = rowSeparation[i] = LyricFocus.releaseSeparation(rowSeparation[i], needed, separationDt);
-            if (shift > needed) kick();
+            if (frozen) {
+                shift = Math.max(needed, rowSeparation[i]);
+            } else {
+                shift = rowSeparation[i] = LyricFocus.releaseSeparation(rowSeparation[i], needed, separationDt);
+                if (shift > needed) kick();
+            }
             y += shift;
             screenY += shift;
             // The interlude slot above this line, if it has one: its dots move with the line, and
@@ -2910,7 +2926,7 @@ final class LyricView extends View {
             float shownY = LyricBandGeometry.presentedY(screenY, center, presentationOffset, presentationScale);
             float shownBottom = LyricBandGeometry.presentedY(screenBottom, center, presentationOffset, presentationScale);
             if (shownY >= clipBandBottom || shownBottom <= clipBandTop) {
-                lineExits.forgetWaitingPose(i);
+                if (!frozen) lineExits.forgetWaitingPose(i);
                 continue;
             }
             // An unfinished row stays opaque at the top edge; clipping can still move it
@@ -2919,17 +2935,17 @@ final class LyricView extends View {
                     clipBandBottom, fade, unfinished || waitingForTop || heldFinal);
             float a = vis * edge * rowTransitionAlpha;
             if (a <= 0.003f) {
-                lineExits.forgetWaitingPose(i);
+                if (!frozen) lineExits.forgetWaitingPose(i);
                 continue;
             }
             previousBottom = Math.max(previousBottom, screenBottom);
-            lineExits.capture(i,
-                    side,
-                    y - floatOffset,
-                    scale[i], edge * rowTransitionAlpha, emph[i], lit[i], blur[i]);
+            if (!frozen) {
+                lineExits.capture(i, side, y - floatOffset, scale[i],
+                        edge * rowTransitionAlpha, emph[i], lit[i], blur[i]);
+            }
             // Until now the completed line scrolls with the rest; only at the safe upper
             // boundary does the spatial wipe take ownership of the pose.
-            if (lineExits.startAtTop(i, shownY, clipBandTop, fade, drawAt, musicBandMorph,
+            if (!frozen && lineExits.startAtTop(i, shownY, clipBandTop, fade, drawAt, musicBandMorph,
                     transition.position(i) - scroll[i] + shift)) {
                 kick();
                 drawFadingFields(canvas, i, side, y, a, rowScale, emph[i], blur[i], lit[i], 0f, false);
@@ -3049,11 +3065,15 @@ final class LyricView extends View {
                 top = Math.max(top, mask.clipTop);
                 bottom = Math.min(bottom, mask.clipBottom);
                 if (canvas.clipRect(exitClip.left, top, exitClip.right, bottom)) {
-                    int layer = canvas.saveLayer(exitClip.left, top, exitClip.right, bottom, null);
-                    drawLine(canvas, i, 0f, 0f, alpha, 1f, emphasis, rowBlur, lineLit);
-                    exitEraser.setBlendMode(android.graphics.BlendMode.DST_OUT);
-                    mask.erase(canvas, exitEraser, progress, retainLast ? LyricFinalHold.FADE_FRACTION : 1f);
-                    canvas.restoreToCount(layer);
+                    if (progress <= 0f) {
+                        drawLine(canvas, i, 0f, 0f, alpha, 1f, emphasis, rowBlur, lineLit);
+                    } else {
+                        int layer = canvas.saveLayer(exitClip.left, top, exitClip.right, bottom, null);
+                        drawLine(canvas, i, 0f, 0f, alpha, 1f, emphasis, rowBlur, lineLit);
+                        exitEraser.setBlendMode(android.graphics.BlendMode.DST_OUT);
+                        mask.erase(canvas, exitEraser, progress, retainLast ? LyricFinalHold.FADE_FRACTION : 1f);
+                        canvas.restoreToCount(layer);
+                    }
                 }
             }
         }

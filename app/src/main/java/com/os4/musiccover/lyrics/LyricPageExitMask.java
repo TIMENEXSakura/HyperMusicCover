@@ -37,15 +37,25 @@ public final class LyricPageExitMask {
         matrix.setScale(1f, feather);
         matrix.postTranslate(0f, edge);
         alpha.setLocalMatrix(matrix);
+        float visibleTop = Math.max(top, edge);
+        // The opaque tail needs only a clip. Allocate a buffer for the feather alone
+        // when replaying the hardware recording, so its size stays bounded during a close.
+        float fadeBottom = canvas.isHardwareAccelerated() ? Math.min(bottom, edge + feather) : bottom;
+        if (fadeBottom < bottom) {
+            int saved = canvas.save();
+            try {
+                if (canvas.clipRect(0f, fadeBottom, canvas.getWidth(), bottom)) content.draw(canvas);
+            } finally {
+                canvas.restoreToCount(saved);
+            }
+        }
+        if (fadeBottom <= visibleTop) return;
         int saved = canvas.save();
         try {
-            // Discard already transparent rows before allocating a compositing layer. It
-            // contains only lyric pixels; the clock, media card and wallpaper are siblings.
-            float visibleTop = Math.max(top, edge);
-            if (!canvas.clipRect(0f, visibleTop, canvas.getWidth(), bottom)) return;
-            canvas.saveLayer(0f, visibleTop, canvas.getWidth(), bottom, null);
+            if (!canvas.clipRect(0f, visibleTop, canvas.getWidth(), fadeBottom)) return;
+            canvas.saveLayer(0f, visibleTop, canvas.getWidth(), fadeBottom, null);
             content.draw(canvas);
-            canvas.drawRect(0f, visibleTop, canvas.getWidth(), bottom, mask);
+            canvas.drawRect(0f, visibleTop, canvas.getWidth(), fadeBottom, mask);
         } finally {
             canvas.restoreToCount(saved);
         }
