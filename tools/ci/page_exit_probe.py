@@ -64,6 +64,7 @@ def collect():
         raise TimeoutError("HWUI did not commit and capture the full exit sequence")
     meta = json.loads((OUT / "capture.json").read_bytes())
     for name in ["background", "reference", "capsule-half", "clip-fade", "blur-soft", "blur-wide",
+                 *(f"panel-{i}" for i in range(9)),
                  *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
         if result.returncode or not result.stdout.startswith(b"\x89PNG"):
@@ -180,6 +181,36 @@ def analyse():
     assert abs(halo[-1]) < 2, halo[-1]
     matching_pixels(wide[339:397, 415:465], background[339:397, 415:465],
                     "Ink behind the capsule contributed to the blur")
+    # Lower lines must shrink with the full verse and retain their ink, including
+    # the blurred harmony. A moving scissor can satisfy a bottom-bound check alone.
+    def ink_bands(frame):
+        sig = np.maximum((frame - background).mean(axis=2), 0)
+        spans = np.flatnonzero(np.diff(np.r_[False, (sig > 9).any(axis=1), False]))
+        assert spans.size == 6, f"Expected three complete lyric lines: {spans}"
+        return [(sig[a:b].sum(), a, b) for a, b in spans.reshape(-1, 2)]
+
+    original = ink_bands(rgb("panel-0"))
+    for i in range(5):
+        opened = rgb(f"panel-{i}")
+        matching_pixels(opened, rgb(f"panel-{8-i}"), f"Panel reversal changed the lyric pose at {i}")
+        measured = ink_bands(opened)
+        scale = (520 - 98 * i / 4 - 270) / 250
+        for (energy, y1, y2), (base_energy, b1, b2) in zip(measured, original):
+            assert abs(y1 - (270 + (b1 - 270) * scale)) <= 3
+            assert abs(y2 - (270 + (b2 - 270) * scale)) <= 3
+            assert .78 < energy / (base_energy * scale**2) < 1.25, "Lyric or blur was clipped during panel travel"
+        assert measured[-1][2] < 521 - 98 * i / 4, "Harmony overlaps the settled card boundary"
+
+    panel_strip = Image.new("RGB", (5 * 226, 177), "#121622")
+    labels = ImageDraw.Draw(panel_strip)
+    for slot, frame_no in enumerate((0, 2, 4, 6, 8)):
+        with Image.open(OUT / f"panel-{frame_no}.png") as image:
+            panel_strip.paste(image.crop((65, 249, 517, 549)).resize((226, 150), Image.Resampling.LANCZOS),
+                              (slot * 226, 27))
+        labels.text((slot * 226 + 5, 7), ("Folded", "Opening", "Expanded", "Closing", "Folded")[slot],
+                    fill="white")
+    panel_strip.save(OUT / "panel-sequence.png")
+
     # Build an overview directly from the captured PNGs, without redrawing the Android text.
     indices = (0, 2, 4, 6, 8)
     strip = Image.new("RGB", (216 * len(indices), 334), "#121622")

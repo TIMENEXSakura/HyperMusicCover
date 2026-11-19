@@ -5,6 +5,38 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricBandGeometryTest {
+    @Test public void panelFitReversesFromExactlyTheSameInkGeometry() {
+        float room = 500f;
+        for (float progress : new float[]{0f, .3f, .85f, 1f, .85f, .3f, 0f}) {
+            float floor = LyricBandGeometry.morphEdge(900f, 630f, progress);
+            float pivot = LyricBandGeometry.morphEdge(400f, 360f, progress);
+            float scale = LyricBandGeometry.panelScale(room, floor - pivot);
+            assertEquals(floor, pivot + room * scale, .001f);
+            // The physical card edge corresponds to the same part of the original stack,
+            // including a wrapped group that straddled that edge before the gesture.
+            assertEquals(pivot + room, LyricPanelFit.sourceY(floor, pivot, scale), .001f);
+            assertEquals(progress == 0f, scale == 1f);
+        }
+        assertEquals(1f, LyricBandGeometry.panelScale(400f, 600f), 0f);
+    }
+
+    @Test public void collapseAfterRotationJoinsThePreviouslyDisplayedCardAtItsNativeScale() {
+        assertEquals(220f, LyricBandGeometry.panelSourceRoom(500f, 220f, 1f, 1f), 0f);
+        assertEquals(360f, LyricBandGeometry.panelSourceRoom(500f, 220f, 1f, .5f), 0f);
+        assertEquals(500f, LyricBandGeometry.panelSourceRoom(500f, 220f, 1f, 0f), 0f);
+        assertEquals(500f, LyricBandGeometry.panelSourceRoom(500f, Float.NaN, 0f, 1f), 0f);
+    }
+
+    @Test public void twoVoicesThatFitAfterScalingStillUseTheirSharedCentre() {
+        float physical = 300f, scale = .6f, group = 460f, focus = 120f, offset = 340f;
+        float fix = LyricBandGeometry.singingAnchorFix(physical, scale, group, focus, offset, 1f, .3f);
+        float pivot = physical / 2f;
+        float firstTop = physical * .3f + fix - offset;
+        float paintedTop = pivot + (firstTop - pivot) * scale;
+        assertEquals(pivot, paintedTop + group * scale / 2f, .001f);
+        assertTrue(paintedTop >= 0f && paintedTop + group * scale <= physical);
+    }
+
     @Test public void interludeDotsFollowSingingAnchorThroughoutCardMorph() {
         float top = 100f, height = 1000f, slotHeight = 90f;
         for (float progress : new float[]{0f, .25f, .5f, .75f, 1f, .5f, 0f}) {

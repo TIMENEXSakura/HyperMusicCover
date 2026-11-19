@@ -38,6 +38,7 @@ public final class PageExitProbeActivity extends Activity {
     private static final int CLIP_FADE = LAST + 1;
     private static final int SOFT_BLUR = LAST + 2;
     private static final int WIDE_BLUR = LAST + 3;
+    private static final int MORPH_START = WIDE_BLUR + 1, MORPH_LAST = MORPH_START + 8;
     private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
@@ -91,6 +92,7 @@ public final class PageExitProbeActivity extends Activity {
                     }
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
                     String name = requested == FIRST ? "background" : requested == CAPSULE_HALF ? "capsule-half" : requested == -1 ? "reference"
+                            : requested >= MORPH_START ? "panel-" + (requested - MORPH_START)
                             : requested == CLIP_FADE ? "clip-fade"
                             : requested == SOFT_BLUR ? "blur-soft"
                             : requested == WIDE_BLUR ? "blur-wide"
@@ -99,7 +101,7 @@ public final class PageExitProbeActivity extends Activity {
                         if (!frame.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IllegalStateException("PNG write failed");
                     }
                     retries = 0;
-                    if (phase == WIDE_BLUR) {
+                    if (phase == MORPH_LAST) {
                         JSONObject report = new JSONObject();
                         report.put("width", WIDTH).put("height", HEIGHT).put("hardwareCanvas", page.hardwareCanvas);
                         report.put("clipTop", TOP).put("clipBottom", BOTTOM).put("steps", LAST);
@@ -145,6 +147,8 @@ public final class PageExitProbeActivity extends Activity {
         private final LyricRenderBlur floorBlur = new LyricRenderBlur();
         private final RenderNode glyphs = new RenderNode("frozen Android lyric layouts");
         private final Paint backdrop = new Paint();
+        private final Paint lyricInk = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final LyricRenderBlur harmonyBlur = new LyricRenderBlur();
         private final int[] glyphCounts = new int[CENTRES.length];
         private int recordings, lastPainted = Integer.MIN_VALUE;
         private boolean hardwareCanvas;
@@ -193,10 +197,33 @@ public final class PageExitProbeActivity extends Activity {
                     floor.drawRect(422, 340, 454, 386, backdrop); // a fully occluded line
                     floorBlur.finish(c);
                 }
+            } else if (phase >= MORPH_START) {
+                int position = phase - MORPH_START;
+                drawPanelLyrics(c, Math.min(position, 8 - position) / 4f);
             } else if (phase >= 0) {
                 mask.draw(c, TOP, BOTTOM, phase / (float) LAST, canvas -> canvas.drawRenderNode(glyphs));
             }
             lastPainted = phase;
+        }
+
+        // A three-line verse with a sharp opening and a soft backing line at the foot.
+        // Drive the same fit used by lock-screen rows in both directions.
+        private void drawPanelLyrics(Canvas c, float progress) {
+            float top = 270f, bottom = 520f;
+            float floor = LyricBandGeometry.morphEdge(520f, 422f, progress);
+            float scale = LyricBandGeometry.panelScale(bottom - top, floor - top);
+            int save = c.save();
+            try {
+                LyricPanelFit.apply(c, 92f, top, scale);
+                lyricInk.setColor(Color.WHITE);
+                lyricInk.setTypeface(Typeface.DEFAULT_BOLD);
+                lyricInk.setTextSize(39f);
+                c.drawText("Stay with me", 92f, 320f, lyricInk);
+                c.drawText("Sing again", 104f, 406f, lyricInk);
+                Canvas harmony = harmonyBlur.begin(74, 438, 470, 535, 4f);
+                harmony.drawText("Through the night", 116f, 502f, lyricInk);
+                harmonyBlur.finish(c);
+            } finally { c.restoreToCount(save); }
         }
 
         private void recordPage() {

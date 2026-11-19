@@ -25,7 +25,7 @@ jobs:
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
       - name: Check module entry points and record artifact identity
         run: |
-          jq -e '.elements[0] | .versionName == "0.9.58" and .versionCode == 958004' app/build/outputs/apk/release/output-metadata.json
+          jq -e '.elements[0] | .versionName == "0.9.58" and .versionCode == 958005' app/build/outputs/apk/release/output-metadata.json
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.58.apk
           cd dist

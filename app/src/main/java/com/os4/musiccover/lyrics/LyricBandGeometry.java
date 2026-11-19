@@ -32,6 +32,14 @@ public final class LyricBandGeometry {
                 - anchorFraction * bandHeight + focusOffset;
     }
 
+    /** Row metrics are in the unscaled text canvas, but the pivot follows the physical band. */
+    static float singingAnchorFix(float bandHeight, float scale, float groupHeight, float focusHeight,
+                                  float focusOffset, float cardProgress, float anchorFraction) {
+        float fittedHeight = bandHeight / scale;
+        return singingAnchorFix(fittedHeight, groupHeight, focusHeight, focusOffset, cardProgress, anchorFraction)
+                + (bandHeight - fittedHeight) * (singingFraction(cardProgress) - anchorFraction);
+    }
+
     /** Align the interlude slot's centre with the current singing position. */
     static float interludeAnchorFix(float bandHeight, float slotHeight, float cardProgress,
                                    float positionDelta) {
@@ -43,6 +51,18 @@ public final class LyricBandGeometry {
     static float morphEdge(float mini, float card, float cardProgress) {
         float p = Float.isFinite(cardProgress) ? Math.max(0f, Math.min(1f, cardProgress)) : 0f;
         return mini + (card - mini) * p;
+    }
+
+    /** Uniformly fit the same folded reading area around the current singer. A taller
+     * destination never enlarges text. No live card or row bounds enter this calculation. */
+    static float panelScale(float foldedRoomBelowAnchor, float currentRoomBelowAnchor) {
+        if (!(foldedRoomBelowAnchor > 0f) || !(currentRoomBelowAnchor > 0f)
+                || !Float.isFinite(foldedRoomBelowAnchor) || !Float.isFinite(currentRoomBelowAnchor)) return 1f;
+        return Math.min(1f, currentRoomBelowAnchor / foldedRoomBelowAnchor);
+    }
+
+    static float panelSourceRoom(float folded, float joinedRoom, float joinedProgress, float progress) {
+        return joinedRoom > 0f && joinedProgress > 0f ? morphEdge(folded, joinedRoom, progress / joinedProgress) : folded;
     }
 
     /** Navigation keeps its own live bottom clip while both reading endpoints follow music. */
