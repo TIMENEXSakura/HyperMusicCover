@@ -7,6 +7,7 @@ import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Shader;
+import android.graphics.RenderNode;
 
 /** Reveals the backdrop from the top of the lyric band without transforming its contents. */
 public final class LyricPageExitMask {
@@ -20,6 +21,24 @@ public final class LyricPageExitMask {
     public LyricPageExitMask() {
         mask.setShader(alpha);
         mask.setBlendMode(BlendMode.DST_IN);
+    }
+
+    void drawFrame(Canvas canvas, float top, float bottom, LyricPageExit exit, Content snapshot) {
+        // The captured page already has its live edge treatment. A direct tap must not
+        // add a moving cut, and the normal exit still starts at its original viewport.
+        if (exit.capsuleFade() && exit.progress() == 0f) snapshot.draw(canvas);
+        else draw(canvas, top, bottom, exit.progress(), snapshot);
+    }
+
+    static void drawSnapshot(Canvas canvas, RenderNode recorded, float opacity, Content live) {
+        if (canvas.isHardwareAccelerated() && recorded != null && recorded.hasDisplayList()) {
+            recorded.setAlpha(opacity);
+            canvas.drawRenderNode(recorded);
+        } else if (opacity < 1f) {
+            int saved = canvas.saveLayerAlpha(null, Math.round(255f * opacity));
+            try { live.draw(canvas); }
+            finally { canvas.restoreToCount(saved); }
+        } else live.draw(canvas);
     }
 
     public void draw(Canvas canvas, float top, float bottom, float progress, Content content) {

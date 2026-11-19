@@ -63,7 +63,7 @@ def collect():
     else:
         raise TimeoutError("HWUI did not commit and capture the full exit sequence")
     meta = json.loads((OUT / "capture.json").read_bytes())
-    for name in ["background", "reference", "clip-fade", "blur-soft", "blur-wide",
+    for name in ["background", "reference", "capsule-half", "clip-fade", "blur-soft", "blur-wide",
                  *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
         if result.returncode or not result.stdout.startswith(b"\x89PNG"):
@@ -102,6 +102,10 @@ def analyse():
     def matching_pixels(a, b, message):
         # Permit small GPU rounding differences across a transparent offscreen layer.
         assert np.max(np.abs(a - b)) <= 4, message
+
+    # At 60 ms every line should be half visible in its original position. A faster
+    # top-to-bottom wipe would still fail this comparison, as would shrinking the snapshot.
+    matching_pixels(rgb("capsule-half"), (ref + background) / 2, "Capsule did not fade all rows together")
 
     metrics = []
     rows = []
@@ -168,6 +172,14 @@ def analyse():
     assert wide_rim > soft_rim + 8, (soft_rim, wide_rim)
     assert wide[320, 156].mean() > background[320, 156].mean() + 100
     matching_pixels(wide[:, :70], background[:, :70], "Blur affected adjacent backdrop")
+    # The capsule clips the glyph source at 336, while the kernel may extend below.
+    # Clipping the output instead gives a hard black seam at the first sample. Unclipping
+    # the source entirely leaves the second occluded shape visible.
+    halo = (wide - background)[336:384, 356:368].mean(axis=(1, 2))
+    assert halo[0] > 15 and halo[4] > 3 and halo[0] > halo[7] > halo[16], halo
+    assert abs(halo[-1]) < 2, halo[-1]
+    matching_pixels(wide[339:397, 415:465], background[339:397, 415:465],
+                    "Ink behind the capsule contributed to the blur")
     # Build an overview directly from the captured PNGs, without redrawing the Android text.
     indices = (0, 2, 4, 6, 8)
     strip = Image.new("RGB", (216 * len(indices), 334), "#121622")

@@ -34,7 +34,7 @@ public final class PageExitProbeActivity extends Activity {
     private static final int WIDTH = 540, HEIGHT = 760, TOP = 68, BOTTOM = 696;
     private static final int[] CENTRES = {122, 227, 379, 532, 633};
     private static final int[] CUTS = {TOP, 177, 299, 458, 586, BOTTOM};
-    private static final int FIRST = -2, LAST = 8;
+    private static final int FIRST = -3, CAPSULE_HALF = -2, LAST = 8;
     private static final int CLIP_FADE = LAST + 1;
     private static final int SOFT_BLUR = LAST + 2;
     private static final int WIDE_BLUR = LAST + 3;
@@ -90,7 +90,7 @@ public final class PageExitProbeActivity extends Activity {
                         return;
                     }
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
-                    String name = requested == FIRST ? "background" : requested == -1 ? "reference"
+                    String name = requested == FIRST ? "background" : requested == CAPSULE_HALF ? "capsule-half" : requested == -1 ? "reference"
                             : requested == CLIP_FADE ? "clip-fade"
                             : requested == SOFT_BLUR ? "blur-soft"
                             : requested == WIDE_BLUR ? "blur-wide"
@@ -142,6 +142,7 @@ public final class PageExitProbeActivity extends Activity {
         private final LyricPageExitMask mask = new LyricPageExitMask();
         private final LyricClipFade clipFade = new LyricClipFade();
         private final LyricRenderBlur liveBlur = new LyricRenderBlur();
+        private final LyricRenderBlur floorBlur = new LyricRenderBlur();
         private final RenderNode glyphs = new RenderNode("frozen Android lyric layouts");
         private final Paint backdrop = new Paint();
         private final int[] glyphCounts = new int[CENTRES.length];
@@ -160,8 +161,18 @@ public final class PageExitProbeActivity extends Activity {
             c.drawRect(0, BOTTOM + 7, WIDTH, BOTTOM + 12, backdrop);
             // Android can drop an undisplayed node. The background and clip-only phases
             // never read it, so they must not record an extra glyph snapshot.
-            if (phase >= -1 && phase < LAST && !glyphs.hasDisplayList()) recordPage();
-            if (phase == -1) c.drawRenderNode(glyphs);
+            if (phase >= CAPSULE_HALF && phase < LAST && !glyphs.hasDisplayList()) recordPage();
+            if (phase == CAPSULE_HALF) {
+                LyricPageExit exit = new LyricPageExit();
+                exit.closeFromCapsule(0);
+                exit.step(60);
+                mask.drawFrame(c, TOP, BOTTOM, exit, target ->
+                        LyricPageExitMask.drawSnapshot(target, glyphs, exit.opacity(),
+                                unused -> { throw new AssertionError("Missing hardware snapshot"); }));
+            } else if (phase == -1) {
+                glyphs.setAlpha(1f);
+                c.drawRenderNode(glyphs);
+            }
             else if (phase == CLIP_FADE) {
                 int saved = c.save();
                 c.clipRect(0, TOP, WIDTH, BOTTOM);
@@ -176,6 +187,12 @@ public final class PageExitProbeActivity extends Activity {
                 backdrop.setColor(Color.WHITE);
                 layer.drawRect(140, 280, 172, 360, backdrop);
                 liveBlur.finish(c);
+                if (phase == WIDE_BLUR) {
+                    Canvas floor = floorBlur.begin(320, 252, 480, 420, 12f, 336f);
+                    floor.drawRect(340, 284, 384, 384, backdrop); // a line crossing the floor
+                    floor.drawRect(422, 340, 454, 386, backdrop); // a fully occluded line
+                    floorBlur.finish(c);
+                }
             } else if (phase >= 0) {
                 mask.draw(c, TOP, BOTTOM, phase / (float) LAST, canvas -> canvas.drawRenderNode(glyphs));
             }

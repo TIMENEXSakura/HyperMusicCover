@@ -62,6 +62,15 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
      * pill is what it was; a morph grows it with the frame (setMorphFrame), since a blurred layer
      * is cut to its own bounds.
      */
+    // Blur samples transparent pixels outside the pill. The extra gutter is on its own
+    // layer so it never changes child positions, touch bounds or the material silhouette.
+    private val blurGutter = kotlin.math.ceil(3f * maxOf(APPEAR_BLUR_DP, SWAP_BLUR_DP,
+        MiniCardMorph.BLUR_DP) * resources.displayMetrics.density).toInt()
+    private val blurLayer = FrameLayout(context).apply {
+        setPadding(blurGutter, blurGutter, blurGutter, blurGutter)
+        clipChildren = false
+        clipToPadding = false
+    }
     private val content = FrameLayout(context)
     private var liveArt: View? = null
     private val title = EdgeBlurText(context)
@@ -272,7 +281,16 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         materialLayer.clipToOutline = true
         materialLayer.shape = outlineProvider
         addView(materialLayer, LayoutParams(-1, -1))
-        addView(content, LayoutParams(-1, -1))
+        addView(blurLayer, LayoutParams(-1, -1).apply {
+            setMargins(-blurGutter, -blurGutter, -blurGutter, -blurGutter)
+        })
+        blurLayer.addView(content, LayoutParams(-1, -1))
+        content.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                val pill = this@MiniPlayerView
+                pill.outlineProvider?.getOutline(pill, outline)
+            }
+        }
         artwork.scaleType = ImageView.ScaleType.CENTER_CROP
         slot.clipToOutline = true
         slot.background = rounded(Color.rgb(55, 55, 55), dp(12).toFloat())
@@ -950,6 +968,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
             if (toggle2.translationX != dx) toggle2.translationX = dx
         }
         // Only the corner changed: the outline is not rebuilt by a resize this frame.
+        if ((rounded || resized) && content.clipToOutline) content.invalidateOutline()
         if (rounded && !resized) traced("MC f.outline") {
             invalidateOutline()
             materialLayer.invalidateOutline()
@@ -989,6 +1008,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         requestLayout()
         invalidateOutline()
         materialLayer.invalidateOutline()
+        content.invalidateOutline()
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -1006,7 +1026,7 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         // The pass laid the content layer out at the rest size too: back to the size it had grown
         // to, its pieces staying where the pass put them.
         if (contentW > content.width || contentH > content.height) {
-            content.setLeftTopRightBottom(0, 0, max(contentW, content.width), max(contentH, content.height))
+            resizeContent(max(contentW, content.width), max(contentH, content.height))
         }
         growContent()
     }
@@ -1027,7 +1047,13 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         if (morphW <= w && morphH <= h) return
         contentW = max(w, (morphW * CONTENT_ROOM).roundToInt())
         contentH = max(h, (morphH * CONTENT_ROOM).roundToInt())
-        content.setLeftTopRightBottom(0, 0, contentW, contentH)
+        resizeContent(contentW, contentH)
+    }
+
+    private fun resizeContent(w: Int, h: Int) {
+        val pad = blurGutter
+        blurLayer.setLeftTopRightBottom(-pad, -pad, w + pad, h + pad)
+        content.setLeftTopRightBottom(pad, pad, w + pad, h + pad)
     }
 
     /**
@@ -1147,7 +1173,11 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         if (contentBlurred >= 0f && kotlin.math.abs(r - contentBlurred) < 0.25f &&
             (r == 0f) == (contentBlurred == 0f)) return
         contentBlurred = r
-        content.setRenderEffect(if (r == 0f) null
+        // Clip the sharp source to the pill before convolution, never the resulting halo.
+        // The glass has its own permanent outline; this switch only affects the foreground.
+        content.clipToOutline = r > 0f
+        clipToOutline = r == 0f
+        blurLayer.setRenderEffect(if (r == 0f) null
             else android.graphics.RenderEffect.createBlurEffect(r, r, android.graphics.Shader.TileMode.DECAL))
     }
 

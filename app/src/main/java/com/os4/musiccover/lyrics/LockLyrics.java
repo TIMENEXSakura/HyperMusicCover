@@ -78,7 +78,7 @@ public final class LockLyrics {
         LyricView view = sView;
         if (view == null) return;
         if (visible) view.reopenPage();
-        else view.beginPageExit();
+        else view.beginPageExit(false);
     }
 
     /** Actual scene destruction/new non-capsule entry, not a card presentation handoff. */
@@ -115,7 +115,8 @@ public final class LockLyrics {
 
     /** Prepare the lyric request/cache before Main enters the chosen background scene. */
     public static void setCapsuleVisible(boolean visible, String key, MediaController controller) {
-        animatePageRequest(visible);
+        if (visible) animatePageRequest(true);
+        else if (sView != null) sView.beginPageExit(true);
         sCapsulePreparation = false;
         sCapsulePage = visible;
         Main.setCapsuleArtworkOwner(visible, controller, key);

@@ -11,6 +11,10 @@ public final class LyricRenderBlur {
     private float radius = -1f;
 
     public Canvas begin(int left, int top, int right, int bottom, float pixels) {
+        return begin(left, top, right, bottom, pixels, Float.POSITIVE_INFINITY);
+    }
+
+    public Canvas begin(int left, int top, int right, int bottom, float pixels, float inkFloor) {
         if (radius != pixels) {
             radius = pixels;
             node.setRenderEffect(pixels > 0f
@@ -19,6 +23,7 @@ public final class LyricRenderBlur {
         node.setPosition(left, top, right, bottom);
         Canvas canvas = node.beginRecording(right - left, bottom - top);
         canvas.translate(-left, -top);
+        if (inkFloor < bottom) canvas.clipRect(left, top, right, inkFloor);
         return canvas;
     }
 

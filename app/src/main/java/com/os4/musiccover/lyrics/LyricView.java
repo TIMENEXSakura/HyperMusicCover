@@ -358,6 +358,7 @@ final class LyricView extends View {
     private boolean popped;
     private final LyricPageExit pageExit = new LyricPageExit();
     private final LyricPageExitMask pageMask = new LyricPageExitMask();
+    private final LyricPageExitMask.Content livePage = this::drawLyrics;
     private final LyricPageExitMask.Content departingPage = this::drawDepartingPage;
     private RenderNode pagePicture;
     private String lastPageTrack;
@@ -1275,16 +1276,15 @@ final class LyricView extends View {
     }
 
     /** Only an explicit user departure arms this transition. Effective page opacity alone cannot. */
-    void beginPageExit() {
+    void beginPageExit(boolean capsuleTap) {
         if (lastPageDrawAt == 0 || show <= 0.003f || !bandOk || LockLyrics.still()
                 || !Main.screenOnCached() || !isAttachedToWindow() || getAlpha() <= 0f) return;
         long at = now();
-        if (pageExit.active()) {
-            pageExit.setClosing(true, at);
-        } else {
-            pageExit.start(at);
-            recordDepartingPage();
-        }
+        boolean alreadyExiting = pageExit.active();
+        if (capsuleTap) pageExit.closeFromCapsule(at);
+        else if (alreadyExiting) pageExit.setClosing(true, at);
+        else pageExit.start(at);
+        if (!alreadyExiting) recordDepartingPage();
         kick();
     }
 
@@ -2571,8 +2571,8 @@ final class LyricView extends View {
         // save is outside the try so an unbalanced save inside drawLyrics cannot outlive it.
         int save = canvas.save();
         try {
-            if (pageExit.active()) pageMask.draw(canvas, lastBandTop, lastBandBottom, pageExit.progress(), departingPage);
-            else drawLyrics(canvas);
+            if (!pageExit.active()) drawLyrics(canvas);
+            else pageMask.drawFrame(canvas, lastBandTop, lastBandBottom, pageExit, departingPage);
         } catch (Throwable t) {
             reportDrawFailure(t);
         } finally {
@@ -2615,11 +2615,7 @@ final class LyricView extends View {
     }
 
     private void drawDepartingPage(Canvas canvas) {
-        if (canvas.isHardwareAccelerated() && pagePicture != null && pagePicture.hasDisplayList()) {
-            canvas.drawRenderNode(pagePicture);
-        } else {
-            drawLyrics(canvas);
-        }
+        LyricPageExitMask.drawSnapshot(canvas, pagePicture, pageExit.opacity(), livePage);
     }
 
     private void drawLyrics(Canvas canvas) {
@@ -2640,7 +2636,11 @@ final class LyricView extends View {
 
         int save = canvas.save();
         if (popped) canvas.translate(popX.x, popY.x);
-        canvas.clipRect(0f, clipBandTop, getWidth(), clipBandBottom);
+        // The capsule floor limits the text fed into the blur, not the already blurred
+        // output. Keep its halo in the gap without changing the reading or touch bounds.
+        boolean softFloor = LockLyrics.capsuleLayoutOrigin() && canvas.isHardwareAccelerated();
+        float outputBottom = clipBandBottom + (softFloor ? blurPad : 0f);
+        canvas.clipRect(0f, clipBandTop, getWidth(), outputBottom);
         float offset = frozen ? lastPageOffset : presentationOffset();
         if (offset != 0f) canvas.translate(0f, offset);
         // The mask stays at the viewport edge while the row moves through it.
@@ -2655,7 +2655,7 @@ final class LyricView extends View {
             lastPageOffset = offset;
             float dy = popped ? popY.x : 0f;
             lastBandTop = Math.max(0f, dy + clipBandTop);
-            lastBandBottom = Math.min(getHeight(), dy + clipBandBottom);
+            lastBandBottom = Math.min(getHeight(), dy + outputBottom);
         }
         float separationDt = separationAt == 0L ? 0f : Math.min(0.05f, Math.max(0f, (drawAt - separationAt) / 1000f));
         separationAt = drawAt;
@@ -2714,10 +2714,11 @@ final class LyricView extends View {
             if (alpha <= 0.003f) continue;
             previousBottom = Math.max(previousBottom, bottom);
             int layer = topFade.beginRow(canvas, getWidth(), y - blurPad,
-                    Math.min(clipBandBottom - offset, bottom + blurPad));
+                    Math.min(outputBottom - offset, bottom + blurPad));
             try {
-                if (last && finishingLast) drawFinalFields(canvas, i, side, y, alpha);
-                else drawLine(canvas, i, side, y, alpha);
+                float inkFloor = softFloor ? clipBandBottom - offset : Float.POSITIVE_INFINITY;
+                if (last && finishingLast) drawFinalFields(canvas, i, side, y, alpha, inkFloor);
+                else drawLine(canvas, i, side, y, alpha, inkFloor);
             } finally {
                 topFade.endRow(canvas, getWidth(), layer);
             }
@@ -2795,7 +2796,7 @@ final class LyricView extends View {
     private final android.graphics.Rect exitClip = new android.graphics.Rect();
     private final Paint exitEraser = new Paint();
 
-    private void drawFinalFields(Canvas canvas, int i, float x, float y, float alpha) {
+    private void drawFinalFields(Canvas canvas, int i, float x, float y, float alpha, float inkFloor) {
         int pose = canvas.save();
         try {
             canvas.translate(x, y);
@@ -2823,7 +2824,7 @@ final class LyricView extends View {
             }
             int layer = canvas.saveLayer(exitClip.left, top, exitClip.right, bottom, null);
             try {
-                drawLine(canvas, i, 0f, 0f, alpha);
+                drawLine(canvas, i, 0f, 0f, alpha, inkFloor - y);
                 exitEraser.setBlendMode(android.graphics.BlendMode.DST_OUT);
                 mask.erase(canvas, exitEraser, finalHold.progress(), 1f);
             } finally {
@@ -2834,10 +2835,16 @@ final class LyricView extends View {
         }
     }
 
-    private void drawLine(Canvas canvas, int i, float x, float y, float a) {
+    private void drawLine(Canvas canvas, int i, float x, float y, float a, float inkFloor) {
         float pixels = blur[i];
         if (pixels < 0.05f || !canvas.isHardwareAccelerated()) {
-            drawInkAt(canvas, i, x, y, a);
+            if (Float.isFinite(inkFloor) && y + height[i] + blurPad > inkFloor) {
+                int saved = canvas.save();
+                try {
+                    if (canvas.getClipBounds(rowClip) && canvas.clipRect(rowClip.left, rowClip.top,
+                            rowClip.right, inkFloor)) drawInkAt(canvas, i, x, y, a);
+                } finally { canvas.restoreToCount(saved); }
+            } else drawInkAt(canvas, i, x, y, a);
             return;
         }
         if (!canvas.getClipBounds(rowClip)) return;
@@ -2848,7 +2855,7 @@ final class LyricView extends View {
         if (right <= left || bottom <= top) return;
         LyricRenderBlur effect = rowEffects[i];
         if (effect == null) effect = rowEffects[i] = new LyricRenderBlur();
-        Canvas layer = effect.begin(left, top, right, bottom, pixels);
+        Canvas layer = effect.begin(left, top, right, bottom, pixels, inkFloor);
         try {
             drawInkAt(layer, i, x, y, a);
         } finally {

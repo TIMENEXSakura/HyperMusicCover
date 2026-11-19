@@ -6,6 +6,41 @@ import org.junit.Test;
 public class LyricPageExitTest {
     private static final long DURATION = LyricPageExit.DURATION_MS;
 
+    @Test public void tappingCapsuleFadesAllRowsTogetherEvenIfCoverTeardownRepeatsClose() {
+        LyricPageExit exit = new LyricPageExit();
+        exit.closeFromCapsule(100);
+        exit.step(160);
+        assertEquals(0f, exit.progress(), 0f);
+        assertEquals(0.5f, exit.opacity(), 0f);
+        exit.setClosing(true, 164);
+        exit.step(220);
+        assertTrue(exit.closed());
+        exit.start(300); // playback end or a normal gesture must still get the slow wipe
+        exit.step(420);
+        assertTrue(exit.active());
+        assertEquals(1f, exit.opacity(), 0f);
+        assertEquals(120f / DURATION, exit.progress(), 0f);
+    }
+
+    @Test public void capsuleCanTakeOverAndReverseWithoutResettingTheDisplayedFrame() {
+        LyricPageExit exit = new LyricPageExit();
+        exit.start(0);
+        exit.step(100);
+        float cut = exit.progress();
+        exit.closeFromCapsule(110);
+        exit.step(170);
+        assertEquals(cut, exit.progress(), 0f);
+        assertEquals(.5f, exit.opacity(), 0f);
+        exit.setClosing(false, 175);
+        exit.step(200);
+        assertEquals(75f / DURATION, exit.progress(), 0f);
+        assertEquals(1f - 35f / 120f, exit.opacity(), 0f);
+        exit.step(275);
+        assertFalse(exit.active());
+        assertFalse(exit.closed());
+        assertEquals(1f, exit.opacity(), 0f);
+    }
+
     @Test public void dismissalKeepsItsFrameUntilTheMaskHasPassedItsBottom() {
         LyricPageExit exit = new LyricPageExit();
         exit.start(100);
