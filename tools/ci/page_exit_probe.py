@@ -196,7 +196,7 @@ def analyse():
         opened = rgb(f"panel-{i}")
         matching_pixels(opened, rgb(f"panel-{8-i}"), f"Reversing changed the lyrics at step {i}")
         base = panel_base(i / 4)
-        for gap in (0, 61):
+        for gap in (0, 54):
             reference_voice = clear_voice(panel0, original_base + gap)
             assert np.count_nonzero(reference_voice > 150) > 1000
             matching_pixels(clear_voice(opened, base + gap), reference_voice,

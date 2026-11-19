@@ -218,7 +218,9 @@ public final class PageExitProbeActivity extends Activity {
             lyricInk.setTypeface(Typeface.DEFAULT_BOLD);
             lyricInk.setTextSize(46f);
             sampleRow(c, "Stay", 43, base, floor);
-            sampleRow(c, "Again", 43, base + 61, floor);
+            // Keep the descender of "Again" inside the clear area even at full expansion:
+            // baseline 270, ink to 280; the soft edge starts at 282.
+            sampleRow(c, "Again", 43, base + 54, floor);
             int harmonyBase = base + 169;
             Canvas layer = harmonyBlur.begin(35, harmonyBase - 63, 481, harmonyBase + 28, 4f);
             try { sampleRow(layer, "Through the night", 54, harmonyBase, floor); }
