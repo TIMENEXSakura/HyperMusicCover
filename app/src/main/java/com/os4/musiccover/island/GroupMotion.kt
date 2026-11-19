@@ -306,7 +306,7 @@ internal class GroupMotion(
         val smallMorph = if (g.musicSmall) lead else g.follower?.takeIf { g.otherSmall }
         val view = g.smallView
         if (smallMorph != null && view != null) {
-            val p = smallMorph.progress
+            val p = smallMorph.appearanceProgress
             val landing = !lead.toNative && p < FLIGHT_HANDOFF
             if (landing) smallMorph.containerBox()?.let(::landSmall)
             else if (g.smallLanding) unlandSmall()

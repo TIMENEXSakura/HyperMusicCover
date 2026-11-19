@@ -538,7 +538,7 @@ internal class SpreadMotion(
             } else p
             val m = item.morph
             if (m != null) {
-                m.led(itemProgress)
+                m.led(itemProgress, returning = s.motion.spring?.toList == false)
                 if (s.stacked && item.standIn) item.view?.alpha = when (item.seat) {
                     SEAT_SMALL -> MiniPlayerGeometry.STACK_BACK_ALPHA +
                         (1f - MiniPlayerGeometry.STACK_BACK_ALPHA) * itemProgress

@@ -21,7 +21,7 @@ internal class MiniPlayerSpreadMotion {
 }
 
 /** The spread's release keeps the finger's speed, independent of OEM scroll jumps. */
-internal class MiniPlayerSpreadSpring(progress: Float, speed: Float, toList: Boolean) {
+internal class MiniPlayerSpreadSpring(progress: Float, speed: Float, val toList: Boolean) {
     private val motion = CoverMorphMotion().apply {
         value = progress
         velocity = speed.coerceIn(-4f, 4f)

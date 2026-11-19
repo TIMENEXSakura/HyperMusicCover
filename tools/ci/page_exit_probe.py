@@ -64,6 +64,7 @@ def collect():
         raise TimeoutError("HWUI did not commit and capture the full exit sequence")
     meta = json.loads((OUT / "capture.json").read_bytes())
     for name in ["background", "reference", "capsule-half", "clip-fade", "blur-soft", "blur-wide",
+                 *(f"landing-{i}" for i in range(9)),
                  *(f"panel-{i}" for i in range(9)),
                  *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
@@ -219,6 +220,19 @@ def analyse():
     end_harmony = harmony_profile(rgb("panel-4"), panel_base(1))
     assert end_harmony.sum() < .01 * profile.sum(), "Hidden harmony still paints inside the card"
     assert panel_base(1) < original_base - 50, "The singer must move along with the viewport"
+
+    # Align the rebounding geometry before comparing ink; a second optical pulse is a bug,
+    # while cancelling the bounce entirely must also fail because the sample moved.
+    raw = [.55, .25, 0, -.14, .15, -.03, .05, 0, .30]
+    def landing_ink(i):
+        dx = int(np.floor(40 * raw[i] + .5))
+        return rgb(f"landing-{i}")[294:378, 88 + dx:166 + dx]
+    landed = landing_ink(2)
+    assert landed[36, 22].mean() > 249 and landed[36, 21].max() < 100, "Folded foreground did not become sharp"
+    for i in range(3, 8):
+        matching_pixels(landing_ink(i), landed, f"Blur flashed during rebound at {i}")
+    for i in (0, 8):
+        assert landing_ink(i)[36, 19].mean() > landed[36, 19].mean() + 9, "Ordinary transition blur was lost"
 
     panel_strip = Image.new("RGB", (5 * 226, 177), "#121622")
     labels = ImageDraw.Draw(panel_strip)

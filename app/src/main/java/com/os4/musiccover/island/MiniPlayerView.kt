@@ -1147,8 +1147,22 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         pushContentBlur()
     }
 
+    // Appearance, card morphs and row swaps can hand the same pill over within one frame.
+    // Releasing one channel must not clear, or borrow, the radius owned by another.
+    private var appearBlur = -1f
+
+    fun setAppearBlur(radius: Float) {
+        appearBlur = if (radius < 0.5f) 0f else radius
+        pushContentBlur()
+    }
+
+    fun releaseAppearBlur() {
+        appearBlur = -1f
+        pushContentBlur()
+    }
+
     /** The radius a card morph last asked for (setMorphContentBlur); it wins over a switch's while set. */
-    private var morphBlur = 0f
+    private var morphBlur = -1f
 
     /**
      * All of the content blurred together by [radius] screen pixels, the glass left sharp - as
@@ -1165,11 +1179,16 @@ internal class MiniPlayerView(context: Context) : FrameLayout(context), CapsuleF
         pushContentBlur()
     }
 
+    fun releaseMorphContentBlur() {
+        morphBlur = -1f
+        pushContentBlur()
+    }
+
     /** The radius on the content layer now; none yet, so the first is always written. */
     private var contentBlurred = -1f
 
     private fun pushContentBlur() {
-        val r = if (morphBlur > 0f) morphBlur else contentBlur
+        val r = foregroundBlur(morphBlur, appearBlur, contentBlur)
         if (contentBlurred >= 0f && kotlin.math.abs(r - contentBlurred) < 0.25f &&
             (r == 0f) == (contentBlurred == 0f)) return
         contentBlurred = r

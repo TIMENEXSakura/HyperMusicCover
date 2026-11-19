@@ -219,6 +219,11 @@ internal class MiniCardMorph(
     /** A finger is on it: its progress is the finger's, not its spring's. */
     val held: Boolean get() = dragging
 
+    private val focus = CapsuleMorphFocus()
+    val appearanceProgress: Float get() = focus.value
+    // An externally driven morph keeps its leader's focus through its own pre-draw frames.
+    private var drivenFocus = Float.NaN
+
     /** Lays out the first frame now, in the same pass as the switch, so no frame shows either end bare. */
     fun start(): Boolean {
         if (!measure()) return false
@@ -251,6 +256,7 @@ internal class MiniCardMorph(
     /** One finger position: progress (rubber-banded past either end by the caller) and nudge. */
     fun drag(progress: Float, nudgePx: Float, nudgeXPx: Float = 0f) {
         if (!running) return
+        drivenFocus = Float.NaN
         motion.value = progress
         motion.velocity = 0f
         nudge.value = nudgePx / NUDGE_UNIT
@@ -272,6 +278,8 @@ internal class MiniCardMorph(
         // [invert]: the other way on the same spring - one island going up into its card as
         // another comes down out of its own, the super island's expanded switch.
         val led = if (invert) 1f - leader.motion.value else leader.motion.value
+        val focusEnd = if (invert) 1f - leader.appearanceProgress else leader.appearanceProgress
+        drivenFocus = lerp(from, focusEnd, share)
         motion.value = lerp(from, led, share)
         motion.velocity = 0f
         nudge.value = if (invert) 0f else leader.nudge.value * share
@@ -288,8 +296,9 @@ internal class MiniCardMorph(
      * Spread). Started as dragged, so its own frame only keeps the far end live when nothing has
      * posed it this frame.
      */
-    fun led(progress: Float) {
+    fun led(progress: Float, returning: Boolean) {
         if (!running) return
+        drivenFocus = if (returning) minOf(appearanceProgress, progress) else progress
         motion.value = progress
         motion.velocity = 0f
         nudge.value = 0f
@@ -564,6 +573,8 @@ internal class MiniCardMorph(
             nativeRaw.y - (header.translationY - liftStackTy) * ownScale, nativeRaw.w, nativeRaw.h)
         if (miniRest.w <= 0f || nativeRest.w <= 0f) return false
         val c = motion.value.coerceIn(0f, 1f)
+        val optical = focus.sample(if (dragging && drivenFocus.isFinite()) drivenFocus else c,
+            returning = !dragging && !toNative)
         val framed = containerFrame(miniRest, nativeRest, motion.value)
         // The nudge moves the whole container toward the card (up from the pill, down from it).
         val towardNative = if (nativeRest.y <= miniRest.y) -1f else 1f
@@ -606,8 +617,8 @@ internal class MiniCardMorph(
         // Both ends' whole content in and out of focus, the glass of neither: the pill's going
         // out as it heads for the card, the card's coming in once the pill's glass leaves it.
         // In the card's own pixels, which the stack's transform and the morph's scale s shrink.
-        blurCard(blurPx * (1f - cardFocus(c)) / max(s, 0.05f))
-        mini.setMorphContentBlur(blurPx * if (holdMaterial) heldPillBlur(c) else pillBlur(c))
+        blurCard(blurPx * (1f - cardFocus(optical)) / max(s, 0.05f))
+        mini.setMorphContentBlur(blurPx * if (holdMaterial) heldPillBlur(optical) else pillBlur(optical))
 
         // The mini player's frame is the container itself; its material fades last.
         boxDrawn = box
@@ -845,7 +856,7 @@ internal class MiniCardMorph(
 
     /** The pill given back to itself: its pieces in their places, no blur, out of the morph. */
     private fun restoreMini() {
-        mini.setMorphContentBlur(0f)
+        mini.releaseMorphContentBlur()
         pieces.forEach { piece ->
             val v = piece.view
             v.scaleX = 1f

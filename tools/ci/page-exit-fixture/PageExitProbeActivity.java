@@ -39,6 +39,9 @@ public final class PageExitProbeActivity extends Activity {
     private static final int SOFT_BLUR = LAST + 2;
     private static final int WIDE_BLUR = LAST + 3;
     private static final int MORPH_START = WIDE_BLUR + 1, MORPH_LAST = MORPH_START + 8;
+    // Release, overshoot, rebound twice, then explicitly drag away from the folded end.
+    private static final float[] LANDING = {.55f, .25f, 0f, -.14f, .15f, -.03f, .05f, 0f, .30f};
+    private static final int LANDING_START = MORPH_LAST + 1, LANDING_LAST = MORPH_LAST + LANDING.length;
     private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
@@ -92,6 +95,7 @@ public final class PageExitProbeActivity extends Activity {
                     }
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
                     String name = requested == FIRST ? "background" : requested == CAPSULE_HALF ? "capsule-half" : requested == -1 ? "reference"
+                            : requested >= LANDING_START ? "landing-" + (requested - LANDING_START)
                             : requested >= MORPH_START ? "panel-" + (requested - MORPH_START)
                             : requested == CLIP_FADE ? "clip-fade"
                             : requested == SOFT_BLUR ? "blur-soft"
@@ -101,7 +105,7 @@ public final class PageExitProbeActivity extends Activity {
                         if (!frame.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IllegalStateException("PNG write failed");
                     }
                     retries = 0;
-                    if (phase == MORPH_LAST) {
+                    if (phase == LANDING_LAST) {
                         JSONObject report = new JSONObject();
                         report.put("width", WIDTH).put("height", HEIGHT).put("hardwareCanvas", page.hardwareCanvas);
                         report.put("clipTop", TOP).put("clipBottom", BOTTOM).put("steps", LAST);
@@ -146,6 +150,9 @@ public final class PageExitProbeActivity extends Activity {
         private final LyricRenderBlur liveBlur = new LyricRenderBlur();
         private final LyricRenderBlur floorBlur = new LyricRenderBlur();
         private final RenderNode glyphs = new RenderNode("frozen Android lyric layouts");
+        private final com.os4.musiccover.island.CapsuleMorphFocus landingFocus =
+                new com.os4.musiccover.island.CapsuleMorphFocus();
+        private final LyricRenderBlur landingBlur = new LyricRenderBlur();
         private final Paint backdrop = new Paint();
         private final Paint lyricInk = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final LyricBottomFade bottomFade = new LyricBottomFade();
@@ -198,6 +205,22 @@ public final class PageExitProbeActivity extends Activity {
                     floor.drawRect(422, 340, 454, 386, backdrop); // a fully occluded line
                     floorBlur.finish(c);
                 }
+            } else if (phase >= LANDING_START) {
+                int i = phase - LANDING_START;
+                float raw = LANDING[i];
+                float optical = landingFocus.sample(raw, i != LANDING.length - 1);
+                float radius = 28f * com.os4.musiccover.island.MiniCardMorph.Companion.pillBlur(optical);
+                // A still-pending swap radius must not replace the active morph's sharp zero.
+                radius = com.os4.musiccover.island.CapsuleMorphFocusKt.foregroundBlur(radius, -1f, 9f);
+                int pose = c.save();
+                try {
+                    c.translate(Math.round(40 * raw), 0);
+                    Canvas layer = landingBlur.begin(55, 280, 212, 392, radius);
+                    backdrop.setColor(Color.WHITE);
+                    layer.drawRect(110, 308, 120, 364, backdrop);
+                    layer.drawRect(136, 308, 146, 364, backdrop);
+                    landingBlur.finish(c);
+                } finally { c.restoreToCount(pose); }
             } else if (phase >= MORPH_START) {
                 int position = phase - MORPH_START;
                 drawPanelLyrics(c, Math.min(position, 8 - position) / 4f);

@@ -202,7 +202,7 @@ internal class AppearMotion(
         // camera aside, and they give: pushed out and pressed thin against it.
         squeezeShortcuts(((w - fullW) / 2f).coerceAtLeast(0f) * APPEAR_PUSH_GAIN)
         // Out of focus to in, the glass left sharp, as the super island's content arrives.
-        view.setMorphContentBlur((1f - MiniCardMorph.smooth(0f, 0.5f, shown)) * APPEAR_BLUR_DP * d)
+        view.setAppearBlur((1f - MiniCardMorph.smooth(0f, 0.5f, shown)) * APPEAR_BLUR_DP * d)
         // The content in two beats: the picture first, popping in on its centre, the text a
         // little after it, sliding in from the left. Early, both: the whole of it is in by the
         // time the spring first reaches its place, not waiting on the bounce to settle.
@@ -228,7 +228,7 @@ internal class AppearMotion(
         squeezeShortcuts(0f)
         val view = views.player ?: return
         view.clearAppearStagger()
-        view.setMorphContentBlur(0f)
+        view.releaseAppearBlur()
         view.setContentAlpha(1f)
         if (left) {
             // Gone back into nothing (or cut short there): the row is not there any more. The

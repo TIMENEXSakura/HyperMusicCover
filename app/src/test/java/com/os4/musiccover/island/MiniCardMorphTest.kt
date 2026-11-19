@@ -19,6 +19,29 @@ class MiniCardMorphTest {
         assertEquals(expected.h, actual.h, 0.01f)
     }
 
+    @Test fun theReturningSpringCanReboundWithoutReblurringOrRevealingTheFlight() {
+        val focus = CapsuleMorphFocus()
+        focus.sample(.17f, returning = false)
+        val springFrames = listOf(.08f, -.02f, .04f, .01f, -.001f, 0f)
+        val visible = springFrames.map { focus.sample(it, returning = true) }
+        assertEquals(listOf(.08f, 0f, 0f, 0f, 0f, 0f), visible)
+        for (p in visible.drop(1)) {
+            assertEquals(0f, MiniCardMorph.pillBlur(p), 0f)
+            assertEquals(0f, MiniCardMorph.smooth(0f, FLIGHT_HANDOFF, p), 0f)
+        }
+        // Catching the moving pill and deliberately pulling it away is reversible.
+        assertEquals(.26f, focus.sample(.26f, returning = false), 0f)
+        assertEquals(.12f, focus.sample(.12f, returning = false), 0f)
+    }
+
+    @Test fun aSharpLandingStillOwnsFocusUntilTheUnderlyingAnimationTakesOver() {
+        assertEquals(0f, foregroundBlur(0f, 9f, 5f), 0f)
+        assertEquals(0f, foregroundBlur(0f, -1f, 5f), 0f)
+        assertEquals(9f, foregroundBlur(-1f, 9f, 5f), 0f)
+        assertEquals(0f, foregroundBlur(-1f, 0f, 5f), 0f)
+        assertEquals(5f, foregroundBlur(-1f, -1f, 5f), 0f)
+    }
+
     @Test fun containerIsExactlyEachEndAtRest() {
         assertBox(pill, MiniCardMorph.containerFrame(pill, card, 0f))
         assertBox(card, MiniCardMorph.containerFrame(pill, card, 1f))

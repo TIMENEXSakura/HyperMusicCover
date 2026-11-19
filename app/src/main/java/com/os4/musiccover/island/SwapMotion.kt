@@ -73,6 +73,8 @@ internal class SwapMotion(
         val ghostContent = Jelly(ALPHA_RESPONSE, ALPHA_DAMPING).apply { value = 0f; target = 1f }
         /** The old small island going into hiding where it is, on HIDDEN_EASE. */
         val ghostDisc = Jelly(HIDDEN_RESPONSE, HIDDEN_DAMPING).apply { value = 0f; target = 1f }
+        val pillFocus = SwapBlurProgress()
+        var ghostFocus = SwapBlurProgress()
         var ghostFrom: CoverMorphMotion.Box? = null
         var ghost = false
         var disc = false
@@ -231,6 +233,7 @@ internal class SwapMotion(
             s.ghostSmall = g.ghostSmall
             s.ghostKey = g.ghostKey
             s.ghostSecond = g.ghostSecond
+            s.ghostFocus = g.ghostFocus
             s.small.value = g.small.value
             s.small.velocity = g.small.velocity
             if (g.disc) {
@@ -343,7 +346,7 @@ internal class SwapMotion(
             val c = if (s.kind == SWAP_PREV) s.contentIn.value.coerceIn(0f, 1f)
                 else MiniCardMorph.smooth(0f, 1f, p)
             view.setContentAlpha(if (views.stackedStyle()) 1f else c)
-            view.setContentBlur((1f - c) * swapBlurPx())
+            view.setContentBlur((1f - s.pillFocus.advance(c)) * swapBlurPx())
         } else {
             view.setMorphFrame(box, box.h / 2f, 1f)
             view.setContentAlpha(MiniCardMorph.smooth(0.35f, 0.9f, p))
@@ -412,7 +415,7 @@ internal class SwapMotion(
         val front = lerpBox(s.pillFrom, s.pillTo, p)
         view.setMorphFrame(front, front.h / 2f, 1f)
         view.setContentAlpha(1f)
-        view.setContentBlur(kotlin.math.sin(Math.PI.toFloat() * q) * swapBlurPx())
+        view.setContentBlur(s.pillFocus.pulse(q) * swapBlurPx())
         view.alpha = lerp(MiniPlayerGeometry.STACK_BACK_ALPHA, 1f, q)
         val rear = views.smallBoxOnScreen()
         val from = s.ghostFrom
@@ -557,7 +560,7 @@ internal class SwapMotion(
             // stopwatch's left button gone in a frame as the cover was pulled down (2026-09-26).
             view.setSecondProgress(s.ghostSecond * (1f - MiniCardMorph.smooth(0f, 0.5f, g)))
             view.setTextAlpha(if (views.stackedStyle()) 1f else 1f - MiniCardMorph.smooth(0f, 0.5f, g))
-            if (views.stackedStyle()) view.setContentBlur(kotlin.math.sin(Math.PI.toFloat() * g.coerceIn(0f, 1f)) * swapBlurPx())
+            if (views.stackedStyle()) view.setContentBlur(s.ghostFocus.pulse(g) * swapBlurPx())
             view.alpha = 1f - MiniCardMorph.smooth(GHOST_HANDOFF, 1f, g)
             return
         }
@@ -569,7 +572,7 @@ internal class SwapMotion(
         view.setMorphFrame(box, box.h / 2f, 1f - MiniCardMorph.smooth(0.35f, 0.9f, g))
         val a = s.ghostContent.value.coerceIn(0f, 1f)
         view.setContentAlpha(1f - a)
-        view.setContentBlur(a * swapBlurPx())
+        view.setContentBlur(s.ghostFocus.advance(a) * swapBlurPx())
     }
 
     private fun startGhostDisc(key: String): Boolean {

@@ -459,7 +459,8 @@ internal class NoteMorphMotion(
                 rowHost.trace("f c=${"%.3f".format(progress)} box=${b.cx().toInt()},${b.w.toInt()}x${b.h.toInt()} " +
                     "fa=${"%.2f".format(f.alpha)} land=${flightState.flightLanding} " + rowState.smallState())
             }
-            val landing = !morph.toNative && progress < FLIGHT_HANDOFF
+            val appearance = morph.appearanceProgress
+            val landing = !morph.toNative && appearance < FLIGHT_HANDOFF
             if (landing != flightState.flightLanding) {
                 flightState.flightLanding = landing
                 // Shown at once, whole, with its own picture: it is what the flight becomes.
@@ -476,7 +477,7 @@ internal class NoteMorphMotion(
                 views.smallIsland?.iconAtStart = false
                 views.restoreSmallIslandShape()
             }
-            val a = if (landing) MiniCardMorph.smooth(0f, FLIGHT_HANDOFF, progress)
+            val a = if (landing) MiniCardMorph.smooth(0f, FLIGHT_HANDOFF, appearance)
                 else if (stackedSmall) stackedAlpha else 1f
             if (kotlin.math.abs(f.alpha - a) > 0.002f) f.alpha = a
         }
