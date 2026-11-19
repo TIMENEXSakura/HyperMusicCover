@@ -21,6 +21,9 @@ internal class FlightState {
     var pendingExpand: String? = null
 
     var rowWaitKey: String? = null
+    /** A reserved flight has no pixels until its row joins; its source pill still draws. */
+    fun takesPill(morphing: Boolean): Boolean = morphing || rowWaitKey == null
+
     var rowWaitSince = 0L
     var appListAsked = false
 

@@ -3,6 +3,7 @@ package com.os4.musiccover.island
 import com.os4.musiccover.Main
 import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
+import com.os4.musiccover.cover.CoverMorphMotion
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewTreeObserver
@@ -77,6 +78,7 @@ internal class SpreadMotion(
         var letGoSent = false
         /** Pulled open by a finger still on the island: it scrolls the stack (followFinger). */
         var finger: SpreadFinger? = null
+        var pulledSeat = SEAT_NONE
         var collapseFinger: SpreadCollapseFinger? = null
         /** The screen went off or into the doze while it was open; and when it came back on. */
         var slept = false
@@ -212,7 +214,7 @@ internal class SpreadMotion(
         motions.flying
 
     /** Even a lone stacked card uses the list whose downward pull returns it to its island. */
-    fun beginStackSpread(startY: Float): Boolean {
+    fun beginStackSpread(startY: Float, small: Boolean): Boolean {
         if (!views.stackedStyle() || rowState.islandKeys.isEmpty() || busyForStackSpread() ||
             views.player?.visibility != View.VISIBLE) return false
         // The music alone, and no notification in the stack either: there is no list to spread
@@ -221,7 +223,9 @@ internal class SpreadMotion(
         // Pulled up as the row style pulls it: into the card, and the card chosen.
         if (rowState.islandKeys.all { it == MUSIC_ISLAND } && !stackHasRows()) return false
         openSpread("stack swipe", SpreadFinger(startY))
-        return spread != null
+        val s = spread ?: return false
+        s.pulledSeat = if (small) SEAT_SMALL else SEAT_BIG
+        return true
     }
 
     /** Any notification row in the lock screen's stack, folded away or not - the music's aside. */
@@ -467,16 +471,32 @@ internal class SpreadMotion(
                 continue
             }
             view.visibility = View.VISIBLE
-            // The morph measures the pill at rest; the finger's lift is in its progress
-            // (waitSpread), so it is handed over rather than drawn twice.
-            if (!small) view.clearNudge()
+            // Grouped lists carry their pre-threshold lift in progress. The stacked spread
+            // begins at zero progress and instead inherits the selected seat's drawn offset.
+            val carrying = toCards && s.pulledSeat == item.seat
+            if (!small && !carrying) view.clearNudge()
+            val restBox: (() -> CoverMorphMotion.Box?)? = when {
+                carrying -> {
+                    // The previous frame was a nudged view during SPREAD_WAIT. Start at
+                    // exactly its drawn origin; the far end remains the unmodified native row.
+                    val x = if (small) views.smallNudgeX() else view.nudgeX
+                    val y = if (small) views.smallNudgeY() else view.nudgeY
+                    val source = {
+                        (if (small) views.smallBoxOnScreen() else view.restBoxOnScreen())
+                            ?.let { liftedSpreadOrigin(it, x, y) }
+                    }
+                    source
+                }
+                small -> { { views.smallBoxOnScreen() } }
+                else -> null
+            }
             view.alpha = if (s.stacked) when (item.seat) {
                 SEAT_SMALL -> MiniPlayerGeometry.STACK_BACK_ALPHA
                 SEAT_HIDDEN -> 0f
                 else -> 1f
             } else 1f
             val m = MiniCardMorph(view, native, toCards, spreadListener, noteMorphMotion.landingFor(item.key, native),
-                restBox = if (small) { { views.smallBoxOnScreen() } } else null,
+                restBox = restBox,
                 circle = small && !s.stacked,
                 holdMaterial = item.lead && !s.stacked)
             if (!m.startDragging()) {
@@ -808,6 +828,16 @@ internal class SpreadMotion(
     private fun fingerProgress(f: SpreadFinger): Float =
         MiniPlayerStackGesture.openingProgress(f.pulled() - f.base, f.span)
 
+    /** Keep the selected real seat under the finger while SystemUI lays out the rows. */
+    fun stackFingerMove(y: Float, xOffset: Float, yOffset: Float) {
+        if (!spreadFingerMove(y)) return
+        val s = spread ?: return
+        if (s.phase == SPREAD_WAIT) when (s.pulledSeat) {
+            SEAT_SMALL -> views.setSmallNudge(xOffset, yOffset)
+            SEAT_BIG -> views.player?.setNudge(xOffset, yOffset)
+        }
+    }
+
     /** The finger on a pulled-open spread moved (the pill's route, as noteDragMove). */
     fun spreadFingerMove(y: Float): Boolean {
         val f = spread?.finger?.takeIf { !it.ended } ?: return false
@@ -855,6 +885,12 @@ internal class SpreadMotion(
         s.finger = null
         s.collapseFinger = null
         applySpread(s, 1f)
+        // The original finger offset is consumed now. A later pull down lands at rest.
+        when (s.pulledSeat) {
+            SEAT_BIG -> views.player?.clearNudge()
+            SEAT_SMALL -> views.clearSmallNudge()
+        }
+        s.pulledSeat = SEAT_NONE
         letLeadGoWhenSettled()
         // Whether the hand-off tail about to be kept is one the pill draws itself.
         val leadPill = s.items.firstOrNull { it.lead }?.view === views.player
@@ -1015,6 +1051,7 @@ internal class SpreadMotion(
         if (folded) views.player?.visibility = View.VISIBLE
         // Let go before the rows were in: the pill was held where the finger lifted it.
         views.player?.springNudgeBack(0f, 0f)
+        if (s.pulledSeat == SEAT_SMALL) views.springSmallNudgeBack(0f, 0f)
         views.smallIsland?.alpha = if (views.stackedStyle()) MiniPlayerGeometry.STACK_BACK_ALPHA else 1f
         // The small island's place as the fold left it: whoever came down into it stays. Nobody
         // did, and a card out from before came home: that one comes up there, growing in (the
@@ -1035,3 +1072,7 @@ internal class SpreadMotion(
         rowHost.schedulePosition()
     }
 }
+
+/** Rest pose with the actual finger displacement. Width, height and far endpoint never change. */
+internal fun liftedSpreadOrigin(rest: CoverMorphMotion.Box, x: Float, y: Float) =
+    CoverMorphMotion.Box(rest.x + x, rest.y + y, rest.w, rest.h)

@@ -1690,11 +1690,11 @@ internal class MiniPlayerController(
     fun beginSpreadCollapse(startY: Float): Boolean = spreadMotion.beginSpreadCollapse(startY)
     fun moveSpreadCollapse(y: Float) = spreadMotion.moveSpreadCollapse(y)
     fun endSpreadCollapse(velocityY: Float, cancelled: Boolean) = spreadMotion.endSpreadCollapse(velocityY, cancelled)
-    fun beginStackSpread(startY: Float): Boolean = spreadMotion.beginStackSpread(startY)
+    fun beginStackSpread(startY: Float, small: Boolean): Boolean = spreadMotion.beginStackSpread(startY, small)
     fun spreadClockProgress(): Float? = spreadMotion.spreadClockProgress()
     fun spreadListShown(): Boolean = spreadMotion.spreadListShown()
     fun spreadFolding(): Boolean = spreadMotion.spreadFolding()
-    fun spreadFingerMove(y: Float): Boolean = spreadMotion.spreadFingerMove(y)
+    fun spreadFingerMove(y: Float, xOffset: Float, yOffset: Float) = spreadMotion.stackFingerMove(y, xOffset, yOffset)
     fun spreadFingerEnd(velocityY: Float, cancelled: Boolean): Boolean = spreadMotion.spreadFingerEnd(velocityY, cancelled)
 
     internal val noteMorphMotion: NoteMorphMotion = NoteMorphMotion(this, this, this, this, flightState, this, sessionSource,
@@ -3259,7 +3259,7 @@ internal class MiniPlayerController(
     /** Only the music's own morph drives the lyric band; notification morphs are unrelated. */
     fun lyricMusicMorphProgress(): Float {
         if (destroyed || morphScene || (flightState.noteMorphKey != null && flightState.noteMorphKey != MUSIC_ISLAND)) return Float.NaN
-        return morph?.progress ?: Float.NaN
+        return morph?.renderedProgress ?: Float.NaN
     }
 
     fun lyricMusicSceneTransition(): Boolean = morph != null && morphScene

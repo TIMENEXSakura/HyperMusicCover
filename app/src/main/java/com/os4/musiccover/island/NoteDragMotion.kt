@@ -52,6 +52,7 @@ internal class NoteDragMotion(
         var speed = 0f
         /** The pull's length, from the island to the row: unknown (0) until the row is there. */
         var span = 0f
+        var flightOrigin: NoteFlightOrigin? = null
 
         fun pulled() = if (opening) startY - y else y - startY
     }
@@ -66,6 +67,16 @@ internal class NoteDragMotion(
     /** The pull as the music's is posed (MiniPlayerRuntime.pose): progress, then nudge. */
     fun notePose(drag: NoteDrag): Pair<Float, Float> = MiniPlayerRuntime.pose(drag.pulled(),
         !drag.opening, drag.threshold, spanOf(drag), drag.nudgeLimit)
+
+    /** Capture the real pill before its nudge is cleared. The stack's settling row may
+     * be a different distance away than getLocationOnScreen() reported while waiting. */
+    fun joinFlight(drag: NoteDrag, displayedTop: Float, travel: Float) {
+        val (p, nudge) = notePose(drag)
+        drag.flightOrigin = NoteFlightOrigin(displayedTop, travel, p, nudge)
+    }
+
+    fun flightTop(drag: NoteDrag, p: Float, nudge: Float): Float =
+        drag.flightOrigin?.top(p, nudge) ?: Float.NaN
 
     /** The lift's speed as the morph's progress speed. */
     fun noteVelocity(drag: NoteDrag): Float =
@@ -134,10 +145,11 @@ internal class NoteDragMotion(
         flightState.flightOut = false
         noteDrag = NoteDrag(key, startY, opening = true,
             MiniPlayerRuntime.dragThresholdPx(views.density()), MiniPlayerRuntime.dragNudgePx(views.density()))
-        stackHost.letOut(key)
         flightState.rowWaitKey = key
         flightState.rowWaitSince = android.os.SystemClock.uptimeMillis()
         flightState.appListAsked = false
+        // letOut can refresh the pill synchronously while its flight is still invisible.
+        stackHost.letOut(key)
         Gen.frame(noteMorphMotion.rowWait)
         return true
     }
@@ -196,7 +208,7 @@ internal class NoteDragMotion(
         val running = rowState.morph
         if (running != null) {
             val (p, nudge) = notePose(drag)
-            running.drag(p, nudge, drag.nudgeX)
+            running.drag(p, nudge, drag.nudgeX, flightTop(drag, p, nudge))
             return
         }
         if (!drag.opening) return
@@ -214,4 +226,14 @@ internal class NoteDragMotion(
         val xy = IntArray(2).also(row::getLocationOnScreen)
         return kotlin.math.abs(start - xy[1]).coerceAtLeast(NOTE_SPAN_MIN_DP * views.density())
     }
+}
+
+/** The row joining or relaying out must not move a pill under a stationary finger.
+ * Positive travel is upwards. Store the genuine screen pose, and apply only changes
+ * in finger displacement until the lift releases ownership to the normal springs. */
+internal class NoteFlightOrigin(private val top: Float, private val travel: Float,
+                                private val progress: Float, private val nudge: Float) {
+    fun top(p: Float, nextNudge: Float): Float =
+        top - (p.coerceIn(-.3f, 1.3f) - progress.coerceIn(-.3f, 1.3f)) * travel -
+            (nextNudge - nudge) * (if (travel >= 0f) 1f else -1f)
 }

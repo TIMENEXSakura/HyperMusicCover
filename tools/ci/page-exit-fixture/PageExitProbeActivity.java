@@ -21,6 +21,11 @@ import android.view.PixelCopy;
 import android.view.View;
 import android.widget.FrameLayout;
 
+import com.os4.musiccover.cover.CoverMorphMotion.Box;
+import com.os4.musiccover.island.FlightState;
+import com.os4.musiccover.island.MiniCardMorph;
+import com.os4.musiccover.island.NoteFlightOrigin;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -42,6 +47,7 @@ public final class PageExitProbeActivity extends Activity {
     // Release, overshoot, rebound twice, then explicitly drag away from the folded end.
     private static final float[] LANDING = {.55f, .25f, 0f, -.14f, .15f, -.03f, .05f, 0f, .30f};
     private static final int LANDING_START = MORPH_LAST + 1, LANDING_LAST = MORPH_LAST + LANDING.length;
+    private static final int PULL_START = LANDING_LAST + 1, PULL_LAST = PULL_START + 6;
     private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
@@ -95,6 +101,7 @@ public final class PageExitProbeActivity extends Activity {
                     }
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
                     String name = requested == FIRST ? "background" : requested == CAPSULE_HALF ? "capsule-half" : requested == -1 ? "reference"
+                            : requested >= PULL_START ? "pull-" + (requested - PULL_START)
                             : requested >= LANDING_START ? "landing-" + (requested - LANDING_START)
                             : requested >= MORPH_START ? "panel-" + (requested - MORPH_START)
                             : requested == CLIP_FADE ? "clip-fade"
@@ -105,7 +112,7 @@ public final class PageExitProbeActivity extends Activity {
                         if (!frame.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IllegalStateException("PNG write failed");
                     }
                     retries = 0;
-                    if (phase == LANDING_LAST) {
+                    if (phase == PULL_LAST) {
                         JSONObject report = new JSONObject();
                         report.put("width", WIDTH).put("height", HEIGHT).put("hardwareCanvas", page.hardwareCanvas);
                         report.put("clipTop", TOP).put("clipBottom", BOTTOM).put("steps", LAST);
@@ -205,6 +212,8 @@ public final class PageExitProbeActivity extends Activity {
                     floor.drawRect(422, 340, 454, 386, backdrop); // a fully occluded line
                     floorBlur.finish(c);
                 }
+            } else if (phase >= PULL_START) {
+                drawLatePull(c, phase - PULL_START);
             } else if (phase >= LANDING_START) {
                 int i = phase - LANDING_START;
                 float raw = LANDING[i];
@@ -228,6 +237,44 @@ public final class PageExitProbeActivity extends Activity {
                 mask.draw(c, TOP, BOTTOM, phase / (float) LAST, canvas -> canvas.drawRenderNode(glyphs));
             }
             lastPainted = phase;
+        }
+
+        // Source and flight paint independently with translucent ink so a missing frame,
+        // duplicate at rest or even two perfectly overlapping silhouettes are observable.
+        private final FlightState pullState = new FlightState();
+        private final Paint pullInk = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private NoteFlightOrigin pullOrigin;
+
+        private void drawLatePull(Canvas c, int frame) {
+            Box pill = new Box(176, 640, 188, 52);
+            float thresholdNudge = MiniCardMorph.Companion.rubber(72f, 48f, .8f);
+            float heldTop = pill.y - thresholdNudge - 96f;
+            boolean rowReady = frame >= 2;
+            pullState.setRowWaitKey(rowReady ? null : "fixture");
+            pullInk.setColor(0xbfffffff);
+            if (!pullState.takesPill(rowReady)) {
+                float top = frame == 0 ? pill.y - thresholdNudge : heldTop;
+                paintPill(c, pill.x, rowReady ? pill.y : top, pill.w, pill.h);
+            }
+            if (!rowReady) return;
+
+            // The row first measured 300px from the pill, but joined only 220px
+            // away. On the next pre-draw it moves another 44px under a still finger.
+            float p = .32f + Math.max(0, frame - 4) * .12f;
+            float nudge = thresholdNudge * (1f - p);
+            if (pullOrigin == null)
+                pullOrigin = new NoteFlightOrigin(heldTop, 220f, .32f, thresholdNudge * .68f);
+            Box card = new Box(96, frame <= 3 ? 420 : 464, 348, 100);
+            long elapsed = frame == 2 ? 0 : frame <= 4 ? 32 : frame == 5 ? 64 : 96;
+            float visual = MiniCardMorph.Companion.handoffProgress(p, .32f, elapsed);
+            Box box = MiniCardMorph.Companion.containerFrame(pill, card, visual);
+            float physicalTop = MiniCardMorph.Companion.containerFrame(pill, card, p).y;
+            float lift = MiniCardMorph.Companion.heldNudge(physicalTop, -1f, pullOrigin.top(p, nudge));
+            paintPill(c, box.x, physicalTop - lift, box.w, box.h);
+        }
+
+        private void paintPill(Canvas c, float x, float y, float w, float h) {
+            c.drawRoundRect(x, y, x + w, y + h, h / 2f, h / 2f, pullInk);
         }
 
         // A three-line verse with a sharp opening and a soft backing line at the foot.

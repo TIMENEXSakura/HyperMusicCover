@@ -1193,11 +1193,9 @@ object MiniPlayerRuntime {
                     // Pulled far enough up to mean it: the music - the pill, or the small island -
                     // starts turning into the card under the finger, the nudge handed over as it is.
                     val stacked = routedOwner ?: live().firstOrNull { it.pill() === target }
-                    if (stacked?.beginStackSpread(routedY) == true) {
+                    if (stacked?.beginStackSpread(routedY, routedSmall) == true) {
                         routedSpread = true
                         routedOwner = stacked
-                        target.clearNudge()
-                        stacked.springSmallNudgeBack(0f, 0f)
                         noteTouch("pull up: stacked row to cards")
                     } else {
                     val owner = live().firstOrNull { it.canDrag(fromNative = false, small = routedSmall) }
@@ -1222,7 +1220,8 @@ object MiniPlayerRuntime {
                     }
                 }
                 if (routedMorph) dragMove(ev, nx)
-                else if (routedSpread) routedOwner?.spreadFingerMove(ev.rawY)
+                else if (routedSpread) routedOwner?.spreadFingerMove(ev.rawY, routedBaseX + nx,
+                    routedBaseY + pillNudgeY(dy, d))
                 else if (routedNote) routedOwner?.noteDragMove(ev.rawY, nx)
                 else if (routedIsland) routedOwner?.islandDrag(dx)
                 else if (routedStack) target.setNudge(routedBaseX + nx, routedBaseY + pillNudgeY(dy, d))

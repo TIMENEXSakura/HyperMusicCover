@@ -250,7 +250,7 @@ internal class NoteMorphMotion(
     internal fun pillHeld(): Boolean = flightState.flight != null && flightState.flightHome == HOME_PILL &&
         rowState.selectedIsland == flightState.noteMorphKey && flightState.pillLandingBox == null &&
         // Pulled up, the pill itself follows the finger until the row is there to morph into.
-        (rowState.morph != null || flightState.rowWaitKey == null)
+        flightState.takesPill(rowState.morph != null)
 
     /**
      * The flight has left its home for good ([out]) or is headed back to it. Home is the small
@@ -378,9 +378,7 @@ internal class NoteMorphMotion(
         // and fades it in from there, in this same frame.
         stackHost.showRow(row)
         // Opening, it goes to where the stack is settling its card, rows on their way out gone.
-        if (toRow) {
-            stackHost.unpinCard()
-            }
+        if (toRow) stackHost.unpinCard()
         val next = MiniCardMorph(view, row, toRow, noteMorphListener(key), landing, restBox,
             circle = useFlight && home == HOME_SMALL && !views.stackedStyle(),
             nativeDy = if (toRow) { { stackHost.settleDy(row, emptyList()) } } else null)
@@ -393,12 +391,37 @@ internal class NoteMorphMotion(
             edits.smallGrowing = false
             Gen.unframe(views.smallGrowFrame)
         }
-        if (drag != null) drag.span = noteDragMotion.noteSpan
+        if (drag != null) {
+            drag.span = noteDragMotion.noteSpan
+            if (drag.opening) {
+                val shown = if (flightState.flightFromSmall) {
+                    drag.nudgeX = views.smallNudgeX()
+                    views.smallBoxOnScreen().y + views.smallNudgeY()
+                } else {
+                    views.player?.let {
+                        drag.nudgeX = it.nudgeX
+                        it.restBoxOnScreen()?.y?.plus(it.nudgeY)
+                    }
+                }
+                val travel = next.upwardTravel()
+                if (shown != null && travel != null) noteDragMotion.joinFlight(drag, shown, travel)
+            }
+        }
         // The island's own nudge is the morph's from here, as the pill's is handed to the card's.
         if (drag != null && drag.opening) {
             if (flightState.flightFromSmall) views.clearSmallNudge() else views.player?.clearNudge()
         }
-        val started = if (drag != null) next.startDragging() else next.start()
+        val started = if (drag != null) {
+            val (p, lift) = noteDragMotion.notePose(drag)
+            val shown = noteDragMotion.flightTop(drag, p, lift)
+            next.startDragging(p, lift, drag.nudgeX, shown).also { ok ->
+                if (ok && shown.isFinite()) next.containerBox()?.let { first ->
+                    rowHost.trace("pull handoff waitMs=" +
+                        (android.os.SystemClock.uptimeMillis() - flightState.rowWaitSince) +
+                        " released=" + drag.ended + " y=" + shown.toInt() + "->" + first.y.toInt())
+                }
+            }
+        } else next.start()
         if (started && toRow && key == STACK_ISLAND) stackHost.showStackAsList("open")
         if (!started) {
             edits.morph = null
@@ -413,12 +436,10 @@ internal class NoteMorphMotion(
             if (drag.ended) {
                 // The finger already let go, committed: it opens from where the pull left it.
                 noteDragMotion.noteDrag = null
-                val (p, nudge) = noteDragMotion.notePose(drag)
-                next.drag(p, nudge, drag.nudgeX)
                 if (drag.toRow && key == MUSIC_ISLAND) Main.handCapsuleSceneToNative()
                 next.release(drag.toRow, noteDragMotion.noteVelocity(drag))
                 if (!drag.toRow) stackHost.takeInEarly(key)
-            } else noteDragMotion.applyNoteDrag()
+            }
         }
         // The small place, the pill's width and the small island's presence follow the flight:
         // freed (the next island comes up, or the pill takes the room back) or held (what is

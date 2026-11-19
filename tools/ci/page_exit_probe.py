@@ -65,6 +65,7 @@ def collect():
     meta = json.loads((OUT / "capture.json").read_bytes())
     for name in ["background", "reference", "capsule-half", "clip-fade", "blur-soft", "blur-wide",
                  *(f"landing-{i}" for i in range(9)),
+                 *(f"pull-{i}" for i in range(7)),
                  *(f"panel-{i}" for i in range(9)),
                  *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
@@ -234,6 +235,38 @@ def analyse():
     for i in (0, 8):
         assert landing_ink(i)[36, 19].mean() > landed[36, 19].mean() + 9, "Ordinary transition blur was lost"
 
+    # Pixel coverage records whether both the source and destination drew on one
+    # frame, including identical silhouettes whose bounds alone would look correct.
+    pull_tops, pull_widths = [], []
+    for i in range(7):
+        frame = rgb(f"pull-{i}")
+        coverage = ((frame - background) / (255 - background)).mean(axis=2)
+        mask = coverage > .35
+        assert mask.any() and .73 < coverage.max() < .77, f"Missing or doubled pull silhouette at {i}"
+        ys, xs = np.nonzero(mask)
+        top, bottom = int(ys.min()), int(ys.max())
+        left, right = int(xs.min()), int(xs.max())
+        # A loose or ghost source at the rest seat also changes these extents,
+        # even if it is disjoint and therefore never double-exposes a pixel.
+        width = right - left + 1
+        visual = (width - 188) / 160
+        assert abs(bottom - top + 1 - (52 + 48 * visual)) < 2, (i, top, bottom)
+        assert abs((left + right + 1) / 2 - 270) < 1, (i, left, right)
+        # Every horizontal section of the rounded silhouette must be one run.
+        padded = np.pad(mask[top:bottom + 1], ((0, 0), (1, 1))).astype(np.int8)
+        starts = np.count_nonzero(np.diff(padded, axis=1) == 1, axis=1)
+        assert np.all(starts == 1), f"Ghost or split silhouette at {i}"
+        pull_tops.append(top)
+        pull_widths.append(width)
+    assert abs(pull_tops[0] - 614) <= 1 and abs(pull_tops[1] - 518) <= 1, pull_tops
+    assert len(set(pull_tops[1:5])) == 1, f"Late row moved held pill: {pull_tops}"
+    matching_pixels(rgb("pull-1"), rgb("pull-2"), "First morph frame did not match the visible pill")
+    matching_pixels(rgb("pull-3"), rgb("pull-4"), "Stationary finger flashed as the row moved underneath")
+    assert all(22 <= pull_tops[i - 1] - pull_tops[i] <= 25 for i in (5, 6)), pull_tops
+    assert abs(pull_widths[0] - 188) < 2 and abs(pull_widths[-1] - (188 + 160 * .56)) < 2, pull_widths
+    assert pull_widths[0] == pull_widths[1] == pull_widths[2] < pull_widths[3] < 240, pull_widths
+    assert pull_widths[3] == pull_widths[4] < pull_widths[5] < pull_widths[6], pull_widths
+
     panel_strip = Image.new("RGB", (5 * 226, 177), "#121622")
     labels = ImageDraw.Draw(panel_strip)
     for slot, frame_no in enumerate((0, 2, 4, 6, 8)):
@@ -257,7 +290,8 @@ def analyse():
         "fixture": "Frozen multi-line StaticLayout display list through production LyricPageExitMask.draw",
         "halfFadeFrames": halves, "rows": metrics,
         "clipOpacity": [float(opacity[i]) for i in (0, feather // 2, len(opacity) - 1)],
-        "blurRimInk": [soft_rim, wide_rim]}, indent=2))
+        "blurRimInk": [soft_rim, wide_rim], "notificationPullTops": pull_tops,
+        "notificationPullWidths": pull_widths}, indent=2))
     print("Verified top-to-bottom wipe and stationary visible glyphs", halves, flush=True)
 
 
