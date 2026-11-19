@@ -229,12 +229,10 @@ internal fun CoverPageView(
                 module = module.copy(lyricSource = reply.lyricSource)
             }
             if (reply.lyriconState.isNotEmpty() && (reply.lyriconState != module.lyriconState ||
-                    reply.lyriconInstalled != module.lyriconInstalled ||
-                    reply.superlyricInstalled != module.superlyricInstalled)) {
+                    reply.lyriconInstalled != module.lyriconInstalled)) {
                 module = module.copy(
                     lyriconState = reply.lyriconState,
                     lyriconInstalled = reply.lyriconInstalled,
-                    superlyricInstalled = reply.superlyricInstalled,
                 )
             }
             // Only while the slider has never been moved: the size is then the dp default in
@@ -628,7 +626,7 @@ private fun LyricsGroup(
                     stringResource(R.string.lyrics_align_center),
                     stringResource(R.string.lyrics_align_right),
                 )
-                WindowDropdownPreference(
+                AppDropdownPreference(
                     title = stringResource(R.string.lyrics_align),
                     items = alignModes,
                     selectedIndex = module.lyricsAlign.coerceIn(0, alignModes.lastIndex),
