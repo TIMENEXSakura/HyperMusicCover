@@ -35,6 +35,8 @@ public final class PageExitProbeActivity extends Activity {
     private static final int[] CENTRES = {122, 227, 379, 532, 633};
     private static final int[] CUTS = {TOP, 177, 299, 458, 586, BOTTOM};
     private static final int FIRST = -2, LAST = 8;
+    private static final int CLIP_FADE = LAST + 1;
+    private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
     private Page page;
@@ -87,15 +89,17 @@ public final class PageExitProbeActivity extends Activity {
                     }
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
                     String name = requested == FIRST ? "background" : requested == -1 ? "reference"
+                            : requested == CLIP_FADE ? "clip-fade"
                             : String.format(Locale.ROOT, "step-%02d", requested);
                     try (FileOutputStream out = new FileOutputStream(new File(output, name + ".png"))) {
                         if (!frame.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IllegalStateException("PNG write failed");
                     }
                     retries = 0;
-                    if (phase == LAST) {
+                    if (phase == CLIP_FADE) {
                         JSONObject report = new JSONObject();
                         report.put("width", WIDTH).put("height", HEIGHT).put("hardwareCanvas", page.hardwareCanvas);
                         report.put("clipTop", TOP).put("clipBottom", BOTTOM).put("steps", LAST);
+                        report.put("clipFeather", CLIP_FEATHER);
                         report.put("cuts", new JSONArray(CUTS)).put("glyphs", new JSONArray(page.glyphCounts));
                         report.put("snapshotRecordings", page.recordings);
                         write("capture.json", report.toString(2));
@@ -132,6 +136,7 @@ public final class PageExitProbeActivity extends Activity {
 
     private final class Page extends View {
         private final LyricPageExitMask mask = new LyricPageExitMask();
+        private final LyricClipFade clipFade = new LyricClipFade();
         private final RenderNode glyphs = new RenderNode("frozen Android lyric layouts");
         private final Paint backdrop = new Paint();
         private final int[] glyphCounts = new int[CENTRES.length];
@@ -150,6 +155,16 @@ public final class PageExitProbeActivity extends Activity {
             c.drawRect(0, BOTTOM + 7, WIDTH, BOTTOM + 12, backdrop);
             if (!glyphs.hasDisplayList()) recordPage();
             if (phase == -1) c.drawRenderNode(glyphs);
+            else if (phase == CLIP_FADE) {
+                int saved = c.save();
+                c.clipRect(0, TOP, WIDTH, BOTTOM);
+                clipFade.place(TOP, CLIP_FEATHER);
+                int layer = clipFade.beginRow(c, WIDTH, TOP - 40, TOP + 160);
+                backdrop.setColor(Color.WHITE);
+                c.drawRect(110, TOP - 40, 204, TOP + 160, backdrop);
+                clipFade.endRow(c, WIDTH, layer);
+                c.restoreToCount(saved);
+            }
             else if (phase >= 0) {
                 mask.draw(c, TOP, BOTTOM, phase / (float) LAST, canvas -> canvas.drawRenderNode(glyphs));
             }

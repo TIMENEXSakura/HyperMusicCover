@@ -134,27 +134,22 @@ public class LyricFocusTest {
         focus.layout(base, heights, 20, retained);
         assertEquals(320, focus.position(2, base) - focus.position(1, base), 0);
 
-        // The middle voice ended but is still being drawn while it waits for its top exit.
+        // Its ink fades while the middle slot is still on screen.
         focus.update(lines, 4100, 3, 2, 2);
         assertFalse(focus.contains(1));
-        retained[1] = LyricFocus.retainSlot(false, true, false, false, true, 0f);
+        retained[1] = LyricFocus.retainSlot(false, true, 0.5f);
         focus.layout(base, heights, 20, retained);
         assertEquals(320, focus.position(2, base) - focus.position(1, base), 0);
-        // Its frozen 300ms exit pose also retains the space, until it is actually gone.
-        retained[1] = LyricFocus.retainSlot(false, false, true, false, true, 0f);
-        focus.layout(base, heights, 20, retained);
-        assertEquals(320, focus.position(2, base) - focus.position(1, base), 0);
-        retained[1] = LyricFocus.retainSlot(false, false, true, true, false, 0f);
+        retained[1] = LyricFocus.retainSlot(false, true, 0f);
         focus.layout(base, heights, 20, retained);
         assertEquals(focus.position(1, base), focus.position(2, base), 0);
     }
 
     @Test public void fadingAndUnfinishedUnselectedRowsRetainSpaceButHiddenRowsDoNot() {
-        assertTrue(LyricFocus.retainSlot(true, false, false, false, false, 0f));
-        assertTrue(LyricFocus.retainSlot(false, false, false, false, true, 0.1f));
-        assertFalse(LyricFocus.retainSlot(false, false, false, false, false, 0.1f));
-        assertFalse(LyricFocus.retainSlot(false, false, false, false, true, 0.003f));
-        assertFalse(LyricFocus.retainSlot(true, true, true, true, true, 1f));
+        assertTrue(LyricFocus.retainSlot(true, false, 0f));
+        assertTrue(LyricFocus.retainSlot(false, true, 0.1f));
+        assertFalse(LyricFocus.retainSlot(false, false, 0.1f));
+        assertFalse(LyricFocus.retainSlot(false, true, 0.003f));
     }
 
     @Test public void enteringVoiceAndUnequalSpringFramesDoNotCrossOnScreen() {
@@ -180,20 +175,17 @@ public class LyricFocusTest {
         assertEquals(transition.position(1) - scroll[1],
                 transition.position(2) - scroll[2], 0f);
 
-        // Independent spring velocities, scales, seek retargeting and a frozen departing
-        // middle row all produce different intermediate poses. Apply the drawing constraint
-        // to those real poses, not merely to the eventual focus layout.
+        // Apply the drawing constraint to the actual intermediate spring poses.
         float[][] intermediateScroll = {
                 scroll.clone(), {0, 40, 200}, {50, 250, 100}, {100, 100, 100}
         };
         for (float[] frame : intermediateScroll) {
             float previousBottom = -Float.MAX_VALUE;
             for (int i = 0; i < 3; i++) {
-                float scale = i == 1 ? 0.85f : 1f;
-                float top = LyricTransition.scaledTop(transition.position(i) - frame[i], heights[i], scale);
+                float top = transition.position(i) - frame[i];
                 top += LyricFocus.separationOffset(top, previousBottom);
                 assertTrue(top >= previousBottom);
-                previousBottom = top + heights[i] * scale;
+                previousBottom = top + heights[i];
             }
         }
     }

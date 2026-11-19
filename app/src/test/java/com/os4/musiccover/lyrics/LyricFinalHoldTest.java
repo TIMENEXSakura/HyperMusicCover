@@ -4,21 +4,21 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricFinalHoldTest {
-    @Test public void finishedLineSmoothlyRelaxesAndStaysVisibleWithoutIdleFrames() {
+    @Test public void finishedLineBecomesTransparentAndStopsSchedulingFrames() {
         LyricFinalHold hold = new LyricFinalHold();
         assertFalse(hold.step(999, 0, 1000, 0.1f, false));
         assertEquals(1f, hold.alpha(), 0f);
         assertTrue(hold.step(1000, 0, 1000, 0.1f, false));
         assertTrue(hold.completed());
         assertTrue(hold.moving());
-        assertTrue(hold.alpha() > 0.55f && hold.alpha() < 1f);
+        assertTrue(hold.alpha() > 0f && hold.alpha() < 1f);
         for (int i = 0; i < 100 && hold.moving(); i++) hold.step(1000, 0, 1000, 0.1f, false);
         assertFalse(hold.moving());
-        assertEquals(0.55f, hold.alpha(), 0.00001f);
+        assertEquals(0f, hold.alpha(), 0.00001f);
         assertFalse(hold.step(1000, 0, 1000, 60f, false));
     }
 
-    @Test public void lastLineUsesTheFieldClockAndRemainsVisibleWhenItCompletes() {
+    @Test public void lastLineUsesTheFieldClockAndDisappearsWhenItCompletes() {
         LyricFinalHold hold = new LyricFinalHold();
         float half = LyricExitWipe.DURATION_MS / 2000f;
         hold.step(1000, 0, 1000, half, false);
@@ -26,7 +26,7 @@ public class LyricFinalHoldTest {
         assertEquals(0f, LyricExitWipe.opacity(0, 3, hold.progress()), 0f);
         assertEquals(1f, LyricExitWipe.opacity(2, 3, hold.progress()), 0f);
         hold.step(1100, 0, 1000, half, false);
-        assertEquals(0.55f, hold.alpha(), 0.0001f);
+        assertEquals(0f, hold.alpha(), 0.0001f);
         assertFalse(hold.moving());
     }
 
@@ -41,10 +41,10 @@ public class LyricFinalHoldTest {
     @Test public void seekBackAndReplayRestoreHighlight() {
         LyricFinalHold hold = new LyricFinalHold();
         hold.step(1100, 0, 1000, 1f, true);
-        assertEquals(0.55f, hold.alpha(), 0.00001f);
+        assertEquals(0f, hold.alpha(), 0.00001f);
         hold.step(700, 0, 1000, 0.1f, false);
         assertFalse(hold.completed());
-        assertTrue(hold.alpha() > 0.55f);
+        assertTrue(hold.alpha() > 0f);
         for (int i = 0; i < 100 && hold.moving(); i++) hold.step(700, 0, 1000, 0.1f, false);
         assertEquals(1f, hold.alpha(), 0f);
     }
@@ -57,7 +57,7 @@ public class LyricFinalHoldTest {
         assertFalse(hold.completed());
         hold.step(2000, LyricFocus.startOf(lead), LyricFocus.endOf(lead), 1f, true);
         assertTrue(hold.completed());
-        assertEquals(0.55f, hold.alpha(), 0.00001f);
+        assertEquals(0f, hold.alpha(), 0.00001f);
     }
 
     @Test public void invalidEndCannotMarkAnUnfinishedLineAndResetClearsState() {

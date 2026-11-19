@@ -63,26 +63,6 @@ public final class LyricBandGeometry {
         return capsule && !keptMini ? 1f : 0f;
     }
 
-    /** Preserve readable overflow: a tall wrapped row cannot fit between both fade edges. */
-    static float rowAlpha(float top, float bottom, float clipTop, float clipBottom, float fade) {
-        if (bottom <= clipTop || top >= clipBottom || clipBottom <= clipTop) return 0f;
-        if (fade <= 0f) return 1f;
-        float distance = bottom - top > clipBottom - clipTop - 2f * fade
-                ? Math.min(bottom - clipTop, clipBottom - top)
-                : Math.min(top - clipTop, clipBottom - bottom);
-        return Math.max(0f, Math.min(1f, distance / fade));
-    }
-
-    /** Keep unfinished, already-started rows opaque as they move through the top edge. */
-    static float rowAlphaWhilePlaying(float top, float bottom, float clipTop, float clipBottom,
-                                      float fade, boolean unfinished) {
-        if (unfinished) {
-            if (bottom <= clipTop || top >= clipBottom || clipBottom <= clipTop) return 0f;
-            return fade <= 0f ? 1f : Math.max(0f, Math.min(1f, (clipBottom - top) / fade));
-        }
-        return rowAlpha(top, bottom, clipTop, clipBottom, fade);
-    }
-
     /** One measured clock destination, kept across phase changes but never across old hosts. */
     public static final class ClockTarget {
         private java.lang.ref.WeakReference<Object> owner = new java.lang.ref.WeakReference<>(null);
@@ -229,12 +209,6 @@ public final class LyricBandGeometry {
 
 
     /** Match the outer canvas translation/scale when testing a row against a fixed clip. */
-    static float presentedY(float y, float center, float offset, float scale) {
-        if (!Float.isFinite(y) || !Float.isFinite(center) || !Float.isFinite(offset)
-                || !Float.isFinite(scale) || scale <= 0f) return y;
-        return offset + center + (y - center) * scale;
-    }
-
     /** Keep the capsule's geometry through panel handoffs and any closing container morph. */
     public static boolean usesCapsuleSpace(boolean requested, boolean keptMini,
                                           boolean musicMoving, boolean previouslyUsed) {

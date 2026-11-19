@@ -93,10 +93,9 @@ final class LyricFocus {
         return nearest + (index < first ? 1 : 0);
     }
 
-    /** Match the renderer: unfinished, waiting, departing and still-fading rows need space. */
-    static boolean retainSlot(boolean unfinished, boolean waiting, boolean departing,
-                              boolean finished, boolean visible, float alpha) {
-        return !finished && (unfinished || departing || visible && (waiting || alpha > 0.003f));
+    /** A row keeps its slot while unfinished or while its visible ink is fading. */
+    static boolean retainSlot(boolean unfinished, boolean visible, float alpha) {
+        return unfinished || visible && alpha > 0.003f;
     }
 
     /** Prevent independently moving rows from crossing before their springs have settled. */

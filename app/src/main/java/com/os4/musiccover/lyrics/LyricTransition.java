@@ -26,7 +26,7 @@ final class LyricTransition {
     static float motionWeight(int count, float groupHeight, float available) {
         float occupancy = Math.min(1f, groupHeight / Math.max(1f, available));
         // Additional simultaneous voices should not make an unlimited group asymptotically
-        // stop scrolling or scaling. This caps motion weight, not the number of voices.
+        // stop scrolling. This caps motion weight, not the number of voices.
         return 1f + 0.12f * (Math.min(4, Math.max(1, count)) - 1) + 0.18f * occupancy;
     }
 
@@ -34,25 +34,9 @@ final class LyricTransition {
         return jumpedAt != Long.MIN_VALUE && now >= jumpedAt && now - jumpedAt < window;
     }
 
-    static float scaledTop(float top, float height, float scale) {
-        return top + height * (1f - scale) / 2f;
-    }
-
     static void shift(float delta, float[] scroll, float[] aim, float[] nextAim) {
         if (delta == 0f) return;
         for (int index = 0; index < scroll.length; index++) {
-            scroll[index] += delta;
-            aim[index] += delta;
-            nextAim[index] += delta;
-        }
-    }
-
-    static void resize(float[] oldHeights, float[] heights, float ratio, float[] scale,
-                       float[] scroll, float[] aim, float[] nextAim) {
-        for (int index = 0; index < scale.length; index++) {
-            float oldTop = scaledTop(0f, oldHeights[index], scale[index]);
-            scale[index] *= ratio;
-            float delta = scaledTop(0f, heights[index], scale[index]) - oldTop;
             scroll[index] += delta;
             aim[index] += delta;
             nextAim[index] += delta;

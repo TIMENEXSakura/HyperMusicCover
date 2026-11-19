@@ -1656,12 +1656,6 @@ public final class LockLyrics {
         if (v != null) v.kick();
     }
 
-    /** Touch feedback wakes only drawing; it never reattaches windows or refreshes the cover. */
-    public static void onGestureFeedback() {
-        LyricView view = sView;
-        if (view != null) view.kick();
-    }
-
     /**
      * Cover mode came on. Puts the view in the keyguard if the switch is on - in the keyguard's
      * foreground layer, or, with the HDR highlight on, in a window of its own.

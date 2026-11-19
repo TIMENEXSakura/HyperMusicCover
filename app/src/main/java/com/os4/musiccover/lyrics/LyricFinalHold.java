@@ -1,8 +1,7 @@
 package com.os4.musiccover.lyrics;
 
-/** The last sung line stays in place; completion gently relaxes its appearance. */
+/** The last sung line finishes at its current position, with no following row to scroll to. */
 final class LyricFinalHold {
-    static final float FADE_FRACTION = 0.45f;
     private float amount;
     private float target;
 
@@ -20,6 +19,6 @@ final class LyricFinalHold {
     boolean completed() { return target == 1f; }
     boolean moving() { return amount != target; }
     float progress() { return amount; }
-    float alpha() { return 1f - FADE_FRACTION * amount; }
+    float alpha() { return 1f - amount; }
     void reset() { amount = target = 0f; }
 }

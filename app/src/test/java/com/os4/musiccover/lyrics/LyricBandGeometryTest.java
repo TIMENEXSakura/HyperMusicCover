@@ -54,13 +54,6 @@ public class LyricBandGeometryTest {
         return LyricBandGeometry.visibleBottom(band[0], band[1], layoutFloor, floor);
     }
 
-    @Test public void wrappedRowTallerThanViewportRemainsReadableWithoutScaling() {
-        assertEquals(1f, LyricBandGeometry.rowAlpha(-1000f, 2000f, 100f, 800f, 40f), 0f);
-        assertEquals(0.5f, LyricBandGeometry.rowAlpha(780f, 2000f, 100f, 800f, 40f), 0f);
-        assertEquals(0f, LyricBandGeometry.rowAlpha(800f, 2000f, 100f, 800f, 40f), 0f);
-        assertEquals(0.5f, LyricBandGeometry.rowAlpha(120f, 300f, 100f, 800f, 40f), 0f);
-    }
-
     @Test public void foldedCardDoesNotConsumeTheSpaceAboveTheCapsule() {
         float floor = add(Float.NaN, false, 1500f, 600f);
         floor = add(floor, true, 2160f, 140f);
@@ -292,12 +285,6 @@ public class LyricBandGeometryTest {
         assertFalse(LyricBandGeometry.initialPlacement(7, false));
     }
 
-    @Test public void unfinishedLineDoesNotFadeAtTopEdge() {
-        assertEquals(1f, LyricBandGeometry.rowAlphaWhilePlaying(590f, 630f, 600f, 1400f, 40f, true), 0f);
-        assertEquals(0f, LyricBandGeometry.rowAlphaWhilePlaying(590f, 630f, 600f, 1400f, 40f, false), 0f);
-        assertEquals(0f, LyricBandGeometry.rowAlphaWhilePlaying(550f, 590f, 600f, 1400f, 40f, true), 0f);
-    }
-
     @Test public void clockPhaseChangeKeepsTheLastTargetUntilTheOnPoseIsWritten() {
         LyricBandGeometry.ClockTarget target = new LyricBandGeometry.ClockTarget();
         Object clock = new Object();
@@ -323,35 +310,6 @@ public class LyricBandGeometryTest {
         assertTrue(Float.isNaN(target.read(clock, 1080, 2400)));
         target.record(clock, 1080, 2400, 630f);
         assertEquals(630f, target.read(clock, 1080, 2400), 0f);
-    }
-
-    @Test public void shrinkingTheGroupCanBringAnOffscreenRowBackInsideTheFixedClip() {
-        float top = 1410f, bottom = 1430f, clipBottom = 1400f;
-        assertTrue(top > clipBottom); // The old pre-transform cull rejected this entire row.
-        float shownTop = LyricBandGeometry.presentedY(top, 1000f, 0f, 0.86f);
-        float shownBottom = LyricBandGeometry.presentedY(bottom, 1000f, 0f, 0.86f);
-        assertTrue(shownTop < shownBottom && shownBottom < clipBottom);
-        assertEquals((bottom - top) * 0.86f, shownBottom - shownTop, 0.001f);
-        assertTrue(LyricLineExit.edgeAlpha(1f, shownTop, shownBottom, 600f, clipBottom, 40f) > 0f);
-        // A cancelled drag restores the original geometry, without changing the row's pose.
-        assertEquals(top, LyricBandGeometry.presentedY(top, 1000f, 0f, 1f), 0f);
-        assertEquals(bottom, LyricBandGeometry.presentedY(bottom, 1000f, 0f, 1f), 0f);
-    }
-
-    @Test public void departingRowUsesItsVisiblePoseAgainstTheMovingClip() {
-        float top = 1300f, bottom = 1320f;
-        float before = LyricLineExit.edgeAlpha(1f, top, bottom, 600f, 1400f, 40f);
-        assertEquals(1f, before, 0f);
-        float shiftedTop = LyricBandGeometry.presentedY(top, 1000f, 74f, 0.97f);
-        float shiftedBottom = LyricBandGeometry.presentedY(bottom, 1000f, 74f, 0.97f);
-        float edge = LyricLineExit.edgeAlpha(1f, shiftedTop, shiftedBottom, 600f, 1400f, 40f);
-        assertTrue(edge > 0f && edge < before);
-        assertEquals(0.4f, LyricLineExit.edgeAlpha(0.4f, shiftedTop, shiftedBottom,
-                600f, 1400f, 40f), 0f);
-        assertEquals(1074f, LyricBandGeometry.presentedY(1000f, 1000f, 74f, 0.97f), 0f);
-        // Screen-space checks never overwrite the saved untransformed pose.
-        assertEquals(1300f, top, 0f);
-        assertEquals(1320f, bottom, 0f);
     }
 
     @Test public void highestOfSeveralCapsulesAndMovingCardsWinsIndependentlyOfOrder() {

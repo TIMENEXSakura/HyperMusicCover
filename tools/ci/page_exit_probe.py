@@ -63,7 +63,7 @@ def collect():
     else:
         raise TimeoutError("HWUI did not commit and capture the full exit sequence")
     meta = json.loads((OUT / "capture.json").read_bytes())
-    for name in ["background", "reference", *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
+    for name in ["background", "reference", "clip-fade", *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
         if result.returncode or not result.stdout.startswith(b"\x89PNG"):
             raise RuntimeError(f"Missing PixelCopy frame {name}")
@@ -146,6 +146,17 @@ def analyse():
     assert middle[0] <= .02 and middle[-1] >= .9985, f"Midpoint lost the top-to-bottom wipe: {middle}"
     halves = [int(np.flatnonzero(rows[:, k] <= .5)[0]) for k in range(rows.shape[1])]
     assert all(a < b for a, b in zip(halves, halves[1:])), f"Row half-fades did not travel downward: {halves}"
+
+    # The ink from one row is partly clipped. Its opacity varies within that same row.
+    clipped = rgb("clip-fade")
+    top, feather = meta["clipTop"], meta["clipFeather"]
+    matching_pixels(clipped[:top], background[:top], "Lyric drawn outside viewport")
+    matching_pixels(clipped[:, :110], background[:, :110], "Mask affected adjacent backdrop")
+    sample = slice(120, 194)
+    opacity = ((clipped[top:top + feather + 10, sample] - background[top:top + feather + 10, sample])
+               / (255 - background[top:top + feather + 10, sample])).mean(axis=(1, 2))
+    assert opacity[0] < .03 and .35 < opacity[feather // 2] < .78
+    assert np.min(np.diff(opacity)) >= -.02 and opacity[-1] > .99, "Viewport feather lacks a smooth ramp"
     # Build an overview directly from the captured PNGs, without redrawing the Android text.
     indices = (0, 2, 4, 6, 8)
     strip = Image.new("RGB", (216 * len(indices), 334), "#121622")
@@ -157,7 +168,8 @@ def analyse():
     strip.save(OUT / "sequence.png")
     (OUT / "verified.json").write_text(json.dumps({"renderer": "Android HWUI / Window PixelCopy",
         "fixture": "Frozen multi-line StaticLayout display list through production LyricPageExitMask.draw",
-        "halfFadeFrames": halves, "rows": metrics}, indent=2))
+        "halfFadeFrames": halves, "rows": metrics,
+        "clipOpacity": [float(opacity[i]) for i in (0, feather // 2, len(opacity) - 1)]}, indent=2))
     print("Verified top-to-bottom wipe and stationary visible glyphs", halves, flush=True)
 
 
