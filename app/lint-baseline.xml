@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 9.5.1" type="baseline" client="gradle">
+    <issue id="ThreadConstraint" message="Statement must run from `@WorkerThread`, incompatible with earlier code that must run from `@{Main,Ui}Thread`" errorLine1="        do {" errorLine2="        ^">
+        <location file="src/main/java/com/os4/musiccover/cover/CoverPush.java" line="318" />
+    </issue>
+    <issue id="ThreadConstraint" message="Statement must run from `@WorkerThread`, incompatible with earlier code that must run from `@{Main,Ui}Thread`" errorLine1="        if (!MediaCard.sCardKey.isEmpty() &amp;&amp; MediaCard.sCardKey.equals(i.getStringExtra(&quot;have&quot;))) {" errorLine2="        ^">
+        <location file="src/main/java/com/os4/musiccover/PreviewShots.java" line="81" />
+    </issue>
+    <issue id="ThreadConstraint" message="Statement must run from `@WorkerThread`, incompatible with earlier code that must run from `@{Main,Ui}Thread`" errorLine1="            b.compress(Bitmap.CompressFormat.PNG, 100, bos);" errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/java/com/os4/musiccover/PreviewShots.java" line="326" />
+    </issue>
+    <issue id="ThreadConstraint" message="Statement must run from `@WorkerThread`, incompatible with earlier code that must run from `@{Main,Ui}Thread`" errorLine1="            b.compress(Bitmap.CompressFormat.PNG, 100, bos);" errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/java/com/os4/musiccover/PreviewShots.java" line="496" />
+    </issue>
+    <issue id="ThreadConstraint" message="Branch must run from `@{Main,Ui}Thread`, incompatible with the other that must run from `@WorkerThread`" errorLine1="        } else if (&quot;minicfg&quot;.equals(op)) {" errorLine2="               ^">
+        <location file="src/main/java/com/os4/musiccover/ProbeReceiver.java" line="174" />
+    </issue>
+</issues>

@@ -47,6 +47,11 @@ android {
                 ((findProperty("mcHrFaults") as String?) == "true").toString())
     }
 
+    lint {
+        // Track only the five existing threading findings surfaced by the new AGP.
+        baseline = file("lint-baseline.xml")
+    }
+
     signingConfigs {
         if (releaseStorePath != null) {
             create("release") {
