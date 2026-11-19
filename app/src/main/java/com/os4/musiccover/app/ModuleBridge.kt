@@ -190,8 +190,8 @@ object ModuleBridge {
         val sessionLyric: Boolean = false,
         /**
          * Which route the lyric on the lock screen came from, in the module's own words -
-         * "session", "lyricon", "local", "amll", "ttmlhub", "netease", "qq", "kugou", "kuwo",
-         * "lrclib" - or "none" when there is no lyric on screen at all.
+         * "session", "lyricon", "superlyric", "local", "amll", "ttmlhub", "netease", "qq",
+         * "kugou", "kuwo", "lrclib" - or "none" when there is no lyric on screen at all.
          *
          * A word rather than an ordinal, and deliberately not translated here: what each one is
          * called on the page is a table in the UI, and the module keeps adding routes. See
@@ -206,6 +206,11 @@ object ModuleBridge {
         val lyriconInstalled: Boolean = false,
         /** Live subscriber connection and active-provider feedback from SystemUI. */
         val lyriconState: String = "not started",
+        /**
+         * Whether a SuperLyric server answered - the other half of the same check as
+         * lyriconInstalled: the second bridge a player's own lyric can come down.
+         */
+        val superlyricInstalled: Boolean = false,
         /** 0 system default, 1 never avoid the fingerprint icon, 2 always avoid it. */
         val fpAvoid: Int = SettingSpec.FP_AVOID.defInt,
         /** 「高德公交地铁」: the trip's island and lock screen page (Settings.TRANSIT). */
@@ -1253,6 +1258,7 @@ object ModuleBridge {
             sessionLyric = b.getBoolean("sessionlyric", false),
             lyricSource = b.getString("lyricsrc") ?: "none",
             lyriconInstalled = b.getBoolean("lyricon", false),
+            superlyricInstalled = b.getBoolean("superlyric", false),
             fpAvoid = b.int(SettingSpec.FP_AVOID),
             transit = b.bool(SettingSpec.TRANSIT),
             lyriconState = b.getString("lyriconstate") ?: "not started",

@@ -58,7 +58,12 @@
     <string name="tab_about">关于</string>
     <string name="settings_interface">界面</string>
     <string name="settings_theme">主题</string>
-    <string name="settings_theme_summary">主题模式、导航栏样式与背景模糊</string>
+    <string name="settings_theme_summary">主题模式、界面风格、导航栏样式与背景模糊</string>
+    <string name="ui_style">界面风格</string>
+    <string name="ui_style_os4">OS4</string>
+    <string name="ui_style_os3">OS3</string>
+    <string name="card_glass">卡片柔光玻璃</string>
+    <string name="card_glass_summary">给卡片加上描边和阴影</string>
     <string name="welcome_show_again">查看欢迎页</string>
     <string name="welcome_show_again_summary">重新播放首次启动时的开屏动画</string>
     <string name="settings_language">语言</string>
@@ -182,6 +187,7 @@
     <string name="lyrics_source_none">无歌词来源</string>
     <string name="lyrics_source_session">播放器提供</string>
     <string name="lyrics_source_lyricon">词幕</string>
+    <string name="lyrics_source_superlyric">SuperLyric</string>
     <string name="lyrics_source_local">歌曲文件</string>
     <string name="lyrics_source_amll">AMLL 数据库</string>
     <string name="lyrics_source_ttmlhub">AMLL TTML 库</string>

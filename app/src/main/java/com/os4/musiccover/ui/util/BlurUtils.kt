@@ -34,7 +34,7 @@ import top.yukonga.miuix.kmp.blur.BlurBlendMode
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
 import top.yukonga.miuix.kmp.blur.ProgressiveBlur
-import top.yukonga.miuix.kmp.blur.isRuntimeShaderSupported
+import top.yukonga.miuix.kmp.material.isRuntimeShaderSupported
 import top.yukonga.miuix.kmp.blur.progressiveTextureBlur
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -87,6 +87,10 @@ fun BlurredBar(
     backdrop: LayerBackdrop?,
     blurEnabled: Boolean,
     scrollBehavior: ScrollBehavior? = null,
+    /** Colour blended over the blurred band; unused when [tintAlpha] is 0. */
+    tint: Color = MiuixTheme.colorScheme.surface,
+    /** How strongly [tint] is blended in; 0 leaves the band as blur alone. */
+    tintAlpha: Float = TopBarBlurConfig.SurfaceAlpha,
     content: @Composable () -> Unit,
 ) {
     val blurActive = blurEnabled && backdrop != null
@@ -111,9 +115,13 @@ fun BlurredBar(
                         gradient = ProgressiveBlur.Top.copy(curve = TopBarBlurConfig.GradientCurve),
                         blurRadius = TopBarBlurConfig.BlurRadius,
                         colors = BlurDefaults.blurColors(
-                            blendColors = listOf(
-                                BlendColorEntry(color = MiuixTheme.colorScheme.surface.copy(TopBarBlurConfig.SurfaceAlpha)),
-                            ),
+                            // No entry at all rather than a transparent one: a zero tint means
+                            // the band is meant to be blur alone, the way OS4's top bar is.
+                            blendColors = if (tintAlpha > 0f) {
+                                listOf(BlendColorEntry(color = tint.copy(tintAlpha)))
+                            } else {
+                                emptyList()
+                            },
                         ),
                     ),
             )
@@ -126,14 +134,24 @@ fun BlurredBar(
  * The scroll behaviour every page's list shares. overScrollVertical is miuix's damped overscroll
  * and it REPLACES Compose's own - every caller must also pass `overscrollEffect = null` to the
  * list, or the stretch runs on top of the damping and the two fight at the ends.
+ *
+ * The damped offset is fed back into TopAppBarState.overscrollOffset the way HyperLyric
+ * does. The glass top bar reads that value for its elastic material progress, which is what lets
+ * the floating buttons come up while a short page is dragged: a page that fits on screen never
+ * produces a negative `contentOffset`, so without this it could never float at all.
  */
+@Composable
 fun Modifier.pageScrollModifiers(
     showTopAppBar: Boolean,
     topAppBarScrollBehavior: ScrollBehavior,
-): Modifier = this
-    .scrollEndHaptic()
-    .overScrollVertical()
-    .then(if (showTopAppBar) Modifier.nestedScroll(topAppBarScrollBehavior.nestedScrollConnection) else Modifier)
+): Modifier {
+    val state = topAppBarScrollBehavior.state
+    val onOffsetChanged: (Float) -> Unit = remember(state) { { state.overscrollOffset = it } }
+    return this
+        .scrollEndHaptic()
+        .overScrollVertical(onOffsetChanged = if (showTopAppBar) onOffsetChanged else null)
+        .then(if (showTopAppBar) Modifier.nestedScroll(topAppBarScrollBehavior.nestedScrollConnection) else Modifier)
+}
 
 @Composable
 fun pageContentPadding(

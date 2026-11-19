@@ -13,13 +13,14 @@ public class LyricSourcePolicyTest {
     @Test public void defaultStartsWithProviderThenMetadataAndDirectory() {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(false, true, "qq,local", null);
         assertEquals("lyricon", config.sources()[0]);
-        assertEquals("metadata", config.sources()[1]);
-        assertEquals("local", config.sources()[2]);
+        assertEquals("superlyric", config.sources()[1]);
+        assertEquals("metadata", config.sources()[2]);
+        assertEquals("local", config.sources()[3]);
     }
 
     @Test public void customOrderIsDeduplicatedAndCompleted() {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(true, true, "QQ,qq,invalid, local ", null);
-        assertEquals(10, config.sources().length);
+        assertEquals(11, config.sources().length);
         assertEquals("qq", config.sources()[0]);
         assertEquals("local", config.sources()[1]);
         assertEquals(LocalLyricFormat.TTML, config.localFormat);
@@ -43,6 +44,7 @@ public class LyricSourcePolicyTest {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(true, false, "qq,metadata", null);
         for (String source : config.sources()) assertEquals(!LyricSourcePolicy.network(source), config.permits(source));
         assertTrue(config.permits("lyricon"));
+        assertTrue(config.permits("superlyric"));
         assertFalse(config.mayReplace("none", "qq"));
         assertTrue(config.mayReplace("qq", "metadata"));
     }
@@ -62,7 +64,7 @@ public class LyricSourcePolicyTest {
         java.util.List<String> called = new java.util.ArrayList<>();
         Object result = LyricSourcePolicy.first(config, source -> { called.add(source); return null; }, () -> true);
         assertNull(result);
-        assertEquals(java.util.Arrays.asList("lyricon", "metadata", "local"), called);
+        assertEquals(java.util.Arrays.asList("lyricon", "superlyric", "metadata", "local"), called);
     }
 
     @Test public void parsingFailureFallsThroughButUsablePreferredSourceStopsRequests() {
@@ -73,7 +75,7 @@ public class LyricSourcePolicyTest {
             return source.equals("metadata") ? "valid" : null;
         }, () -> true);
         assertEquals("valid", result);
-        assertEquals(java.util.Arrays.asList("lyricon", "metadata"), called);
+        assertEquals(java.util.Arrays.asList("lyricon", "superlyric", "metadata"), called);
     }
 
     @Test public void supersededAnswerIsNeverPublished() {

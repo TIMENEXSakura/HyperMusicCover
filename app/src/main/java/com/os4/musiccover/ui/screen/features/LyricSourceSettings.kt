@@ -157,6 +157,7 @@ private fun sourceLabel(source: String): String = stringResource(when (source) {
     "metadata" -> R.string.lyrics_priority_metadata
     "local" -> R.string.lyrics_priority_local
     "lyricon" -> R.string.lyrics_source_lyricon
+    "superlyric" -> R.string.lyrics_source_superlyric
     "amll" -> R.string.lyrics_source_amll
     "ttmlhub" -> R.string.lyrics_source_ttmlhub
     "qq" -> R.string.lyrics_source_qq

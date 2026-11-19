@@ -25,18 +25,18 @@ jobs:
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
       - name: Check module entry points and record artifact identity
         run: |
-          jq -e '.elements[0] | .versionName == "0.9.57" and .versionCode == 957004' app/build/outputs/apk/release/output-metadata.json
+          jq -e '.elements[0] | .versionName == "0.9.58" and .versionCode == 958001' app/build/outputs/apk/release/output-metadata.json
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.57.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/HyperMusicCover-0.9.58.apk
           cd dist
-          apk=HyperMusicCover-0.9.57.apk
+          apk=HyperMusicCover-0.9.58.apk
           unzip -p "$apk" META-INF/xposed/java_init.list | grep -Fx 'com.os4.musiccover.Main'
           unzip -p "$apk" META-INF/xposed/scope.list | grep -Fx 'com.android.systemui'
           sha256sum "$apk" > SHA256SUMS.txt
           git rev-parse HEAD > commit.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: HyperMusicCover-0.9.57
+          name: HyperMusicCover-0.9.58
           path: dist/
           if-no-files-found: error
           retention-days: 14

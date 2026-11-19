@@ -1,6 +1,7 @@
 package com.os4.musiccover.ui.screen.features
 
 import com.os4.musiccover.ui.util.nextCard
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import com.os4.musiccover.ui.util.FoldUnder
 import android.content.Intent
@@ -40,13 +41,12 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
-import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SliderDefaults
-import top.yukonga.miuix.kmp.basic.TabRow
+import com.os4.musiccover.ui.util.AppTabRow
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
+import com.os4.musiccover.ui.util.AppDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
@@ -103,28 +103,28 @@ private fun FeatureList(
             // The order is the user's (2026-09-30): the islands, the cover, the shade; 高德's trip
             // went last when it got its switch (2026-10-07).
             Column {
-                Card(modifier = Modifier.firstCard()) {
+                AppCard(modifier = Modifier.firstCard()) {
                     ArrowPreference(
                         title = stringResource(R.string.features_mini_title),
                         summary = stringResource(R.string.features_mini_summary),
                         onClick = { onOpen(MiniPlayerActivity::class.java) },
                     )
                 }
-                Card(modifier = Modifier.nextCard()) {
+                AppCard(modifier = Modifier.nextCard()) {
                     ArrowPreference(
                         title = stringResource(R.string.features_cover_title),
                         summary = stringResource(R.string.features_cover_summary),
                         onClick = { onOpen(CoverActivity::class.java) },
                     )
                 }
-                Card(modifier = Modifier.nextCard()) {
+                AppCard(modifier = Modifier.nextCard()) {
                     ArrowPreference(
                         title = stringResource(R.string.features_shade_title),
                         summary = stringResource(R.string.features_shade_summary),
                         onClick = { onOpen(ShadeActivity::class.java) },
                     )
                 }
-                Card(modifier = Modifier.nextCard()) {
+                AppCard(modifier = Modifier.nextCard()) {
                     ArrowPreference(
                         title = stringResource(R.string.features_transit_title),
                         summary = stringResource(R.string.features_transit_summary),
@@ -132,7 +132,7 @@ private fun FeatureList(
                     )
                 }
                 // 指纹快捷功能 last, as the newest (2026-10-21).
-                Card(modifier = Modifier.nextCard()) {
+                AppCard(modifier = Modifier.nextCard()) {
                     ArrowPreference(
                         title = stringResource(R.string.features_fpquick_title),
                         summary = stringResource(R.string.features_fpquick_summary),
@@ -229,8 +229,13 @@ internal fun CoverPageView(
                 module = module.copy(lyricSource = reply.lyricSource)
             }
             if (reply.lyriconState.isNotEmpty() && (reply.lyriconState != module.lyriconState ||
-                    reply.lyriconInstalled != module.lyriconInstalled)) {
-                module = module.copy(lyriconState = reply.lyriconState, lyriconInstalled = reply.lyriconInstalled)
+                    reply.lyriconInstalled != module.lyriconInstalled ||
+                    reply.superlyricInstalled != module.superlyricInstalled)) {
+                module = module.copy(
+                    lyriconState = reply.lyriconState,
+                    lyriconInstalled = reply.lyriconInstalled,
+                    superlyricInstalled = reply.superlyricInstalled,
+                )
             }
             // Only while the slider has never been moved: the size is then the dp default in
             // the style's terms, and it changes with the style. Once set, the slider owns it.
@@ -270,7 +275,7 @@ internal fun CoverPageView(
             // not reach the bar - so an upward swipe collapsed nothing, on the one page whose
             // picture is the tallest thing on it. The tab row below it scrolls with it for the
             // same reason, as DonatePage's does.
-            Card(Modifier.firstCard()) {
+            AppCard(Modifier.firstCard()) {
                 CoverDemo(
                     coverStyle = module.coverStyle,
                     bias = module.bias,
@@ -281,7 +286,7 @@ internal fun CoverPageView(
             }
         }
         item(key = "tabs") {
-            TabRow(
+            AppTabRow(
                 tabs = groups,
                 selectedTabIndex = group,
                 onTabSelected = { group = it },
@@ -289,7 +294,7 @@ internal fun CoverPageView(
             )
         }
         item(key = "settings") {
-            Card(modifier = Modifier.nextCard()) {
+            AppCard(modifier = Modifier.nextCard()) {
                 Column {
                     SettingsNotices(alive = module.alive)
                     when (group) {
@@ -336,7 +341,7 @@ private fun CoverGroup(
 ) {
     val context = LocalContext.current
     Column {
-        WindowDropdownPreference(
+        AppDropdownPreference(
             title = stringResource(R.string.cover_style),
             items = listOf(stringResource(R.string.cover_style_full),
                 stringResource(R.string.cover_style_card),
@@ -489,7 +494,7 @@ private fun LyricsGroup(
     }
     // Package presence is installation evidence only. Runtime status comes from SystemUI's
     // subscriber callbacks; no framework response does not prove the app is uninstalled.
-    val missingModule = !providerInstalled && !module.lyriconInstalled && !module.sessionLyric &&
+    val missingModule = !providerInstalled && !module.lyriconInstalled && !module.superlyricInstalled && !module.sessionLyric &&
         module.lyriconState == "no service"
     val source = lyricSourceLabel(module.lyricSource)
     val title = source?.let { stringResource(R.string.lyrics_source, it) }
@@ -770,7 +775,7 @@ private fun CardGroup(
             stringResource(R.string.fp_sink_never),
         )
         val avoidIndex = module.fpAvoid.coerceIn(0, avoidModes.lastIndex)
-        WindowDropdownPreference(
+        AppDropdownPreference(
             title = stringResource(R.string.fp_sink),
             items = avoidModes,
             selectedIndex = avoidIndex,
@@ -897,6 +902,7 @@ private val LYRIC_PROVIDERS = listOf(
 private fun lyricSourceLabel(source: String): String? = when (source) {
     "session" -> stringResource(R.string.lyrics_source_session)
     "lyricon" -> stringResource(R.string.lyrics_source_lyricon)
+    "superlyric" -> stringResource(R.string.lyrics_source_superlyric)
     "local" -> stringResource(R.string.lyrics_source_local)
     "amll" -> stringResource(R.string.lyrics_source_amll)
     "ttmlhub" -> stringResource(R.string.lyrics_source_ttmlhub)

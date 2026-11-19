@@ -31,6 +31,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -54,6 +55,8 @@ import com.os4.musiccover.ui.screen.features.FeaturesPageView
 import com.os4.musiccover.ui.screen.home.HomePageView
 import com.os4.musiccover.ui.screen.settings.SettingsPageView
 import com.os4.musiccover.ui.theme.AppTheme
+import com.os4.musiccover.ui.util.LocalOs4Ui
+import com.os4.musiccover.ui.util.LocalPageBackdrop
 import com.os4.musiccover.ui.util.isInDarkTheme
 import com.os4.musiccover.ui.welcome.SplashIcon
 import com.os4.musiccover.ui.welcome.WelcomeScreen
@@ -69,15 +72,19 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import top.yukonga.miuix.kmp.glass.GlassNavigationBar
+import top.yukonga.miuix.kmp.glass.GlassNavigationItem
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Home
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.icon.extended.Tune
+import top.yukonga.miuix.kmp.material.EdgeStrokes
+import top.yukonga.miuix.kmp.material.GlassDefaults
+import top.yukonga.miuix.kmp.material.edgeStroke
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.abs
@@ -198,6 +205,7 @@ class MainActivity : ComponentActivity() {
             var isFloatingNavbar by remember(settingsEpoch) { mutableStateOf(settings.isFloatingNavbar) }
             var isLiquidGlass by remember(settingsEpoch) { mutableStateOf(settings.isLiquidGlass) }
             var isBlurEnabled by remember(settingsEpoch) { mutableStateOf(settings.isBlurEnabled) }
+            var useOs4Ui by remember(settingsEpoch) { mutableStateOf(settings.useOs4Ui) }
             var welcomeShown by remember(settingsEpoch) { mutableStateOf(settings.welcomeShown) }
             // Read once, not keyed on the epoch: a trip to Settings must not bring the page back
             // by itself - only its own entry does that.
@@ -217,13 +225,15 @@ class MainActivity : ComponentActivity() {
                         isFloatingNavbar = isFloatingNavbar,
                         isLiquidGlass = isLiquidGlass,
                         isBlurEnabled = isBlurEnabled,
+                        useOs4Ui = useOs4Ui,
+                        cardGlass = settings.cardGlass,
                         language = LocaleHelper.getSavedLanguage(this@MainActivity).code,
                         welcomeShown = welcomeShown,
                     )
                 )
             }
 
-            AppTheme(themeMode = themeMode) {
+            AppTheme(themeMode = themeMode, useOs4Ui = useOs4Ui, cardGlass = settings.cardGlass) {
                 // What the pages actually draw on. Recording it here is what lets the next cold
                 // start paint the same colour before Compose exists - including the Monet modes
                 // and a theme forced against the system's.
@@ -477,6 +487,11 @@ private fun MainScreen(
     }
 
     val surfaceColor = MiuixTheme.colorScheme.surface
+    // OS4 records this whether the blur switch is on or not: the glass bars have nothing to
+    // sample otherwise, and the switch only governs the OS3 chrome. OS3 keeps the old gate,
+    // where recording with blur off was a second render nobody read.
+    val os4 = LocalOs4Ui.current
+    val backdropActive = isBlurEnabled || os4
     val backdrop = rememberLayerBackdrop {
         drawRect(surfaceColor)
         drawContent()
@@ -546,44 +561,52 @@ private fun MainScreen(
                 // Gated on the setting, not just on the bar that samples it. Recording a layer
                 // is a second render of everything inside it, and with blur off nothing was
                 // reading this one - the bar had already switched to its opaque colour.
-                .then(if (isBlurEnabled) Modifier.layerBackdrop(backdrop) else Modifier)
+                .then(if (backdropActive) Modifier.layerBackdrop(backdrop) else Modifier)
                 .background(surfaceColor)
         ) {
-            HorizontalPager(
-                state = pagerState,
-                beyondViewportPageCount = 1,
-                overscrollEffect = null,
-                modifier = Modifier.fillMaxSize(),
-            ) { page ->
-                when (page) {
-                    0 -> HomePageView(
-                        isBlurEnabled = isBlurEnabled,
-                        isCurrent = isHomeCurrent,
-                        resumeKey = resumeKey,
-                        extraBottomPadding = navBarHeight,
-                    )
+            // The fallback page for anything drawn inside the pager that records no backdrop
+            // of its own (the pages under PageScaffold provide their own): its dialogs still
+            // get something to sample, and the root popup host lives outside this recording,
+            // so a dialog never samples itself.
+            CompositionLocalProvider(
+                LocalPageBackdrop provides backdrop.takeIf { backdropActive },
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    beyondViewportPageCount = 1,
+                    overscrollEffect = null,
+                    modifier = Modifier.fillMaxSize(),
+                ) { page ->
+                    when (page) {
+                        0 -> HomePageView(
+                            isBlurEnabled = isBlurEnabled,
+                            isCurrent = isHomeCurrent,
+                            resumeKey = resumeKey,
+                            extraBottomPadding = navBarHeight,
+                        )
 
-                    1 -> FeaturesPageView(
-                        isBlurEnabled = isBlurEnabled,
-                        extraBottomPadding = navBarHeight,
-                    )
+                        1 -> FeaturesPageView(
+                            isBlurEnabled = isBlurEnabled,
+                            extraBottomPadding = navBarHeight,
+                        )
 
-                    2 -> SettingsPageView(
-                        isBlurEnabled = isBlurEnabled,
-                        extraBottomPadding = navBarHeight,
-                        onShowWelcome = onShowWelcome,
-                    )
+                        2 -> SettingsPageView(
+                            isBlurEnabled = isBlurEnabled,
+                            extraBottomPadding = navBarHeight,
+                            onShowWelcome = onShowWelcome,
+                        )
 
-                    3 -> AboutPageContent(
-                        openLicensePage = {
-                            context.startActivity(Intent(context, LicenseActivity::class.java))
-                        },
-                        openCreditsPage = {
-                            context.startActivity(Intent(context, CreditsActivity::class.java))
-                        },
-                        isBlurEnabled = isBlurEnabled,
-                        isCurrent = isAboutCurrent,
-                    )
+                        3 -> AboutPageContent(
+                            openLicensePage = {
+                                context.startActivity(Intent(context, LicenseActivity::class.java))
+                            },
+                            openCreditsPage = {
+                                context.startActivity(Intent(context, CreditsActivity::class.java))
+                            },
+                            isBlurEnabled = isBlurEnabled,
+                            isCurrent = isAboutCurrent,
+                        )
+                    }
                 }
             }
         }
@@ -600,6 +623,19 @@ private fun BottomNavigationBar(
     blurActive: Boolean,
     onItemSelected: (Int) -> Unit,
 ) {
+    // In OS4 the bar is glass, whatever the OS3 trio was set to. Those settings stay stored,
+    // untouched, and come back with the OS3 interface.
+    if (LocalOs4Ui.current) {
+        BottomNavigationBarOs4(
+            items = items,
+            icons = icons,
+            selectedIndex = selectedIndex,
+            backdrop = backdrop,
+            onItemSelected = onItemSelected,
+        )
+        return
+    }
+
     when (mode) {
         2 -> {
             val navigationItems = remember(items, icons) {
@@ -620,8 +656,8 @@ private fun BottomNavigationBar(
                 if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surfaceContainer
             val floatingBarShape = RoundedCornerShape(FloatingToolbarDefaults.CornerRadius)
             val isDark = isInDarkTheme()
-            val floatingHighlight = remember(isDark) {
-                if (isDark) Highlight.GlassStrokeMiddleDark else Highlight.GlassStrokeMiddleLight
+            val floatingStroke = remember(isDark) {
+                if (isDark) EdgeStrokes.MiddleDark else EdgeStrokes.MiddleLight
             }
             FloatingNavigationBar(
                 modifier = if (blurActive && backdrop != null) {
@@ -634,8 +670,7 @@ private fun BottomNavigationBar(
                                 BlendColorEntry(color = MiuixTheme.colorScheme.surfaceContainer.copy(0.4f)),
                             ),
                         ),
-                        highlight = floatingHighlight,
-                    )
+                    ).edgeStroke(floatingBarShape, floatingStroke)
                 } else {
                     Modifier
                 },
@@ -694,4 +729,37 @@ private fun BottomNavigationBar(
             }
         }
     }
+}
+
+/**
+ * The OS4 bar: a floating glass capsule sampling the page behind it.
+ *
+ * The insets and the floating margin are the bar's own (defaultWindowInsetsPadding), so the
+ * height the Scaffold hands the pages includes them and the lists stop above it. Doing that
+ * here and not around it keeps one source for the gap under the content.
+ */
+@Composable
+private fun BottomNavigationBarOs4(
+    items: List<String>,
+    icons: List<androidx.compose.ui.graphics.vector.ImageVector>,
+    selectedIndex: Int,
+    backdrop: LayerBackdrop?,
+    onItemSelected: (Int) -> Unit,
+) {
+    val glassItems = remember(items, icons) {
+        List(items.size) { i ->
+            GlassNavigationItem(
+                icon = icons[i],
+                label = items[i],
+            )
+        }
+    }
+    GlassNavigationBar(
+        items = glassItems,
+        selectedIndex = selectedIndex,
+        onSelect = onItemSelected,
+        backdrop = backdrop,
+        modifier = Modifier.padding(horizontal = 24.dp),
+        style = GlassDefaults.style(isInDarkTheme()),
+    )
 }

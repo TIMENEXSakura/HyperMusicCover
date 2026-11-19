@@ -5,7 +5,7 @@ import java.util.LinkedHashSet;
 import java.util.Locale;
 
 public final class LyricSourcePolicy {
-    public static final String DEFAULT_SOURCES = "lyricon,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
+    public static final String DEFAULT_SOURCES = "lyricon,superlyric,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
     private static volatile Config cached;
     public static Config current() {
         boolean custom = com.os4.musiccover.Settings.LYRIC_SOURCE_CUSTOM.on();
@@ -35,6 +35,15 @@ public final class LyricSourcePolicy {
                 if (allowed.contains(key)) result.add(key);
             }
         }
+        // Older saved priority lists gain the new bridge alongside Lyricon.
+        if (result.contains("lyricon") && !result.contains("superlyric")) {
+            LinkedHashSet<String> migrated = new LinkedHashSet<>();
+            for (String source : result) {
+                migrated.add(source);
+                if (source.equals("lyricon")) migrated.add("superlyric");
+            }
+            result = migrated;
+        }
         result.addAll(allowed);
         return String.join(",", result);
     }
@@ -61,7 +70,8 @@ public final class LyricSourcePolicy {
     }
 
     public static boolean network(String source) {
-        return !"metadata".equals(source) && !"local".equals(source) && !"lyricon".equals(source);
+        return !"metadata".equals(source) && !"local".equals(source) && !"lyricon".equals(source)
+                && !"superlyric".equals(source);
     }
 
     public static final class Config {

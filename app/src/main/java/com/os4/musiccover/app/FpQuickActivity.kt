@@ -91,6 +91,7 @@ import com.os4.musiccover.R
 import com.os4.musiccover.ui.screen.features.ValueSlider
 import com.os4.musiccover.ui.theme.AppTheme
 import com.os4.musiccover.ui.util.FoldUnder
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.PageScaffold
 import com.os4.musiccover.ui.util.firstCard
 import com.os4.musiccover.ui.util.nextCard
@@ -100,17 +101,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.FloatingActionButton
+import top.yukonga.miuix.kmp.glass.GlassFloatingActionButton
+import top.yukonga.miuix.kmp.glass.GlassIconButton
+import com.os4.musiccover.ui.util.LocalOs4Ui
+import com.os4.musiccover.ui.util.LocalPageBackdrop
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
@@ -120,7 +123,9 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.os4.musiccover.ui.util.AppDialog
+import com.os4.musiccover.ui.util.AppDialogButton
+import com.os4.musiccover.ui.util.AppDialogButtonRole
 
 /**
  * 指纹快捷功能: the menu HyperOS opens when the finger stays on the sensor after unlocking, with
@@ -147,7 +152,7 @@ class FpQuickActivity : ComponentActivity() {
         val theme = runCatching { ColorSchemeMode.valueOf(settings.themeMode) }
             .getOrDefault(ColorSchemeMode.System)
         setContent {
-            AppTheme(themeMode = theme) { FpQuickPage(settings.isBlurEnabled, resumes, ::finish) }
+            AppTheme(themeMode = theme, useOs4Ui = settings.useOs4Ui, cardGlass = settings.cardGlass) { FpQuickPage(settings.isBlurEnabled, resumes, ::finish) }
         }
     }
 
@@ -324,10 +329,22 @@ private fun FpQuickPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
         actions = {
             if (editing) {
                 val can = config.items != null
-                IconButton(enabled = can, onClick = { dialog = AddDialog.RESET }) {
-                    Icon(Icons.Rounded.Refresh, stringResource(R.string.fpquick_reset),
-                        tint = if (can) MiuixTheme.colorScheme.onBackground
-                               else MiuixTheme.colorScheme.disabledOnSecondaryVariant)
+                if (LocalOs4Ui.current) {
+                    GlassIconButton(onClick = { if (can) dialog = AddDialog.RESET }) {
+                        Icon(
+                            Icons.Rounded.Refresh,
+                            stringResource(R.string.fpquick_reset),
+                            modifier = Modifier.size(24.dp),
+                            tint = if (can) MiuixTheme.colorScheme.onSurface
+                            else MiuixTheme.colorScheme.disabledOnSecondaryVariant,
+                        )
+                    }
+                } else {
+                    IconButton(enabled = can, onClick = { dialog = AddDialog.RESET }) {
+                        Icon(Icons.Rounded.Refresh, stringResource(R.string.fpquick_reset),
+                            tint = if (can) MiuixTheme.colorScheme.onBackground
+                                   else MiuixTheme.colorScheme.disabledOnSecondaryVariant)
+                    }
                 }
             }
         },
@@ -335,18 +352,62 @@ private fun FpQuickPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
         // Scaffold. Not greyed when full (the user's call): it says why instead.
         floatingActionButton = {
             if (editing) {
-                FloatingActionButton(
-                    modifier = Modifier.navigationBarsPadding(),
-                    onClick = {
-                        target = null
-                        dialog = if (config.firstOpen() == null) AddDialog.FULL else AddDialog.TYPE
-                    }) {
-                    Icon(MiuixIcons.Add, stringResource(R.string.fpquick_add_button), tint = Color.White)
+                val openAdd = {
+                    target = null
+                    dialog = if (config.firstOpen() == null) AddDialog.FULL else AddDialog.TYPE
+                }
+                if (LocalOs4Ui.current) {
+                    GlassFloatingActionButton(
+                        modifier = Modifier.navigationBarsPadding(),
+                        onClick = openAdd,
+                        // Safe to sample: the button is in the Scaffold's own slot, outside the
+                        // page body the backdrop records.
+                        backdrop = LocalPageBackdrop.current,
+                    ) {
+                        Icon(
+                            MiuixIcons.Add,
+                            stringResource(R.string.fpquick_add_button),
+                            tint = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                } else {
+                    FloatingActionButton(
+                        modifier = Modifier.navigationBarsPadding(),
+                        onClick = openAdd,
+                    ) {
+                        Icon(MiuixIcons.Add, stringResource(R.string.fpquick_add_button), tint = Color.White)
+                    }
+                }
+            }
+        },
+        // Every dialog this page opens is rendered inside the page's backdrop scope, so the
+        // glass samples the page rather than the theme's flat surface fallback.
+        dialogs = {
+            AddDialogs(dialog, config.filled.map { it.second },
+                onDismiss = { dialog = AddDialog.NONE },
+                onPick = { dialog = it },
+                onApp = { pick.launch(FpAppPickActivity.intent(context, it)) }, onAdd = { add(it) },
+                onReset = { save(config.copy(items = null)) })
+
+            // A place that holds something: change what is there, or open it again.
+            val slotEntry = target?.let { config.slots.getOrNull(it) }?.takeIf { !isEmpty(it) }
+            AppDialog(show = dialog == AddDialog.SLOT && slotEntry != null,
+                title = slotEntry?.let { itemInfo(it).title }.orEmpty(),
+                onDismissRequest = { dialog = AddDialog.NONE }) {
+                Column {
+                    BasicComponent(title = stringResource(R.string.fpquick_slot_replace),
+                        onClick = { dialog = AddDialog.TYPE })
+                    BasicComponent(title = stringResource(R.string.fpquick_slot_remove),
+                        onClick = {
+                            target?.let { save(config.withSlot(it, null)) }
+                            target = null
+                            dialog = AddDialog.NONE
+                        })
                 }
             }
         }) {
         item(key = "switch") {
-            Card(Modifier.firstCard()) {
+            AppCard(Modifier.firstCard()) {
                 // Only an answer can put this on (ShadePageView says why).
                 SwitchPreference(title = stringResource(R.string.fpquick_enabled),
                     summary = when {
@@ -385,7 +446,7 @@ private fun FpQuickPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
             FoldUnder(editing, settled = module.alive) {
                 Column {
                     SmallTitle(text = stringResource(R.string.fpquick_layout))
-                    Card(Modifier.nextCard()) {
+                    AppCard(Modifier.nextCard()) {
                         HiveEditor(config.slots, onTap = { i ->
                             target = i
                             dialog = if (i < config.slots.size && !isEmpty(config.slots[i])) {
@@ -402,7 +463,7 @@ private fun FpQuickPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
             FoldUnder(editing, settled = module.alive) {
                 Column {
                     SmallTitle(text = stringResource(R.string.fpquick_items))
-                    Card(Modifier.nextCard()) {
+                    AppCard(Modifier.nextCard()) {
                         val filled = config.filled
                         ItemList(filled.map { it.second },
                             // A new order of the same items into the same places.
@@ -420,27 +481,6 @@ private fun FpQuickPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
         item(key = "fab") { Spacer(Modifier.height(88.dp)) }
     }
 
-    AddDialogs(dialog, config.filled.map { it.second }, onDismiss = { dialog = AddDialog.NONE },
-        onPick = { dialog = it },
-        onApp = { pick.launch(FpAppPickActivity.intent(context, it)) }, onAdd = { add(it) },
-        onReset = { save(config.copy(items = null)) })
-
-    // A place that holds something: change what is there, or open it again.
-    val slotEntry = target?.let { config.slots.getOrNull(it) }?.takeIf { !isEmpty(it) }
-    WindowDialog(show = dialog == AddDialog.SLOT && slotEntry != null,
-        title = slotEntry?.let { itemInfo(it).title }.orEmpty(),
-        onDismissRequest = { dialog = AddDialog.NONE }) {
-        Column {
-            BasicComponent(title = stringResource(R.string.fpquick_slot_replace),
-                onClick = { dialog = AddDialog.TYPE })
-            BasicComponent(title = stringResource(R.string.fpquick_slot_remove),
-                onClick = {
-                    target?.let { save(config.withSlot(it, null)) }
-                    target = null
-                    dialog = AddDialog.NONE
-                })
-        }
-    }
 }
 
 /**
@@ -774,20 +814,20 @@ private fun ItemList(items: List<JSONObject>, onMove: (List<JSONObject>) -> Unit
 
     // InstallerX's MiuixDeleteNamedPackageConfirmationDialog.
     val pending = confirm
-    WindowDialog(show = pending != null, title = stringResource(R.string.fpquick_delete_confirm),
+    AppDialog(show = pending != null, title = stringResource(R.string.fpquick_delete_confirm),
         onDismissRequest = { confirm = null }) {
         val name = pending?.let { local.getOrNull(it) }?.let { itemInfo(it).title }.orEmpty()
         Column {
             Text(stringResource(R.string.fpquick_delete_confirm_desc, name))
             Spacer(Modifier.height(24.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(modifier = Modifier.weight(1f),
+                AppDialogButton(modifier = Modifier.weight(1f),
                     text = stringResource(R.string.update_cancel),
                     onClick = { confirm = null })
                 Spacer(Modifier.width(8.dp))
-                TextButton(modifier = Modifier.weight(1f),
+                AppDialogButton(modifier = Modifier.weight(1f),
                     text = stringResource(R.string.fpquick_delete),
-                    colors = ButtonDefaults.textButtonColors(textColor = MiuixTheme.colorScheme.error),
+                    role = AppDialogButtonRole.Destructive,
                     onClick = {
                         pending?.let(onRemove)
                         confirm = null
@@ -892,23 +932,23 @@ private fun AddDialogs(
 ) {
     val context = LocalContext.current
     // 已满: the floating button stays live and says this rather than going grey.
-    WindowDialog(show = dialog == AddDialog.FULL, title = stringResource(R.string.fpquick_full_title),
+    AppDialog(show = dialog == AddDialog.FULL, title = stringResource(R.string.fpquick_full_title),
         summary = stringResource(R.string.fpquick_full_desc, MAX_ITEMS), onDismissRequest = onDismiss) {
-        TextButton(modifier = Modifier.fillMaxWidth(), text = stringResource(R.string.fpquick_ok),
-            onClick = onDismiss, colors = ButtonDefaults.textButtonColorsPrimary())
+        AppDialogButton(modifier = Modifier.fillMaxWidth(), text = stringResource(R.string.fpquick_ok),
+            onClick = onDismiss, role = AppDialogButtonRole.Primary)
     }
-    WindowDialog(show = dialog == AddDialog.RESET, title = stringResource(R.string.fpquick_reset),
+    AppDialog(show = dialog == AddDialog.RESET, title = stringResource(R.string.fpquick_reset),
         summary = stringResource(R.string.fpquick_reset_desc), onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(modifier = Modifier.weight(1f), text = stringResource(R.string.update_cancel),
+            AppDialogButton(modifier = Modifier.weight(1f), text = stringResource(R.string.update_cancel),
                 onClick = onDismiss)
             Spacer(Modifier.width(8.dp))
-            TextButton(modifier = Modifier.weight(1f), text = stringResource(R.string.fpquick_reset_do),
-                colors = ButtonDefaults.textButtonColors(textColor = MiuixTheme.colorScheme.error),
+            AppDialogButton(modifier = Modifier.weight(1f), text = stringResource(R.string.fpquick_reset_do),
+                role = AppDialogButtonRole.Destructive,
                 onClick = { onDismiss(); onReset() })
         }
     }
-    WindowDialog(show = dialog == AddDialog.TYPE, title = stringResource(R.string.fpquick_add),
+    AppDialog(show = dialog == AddDialog.TYPE, title = stringResource(R.string.fpquick_add),
         onDismissRequest = onDismiss) {
         Column {
             BasicComponent(title = stringResource(R.string.fpquick_type_native),
@@ -926,7 +966,7 @@ private fun AddDialogs(
 
     val have = shown.filter { it.optString("t") == "native" }.map { it.optInt("id") }.toSet()
     val left = ALL_NATIVE.filter { it !in have }
-    WindowDialog(show = dialog == AddDialog.NATIVE, title = stringResource(R.string.fpquick_type_native),
+    AppDialog(show = dialog == AddDialog.NATIVE, title = stringResource(R.string.fpquick_type_native),
         summary = if (left.isEmpty()) stringResource(R.string.fpquick_no_native) else null,
         onDismissRequest = onDismiss) {
         Column {
@@ -938,7 +978,7 @@ private fun AddDialogs(
         }
     }
 
-    WindowDialog(show = dialog == AddDialog.ACTION, title = stringResource(R.string.fpquick_type_action),
+    AppDialog(show = dialog == AddDialog.ACTION, title = stringResource(R.string.fpquick_type_action),
         onDismissRequest = onDismiss) {
         Column {
             for (a in ACTIONS) {
@@ -951,7 +991,7 @@ private fun AddDialogs(
 
     var url by remember { mutableStateOf("") }
     var label by remember { mutableStateOf("") }
-    WindowDialog(show = dialog == AddDialog.URL, title = stringResource(R.string.fpquick_url_title),
+    AppDialog(show = dialog == AddDialog.URL, title = stringResource(R.string.fpquick_url_title),
         onDismissRequest = onDismiss) {
         val dismiss = LocalDismissState.current
         Column {
@@ -962,11 +1002,11 @@ private fun AddDialogs(
                 label = stringResource(R.string.fpquick_url_label), useLabelAsPlaceholder = true,
                 modifier = Modifier.padding(bottom = 16.dp))
             Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(modifier = Modifier.weight(1f),
+                AppDialogButton(modifier = Modifier.weight(1f),
                     text = stringResource(R.string.update_cancel),
                     onClick = { dismiss?.invoke() })
                 Spacer(Modifier.width(20.dp))
-                TextButton(modifier = Modifier.weight(1f),
+                AppDialogButton(modifier = Modifier.weight(1f),
                     text = stringResource(R.string.fpquick_url_add),
                     enabled = url.isNotBlank(),
                     onClick = {
@@ -977,7 +1017,7 @@ private fun AddDialogs(
                         onDismiss()
                         onAdd(e)
                     },
-                    colors = ButtonDefaults.textButtonColorsPrimary())
+                    role = AppDialogButtonRole.Primary)
             }
         }
     }

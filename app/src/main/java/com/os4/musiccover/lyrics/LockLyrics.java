@@ -350,9 +350,13 @@ public final class LockLyrics {
     }
 
     static void onProviderLyrics() {
+        onProviderLyrics("lyricon");
+    }
+
+    static void onProviderLyrics(String provider) {
         Main.main().post(() -> {
             if (!Settings.LYRICS.on() || sDemo || sKey.isEmpty() || sController == null) return;
-            if (!sLines.isEmpty() && !LyricSourcePolicy.current().mayReplace(policySource(sSource), "lyricon")) return;
+            if (!sLines.isEmpty() && !LyricSourcePolicy.current().mayReplace(policySource(sSource), provider)) return;
             CACHE.remove(sKey);
             lookup(sKey, sController, !sLines.isEmpty());
         });
@@ -1975,6 +1979,8 @@ public final class LockLyrics {
                 return "local";
             case LyricSource.SRC_LYRICON:
                 return "lyricon";
+            case LyricSource.SRC_SUPERLYRIC:
+                return "superlyric";
             case LyricSource.SRC_DATABASE:
                 return "amll";
             case LyricSource.SRC_NETEASE:

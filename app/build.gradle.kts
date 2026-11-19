@@ -23,6 +23,8 @@ val releaseStorePath = signingValue("storeFile", "SIGNING_STORE_FILE")
 android {
     namespace = "com.os4.musiccover"
     compileSdk = 37
+    // miuix 0.9.5's AAR metadata requires 37.2; the app's target stays 37.
+    compileSdkMinor = 2
 
     defaultConfig {
         // The GitHub identity the module ships under. LSPosed keys a module on this, so
@@ -146,6 +148,9 @@ dependencies {
     // The lyric bridge the LyricProvider plugins publish through. Optional at runtime: when
     // nothing on the device implements it, LyriconSource simply never connects.
     implementation(libs.lyricon.subscriber)
+    // The other lyric bridge, fed through a system service the SuperLyric module registers.
+    // Same posture: no server, no frames, SuperLyricSource quietly answers nothing.
+    implementation(libs.superlyric.api)
 
     // The release notes are Markdown and are rendered as such in the update dialog.
     implementation(libs.commonmark)
@@ -165,8 +170,10 @@ dependencies {
 
     implementation(libs.miuix.core)
     implementation(libs.miuix.ui)
-    implementation(libs.miuix.shader)
+    implementation(libs.miuix.material)
     implementation(libs.miuix.blur)
+    implementation(libs.miuix.glass)
+    implementation(libs.miuix.glass.icons)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
     implementation(libs.miuix.squircle)

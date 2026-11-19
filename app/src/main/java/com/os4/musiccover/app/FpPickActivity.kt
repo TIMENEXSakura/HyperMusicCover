@@ -48,6 +48,7 @@ import androidx.core.graphics.drawable.toBitmap
 import com.os4.musiccover.R
 import com.os4.musiccover.ui.theme.AppTheme
 import com.os4.musiccover.ui.util.PageScaffold
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -102,7 +103,7 @@ class FpAppPickActivity : ComponentActivity() {
             .getOrDefault(ColorSchemeMode.System)
         val forShortcut = intent.getBooleanExtra(EXTRA_SHORTCUT, false)
         setContent {
-            AppTheme(themeMode = theme) {
+            AppTheme(themeMode = theme, useOs4Ui = settings.useOs4Ui, cardGlass = settings.cardGlass) {
                 AppPicker(settings.isBlurEnabled, forShortcut, ::finish) { app ->
                     if (forShortcut) {
                         shortcut.launch(Intent(this, FpShortcutPickActivity::class.java)
@@ -132,7 +133,7 @@ class FpShortcutPickActivity : ComponentActivity() {
         val pkg = intent.getStringExtra(EXTRA_PKG).orEmpty()
         val appLabel = intent.getStringExtra(EXTRA_LABEL).orEmpty()
         setContent {
-            AppTheme(themeMode = theme) {
+            AppTheme(themeMode = theme, useOs4Ui = settings.useOs4Ui, cardGlass = settings.cardGlass) {
                 ShortcutPicker(settings.isBlurEnabled, pkg, ::finish) { sc ->
                     answer(JSONObject().put("t", "shortcut").put("pkg", pkg).put("id", sc.id)
                         .put("label", sc.label).put("app", appLabel))
@@ -255,7 +256,7 @@ private fun AppPicker(blur: Boolean, forShortcut: Boolean, onBack: () -> Unit, o
         val list = apps
         if (unanswered) {
             item(key = "none") {
-                Card(Modifier.firstCard()) {
+                AppCard(Modifier.firstCard()) {
                     BasicComponent(title = stringResource(R.string.fpquick_no_answer))
                 }
             }
@@ -304,7 +305,7 @@ private fun ShortcutPicker(
         when {
             !asked -> item(key = "loading") { Loading() }
             shortcuts == null || shortcuts.isEmpty() -> item(key = "none") {
-                Card(Modifier.firstCard()) {
+                AppCard(Modifier.firstCard()) {
                     BasicComponent(title = stringResource(
                         if (shortcuts == null) R.string.fpquick_no_answer else R.string.fpquick_no_shortcut))
                 }

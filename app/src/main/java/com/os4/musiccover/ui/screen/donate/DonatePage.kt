@@ -1,6 +1,7 @@
 package com.os4.musiccover.ui.screen.donate
 
 import com.os4.musiccover.ui.util.nextCard
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import android.content.ContentValues
 import android.content.Context
@@ -45,7 +46,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.TabRow
+import com.os4.musiccover.ui.util.AppTabRow
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -117,7 +118,7 @@ fun DonatePageContent(
         onBack = onBack,
     ) {
         item(key = "thanks") {
-            Card(modifier = Modifier.firstCard()) {
+            AppCard(modifier = Modifier.firstCard()) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                     MiuixText(
                         text = stringResource(R.string.donate_thanks_title),
@@ -135,7 +136,7 @@ fun DonatePageContent(
         }
 
         item(key = "tabs") {
-            TabRow(
+            AppTabRow(
                 tabs = channels.map { it.name },
                 selectedTabIndex = selected,
                 onTabSelected = { selected = it },
@@ -144,7 +145,7 @@ fun DonatePageContent(
         }
 
         item(key = "code") {
-            Card(modifier = Modifier.nextCard()) {
+            AppCard(modifier = Modifier.nextCard()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()

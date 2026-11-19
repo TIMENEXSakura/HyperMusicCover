@@ -40,22 +40,22 @@ import com.os4.musiccover.app.ModuleBridge
 import com.os4.musiccover.app.SettingsStore
 import com.os4.musiccover.lyrics.LyricAppearance
 import com.os4.musiccover.ui.component.SettingsNotices
+import com.os4.musiccover.ui.util.AppCard
+import com.os4.musiccover.ui.util.AppDropdownPreference
+import com.os4.musiccover.ui.util.AppDialog
+import com.os4.musiccover.ui.util.AppDialogButton
 import com.os4.musiccover.ui.util.PageScaffold
 import com.os4.musiccover.ui.util.nextCard
 import kotlin.math.roundToInt
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
+import com.os4.musiccover.ui.util.AppDialogButtonRole
 import top.yukonga.miuix.kmp.basic.ColorPicker
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /** The lock-screen sample selects one voice. Its controls edit the same state the renderer reads. */
 @Composable
@@ -120,11 +120,86 @@ internal fun LyricStylePageView(
         draftArgb = ink.toArgb()
         picking = role
     }
+    val appearanceDialogs: @Composable () -> Unit = {
+        // Asked first: one tap in the corner would otherwise undo every choice on the page.
+        AppDialog(
+            show = confirmReset,
+            title = stringResource(R.string.lyrics_style_reset),
+            summary = stringResource(R.string.lyric_editor_reset_summary),
+            onDismissRequest = { confirmReset = false },
+        ) {
+            Row {
+                AppDialogButton(
+                    modifier = Modifier.weight(1f),
+                    text = stringResource(R.string.rules_cancel),
+                    onClick = { confirmReset = false },
+                )
+                Spacer(Modifier.width(12.dp))
+                AppDialogButton(
+                    modifier = Modifier.weight(1f),
+                    text = stringResource(R.string.lyrics_style_reset),
+                    role = AppDialogButtonRole.Primary,
+                    onClick = {
+                        resetColors()
+                        confirmReset = false
+                    },
+                )
+            }
+        }
+
+        AppDialog(
+            show = showPicker,
+            title = stringResource(R.string.lyric_editor_adjust_color, stringResource(voice.label)),
+            onDismissRequest = { picking = null },
+        ) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                // The picker's alpha is the opacity of this voice on the parent lyrics tab.
+                Box(
+                    Modifier.fillMaxWidth().padding(bottom = 12.dp).background(Color(0xff20212a), CircleShape)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(stringResource(voice.label), color = draft)
+                }
+                ColorPicker(color = draft, onColorChanged = { draftArgb = it.toArgb() }, showPreview = false)
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                    AppDialogButton(
+                        modifier = Modifier.weight(1f),
+                        text = stringResource(R.string.rules_cancel),
+                        onClick = { picking = null },
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    AppDialogButton(
+                        modifier = Modifier.weight(1f),
+                        text = stringResource(R.string.lyrics_style_done),
+                        role = AppDialogButtonRole.Primary,
+                        onClick = {
+                            if (picking == voice) {
+                                // Opening an existing colour rounds its alpha to an 8-bit swatch.
+                                // Keep the original stored opacity unless that channel was edited.
+                                val opacity = if ((draftArgb ushr 24) == (colour.opacity * 255f).roundToInt()) {
+                                    colour.opacity.toDouble()
+                                } else (draft.alpha * 100f).roundToInt() / 100.0
+                                changeAppearance(
+                                    "${voice.key}Mode" to LyricAppearance.CUSTOM,
+                                    "${voice.key}Color" to draft.copy(alpha = 1f).toArgb(),
+                                    "${voice.key}Opacity" to opacity,
+                                )
+                            }
+                            picking = null
+                        },
+                    )
+                }
+            }
+        }
+    }
+
     PageScaffold(
         title = stringResource(R.string.lyrics_style_title),
         isBlurEnabled = isBlurEnabled,
         extraBottomPadding = extraBottomPadding,
         onBack = onBack,
+        dialogs = appearanceDialogs,
         actions = {
             IconButton(onClick = { confirmReset = true }, holdDownState = confirmReset) {
                 Icon(
@@ -141,7 +216,7 @@ internal fun LyricStylePageView(
         item(key = "status") {
             Column {
                 if (!canSave) {
-                    Card(modifier = Modifier.nextCard()) {
+                    AppCard(modifier = Modifier.nextCard()) {
                         BasicComponent(summary = stringResource(R.string.lyric_editor_preview_only))
                     }
                 }
@@ -154,14 +229,14 @@ internal fun LyricStylePageView(
             val rgb = colour.rgb
             Column {
                 SmallTitle(text = stringResource(voice.label))
-                Card(modifier = Modifier.nextCard()) {
+                AppCard(modifier = Modifier.nextCard()) {
                     // The dropdown, and beside it the custom colour as a swatch that reopens the
                     // picker. miuix's dropdown row takes nothing at its end, so the swatch is its
                     // neighbour rather than part of it.
                     val custom = mode == LyricAppearance.CUSTOM
                     val pickCustom = { openPicker(voice, Color(rgb).copy(alpha = colour.opacity)) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        WindowDropdownPreference(
+                        AppDropdownPreference(
                             modifier = Modifier.weight(1f),
                             title = stringResource(R.string.lyrics_color),
                             summary = if (mode == LyricAppearance.COVER) {
@@ -208,78 +283,6 @@ internal fun LyricStylePageView(
                         )
                     }
                 }
-            }
-        }
-    }
-
-    // Asked first: one tap in the corner would otherwise undo every choice on the page.
-    WindowDialog(
-        show = confirmReset,
-        title = stringResource(R.string.lyrics_style_reset),
-        summary = stringResource(R.string.lyric_editor_reset_summary),
-        onDismissRequest = { confirmReset = false },
-    ) {
-        Row {
-            TextButton(
-                modifier = Modifier.weight(1f),
-                text = stringResource(R.string.rules_cancel),
-                onClick = { confirmReset = false },
-            )
-            Spacer(Modifier.width(12.dp))
-            TextButton(
-                modifier = Modifier.weight(1f),
-                text = stringResource(R.string.lyrics_style_reset),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-                onClick = {
-                    resetColors()
-                    confirmReset = false
-                },
-            )
-        }
-    }
-
-    WindowDialog(
-        show = showPicker,
-        title = stringResource(R.string.lyric_editor_adjust_color, stringResource(voice.label)),
-        onDismissRequest = { picking = null },
-    ) {
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            // The picker's alpha is the opacity of this voice on the parent lyrics tab.
-            Box(
-                Modifier.fillMaxWidth().padding(bottom = 12.dp).background(Color(0xff20212a), CircleShape)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(stringResource(voice.label), color = draft)
-            }
-            ColorPicker(color = draft, onColorChanged = { draftArgb = it.toArgb() }, showPreview = false)
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
-                TextButton(
-                    modifier = Modifier.weight(1f),
-                    text = stringResource(R.string.rules_cancel),
-                    onClick = { picking = null },
-                )
-                Spacer(Modifier.width(12.dp))
-                TextButton(
-                    modifier = Modifier.weight(1f),
-                    text = stringResource(R.string.lyrics_style_done),
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
-                    onClick = {
-                        if (picking == voice) {
-                            // Opening an existing colour rounds its alpha to an 8-bit swatch.
-                            // Keep the original stored opacity unless that channel was edited.
-                            val opacity = if ((draftArgb ushr 24) == (colour.opacity * 255f).roundToInt()) {
-                                colour.opacity.toDouble()
-                            } else (draft.alpha * 100f).roundToInt() / 100.0
-                            changeAppearance(
-                                "${voice.key}Mode" to LyricAppearance.CUSTOM,
-                                "${voice.key}Color" to draft.copy(alpha = 1f).toArgb(),
-                                "${voice.key}Opacity" to opacity,
-                            )
-                        }
-                        picking = null
-                    },
-                )
             }
         }
     }

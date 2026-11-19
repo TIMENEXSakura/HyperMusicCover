@@ -137,7 +137,7 @@ public final class SettingSpec {
     public static final SettingSpec LYRIC_BT_LE = integer("lyricbtle", 100, -500, 500);
     public static final SettingSpec LYRIC_MAX_LINES = integer("lyricmaxlines", 3, 0, 4);
     public static final SettingSpec LYRIC_SOURCE_CUSTOM = bool("lyricsourcecustom", false);
-    public static final SettingSpec LYRIC_SOURCE_ORDER = text("lyricsourceorder", "lyricon,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib");
+    public static final SettingSpec LYRIC_SOURCE_ORDER = text("lyricsourceorder", "lyricon,superlyric,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib");
     public static final SettingSpec LYRIC_LOCAL_FORMAT = text("lyriclocalformat", "ttml");
     /** 0 left, 1 centre, 2 right. */
     public static final SettingSpec LYRIC_ALIGN = integer("lyricalign", 0, 0, 2);

@@ -50,6 +50,8 @@ public final class LyricSource {
     static final int SRC_LOCAL = 6;
     /** A LyricProvider plugin, through the Lyricon bridge this module subscribes to. */
     static final int SRC_LYRICON = 7;
+    /** A player's lyric pushed by a SuperLyric server - the bridge's peer, not its replacement. */
+    static final int SRC_SUPERLYRIC = 11;
     /** The AMLL database, keyed by the platform's song id. */
     static final int SRC_DATABASE = 2;
     /** Found by name on NetEase - the fallback for a session carrying neither of the above. */
@@ -947,6 +949,7 @@ public final class LyricSource {
                                 takeLocal(LocalLyrics.loadSidecar(ctx, controller, policy.formats()), SRC_LOCAL, r);
                                 break;
                             case "lyricon": lyricon(controller, r, policy.allowNetwork); break;
+                            case "superlyric": superlyric(controller, r); break;
                             case "amll": if (id != null) database(gen, id, dir, r); break;
                             case "ttmlhub": if (id != null && TtmlHub.kindOf(dir) != null) hub(ctx, id, dir, r); break;
                             default:
@@ -1454,6 +1457,32 @@ public final class LyricSource {
         } catch (Throwable t) {
             Xp.w("[MCLyric] the Lyricon bridge failed: " + t);
             r.why = join(before, "Lyricon error");
+        }
+    }
+
+    /**
+     * The SuperLyric server's copy, after the Lyricon bridge has had its say.
+     *
+     * Same shape of answer as the bridge: the receiver holds whatever the player last pushed,
+     * so this is a read of memory, not a request - no bind, no wait except the short one a
+     * coming lyric is worth. A device with no SuperLyric module always answers nothing, which
+     * is why it can sit here unconditionally. Asked second: where both are installed, the
+     * bridge has always answered and keeps answering.
+     */
+    private static void superlyric(MediaController c, Rows r) {
+        String before = r.why;
+        try {
+            List<LyricLine> lines = SuperLyricSource.linesFor(TrackIdentity.of(c),
+                    c == null ? null : c.getPackageName());
+            if (lines == null || lines.isEmpty()) {
+                return;
+            }
+            r.lines = lines;
+            r.source = SRC_SUPERLYRIC;
+            r.why = lines.size() + " lines from the SuperLyric server";
+        } catch (Throwable t) {
+            Xp.w("[MCLyric] the SuperLyric server failed: " + t);
+            r.why = join(before, "SuperLyric error");
         }
     }
 
