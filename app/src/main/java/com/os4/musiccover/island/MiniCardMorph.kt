@@ -1,6 +1,8 @@
 package com.os4.musiccover.island
-import com.os4.musiccover.CoverMorphMotion
+import com.os4.musiccover.cover.CoverMorphMotion
 import com.os4.musiccover.Main
+import com.os4.musiccover.Settings
+import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
 import android.graphics.Matrix
 import android.graphics.Outline
@@ -58,6 +60,13 @@ internal class MiniCardMorph(
      * instead. Read every frame; [circle] when there is none.
      */
     private var roundness: (() -> Float)? = null,
+    /**
+     * The mini player's material stays until the very end ([materialHeld]) rather than leaving
+     * at 0.85 for the card's own: the stack island's row draws no glass of its own while it is
+     * transformed here, and between the two the card stood empty but for the flying icon - on
+     * the way out at the end, on the way home at the start (#122, filmed at 87fps 2026-11-04).
+     */
+    private val holdMaterial: Boolean = false,
 ) : Choreographer.FrameCallback {
     class Landing(val art: View?, val title: View?, val text: View?, val radius: Float, val artRadius: Float) {
         companion object {
@@ -122,6 +131,8 @@ internal class MiniCardMorph(
     private val corner = FloatArray(2)
     private val oemMatrix = Matrix()
     private val morphMatrix = Matrix()
+    private val inverseMatrix = Matrix()
+    private val originPoint = FloatArray(2)
     private var clipW = 0f
     private var clipH = 0f
     private var clipR = 0f
@@ -142,18 +153,32 @@ internal class MiniCardMorph(
     private var placedBox: CoverMorphMotion.Box? = null
     private var placedScale = 0f
     private val placedOem = Matrix()
+    private var placedOriginX = Float.NaN
+    private var placedOriginY = Float.NaN
     private var observed: View? = null
     private val preDraw = ViewTreeObserver.OnPreDrawListener { android.os.Trace.beginSection("MC cardMorphPreDraw"); try {
         val box = placedBox
-        if (running && box != null && header.matrix != placedOem) placeHeader(box, placedScale)
+        if (running && box != null) {
+            val origin = headerOrigin()
+            // The native container can scroll after our frame without changing row.matrix.
+            // Compensate that parent movement too, before either direction is drawn.
+            if (origin != null && (header.matrix != placedOem ||
+                    origin[0] != placedOriginX || origin[1] != placedOriginY)) {
+                placeHeader(box, placedScale)
+            }
+        }
+        if (running && !liftOurTy.isNaN() && header.translationY != liftOurTy) {
+            liftReadStack()
+            liftWrite()
+        }
         true
     } finally { android.os.Trace.endSection() } }
 
     private fun observe(on: Boolean) {
-        observed?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(preDraw)
+        observed?.let { Gen.unpreDraw(it, preDraw) }
         observed = null
         if (!on) return
-        header.viewTreeObserver.addOnPreDrawListener(preDraw)
+        Gen.preDraw(header, preDraw)
         observed = header
     }
 
@@ -161,6 +186,7 @@ internal class MiniCardMorph(
     private var artDrawn: CoverMorphMotion.Box? = null
     /** The container as this frame drew it, on screen: where a finger can take hold of it. */
     private var boxDrawn: CoverMorphMotion.Box? = null
+    private var radiusDrawn = 0f
     private var lastFrame = 0L
     private var startedAt = 0L
 
@@ -193,35 +219,56 @@ internal class MiniCardMorph(
     /** A finger is on it: its progress is the finger's, not its spring's. */
     val held: Boolean get() = dragging
 
+    private val focus = CapsuleMorphFocus()
+    val appearanceProgress: Float get() = focus.value
+    // An externally driven morph keeps its leader's focus through its own pre-draw frames.
+    private var drivenFocus = Float.NaN
+
     /** Lays out the first frame now, in the same pass as the switch, so no frame shows either end bare. */
     fun start(): Boolean {
         if (!measure()) return false
         mini.beginMorph()
         running = true
         startedAt = SystemClock.uptimeMillis()
+        // Leaving the row for the pill: the row stands where it is for a moment, its own glass
+        // still drawn, while the pill's comes in over it (liftShare).
+        liftAt = if (holdMaterial && !toNative) startedAt else 0L
         if (!apply()) {
             restore()
             running = false
             return false
         }
         observe(true)
-        Choreographer.getInstance().postFrameCallback(this)
+        Gen.frame(this)
         Xp.log("MCMini: container morph to=${if (toNative) "native" else "mini"} " +
             "paired=${pieces.count { it.paired }}")
         return true
     }
 
-    /** Starts held by a finger: the first frame is the resting end, nudged by nothing yet. */
-    fun startDragging(): Boolean {
+    /** Start held, at rest or at the pose already drawn while waiting for the row. */
+    fun startDragging(progress: Float = motion.value, lift: Float = 0f, dx: Float = 0f,
+                      pull: NotePullFrames? = null): Boolean {
+        notePull = pull
+        motion.value = pull?.progress ?: progress
+        nudge.value = lift / NUDGE_UNIT
+        nudgeX.value = dx / NUDGE_UNIT
         dragging = true
         if (start()) return true
         dragging = false
         return false
     }
 
+    private var notePull: NotePullFrames? = null
+    private var noteHandoff: NoteHandoff? = null
+
     /** One finger position: progress (rubber-banded past either end by the caller) and nudge. */
-    fun drag(progress: Float, nudgePx: Float, nudgeXPx: Float = 0f) {
+    fun drag(progress: Float, nudgePx: Float, nudgeXPx: Float = 0f, screenTop: Float = Float.NaN) {
         if (!running) return
+        notePull?.let {
+            it.target(progress, screenTop, nudgeXPx)
+            return
+        }
+        drivenFocus = Float.NaN
         motion.value = progress
         motion.velocity = 0f
         nudge.value = nudgePx / NUDGE_UNIT
@@ -243,6 +290,8 @@ internal class MiniCardMorph(
         // [invert]: the other way on the same spring - one island going up into its card as
         // another comes down out of its own, the super island's expanded switch.
         val led = if (invert) 1f - leader.motion.value else leader.motion.value
+        val focusEnd = if (invert) 1f - leader.appearanceProgress else leader.appearanceProgress
+        drivenFocus = lerp(from, focusEnd, share)
         motion.value = lerp(from, led, share)
         motion.velocity = 0f
         nudge.value = if (invert) 0f else leader.nudge.value * share
@@ -259,8 +308,9 @@ internal class MiniCardMorph(
      * Spread). Started as dragged, so its own frame only keeps the far end live when nothing has
      * posed it this frame.
      */
-    fun led(progress: Float) {
+    fun led(progress: Float, returning: Boolean) {
         if (!running) return
+        drivenFocus = if (returning) minOf(appearanceProgress, progress) else progress
         motion.value = progress
         motion.velocity = 0f
         nudge.value = 0f
@@ -288,6 +338,12 @@ internal class MiniCardMorph(
     fun release(toNative: Boolean, velocity: Float) {
         if (!running) return
         dragging = false
+        if (notePull != null) {
+            // MOVE can arrive immediately before UP, with no drawing opportunity in between.
+            // The springs still contain the position and finger offset from the last frame.
+            noteHandoff?.release(SystemClock.uptimeMillis())
+            notePull = null
+        }
         motion.aim(toNative)
         // A hard fling handed on whole crossed the rest of the way in one frame: a flight let go
         // at 0.3 was past its end on the next, and its crossfade onto the island happened all at
@@ -358,8 +414,115 @@ internal class MiniCardMorph(
 
     /** Ends at the current target at once, for a keyguard going away or a session ending. */
     fun cancel() {
+        if (tailDone != null) {
+            endTail()
+            return
+        }
         if (!running) return
         finish(false)
+    }
+
+    // ---------------------------------------------------------------- the glass handed over
+
+    /**
+     * The row's glass draws only while the row is itself - under this morph's transform it draws
+     * none - and the pill's, from its own container, is not quite the same glass: switched in
+     * one frame, the card's glass visibly jumped where it landed and where it left (#122,
+     * 2026-11-04). So the two are crossed over where the row is at rest: leaving it, the row
+     * stays put a moment and fades as the pill's glass comes in over it ([liftAt]); arriving,
+     * the row is let go first and the pill fades out on it ([handOff]).
+     */
+    private var liftAt = 0L
+
+    /** How far the leaving cross-over has got: 1 when there is none or it is over. */
+    private fun liftShare(): Float {
+        if (liftAt == 0L) return 1f
+        val byTime = ((SystemClock.uptimeMillis() - liftAt) / CROSS_MS.toFloat()).coerceIn(0f, 1f)
+        // A quick pull has the pill shrinking well before the time is up: over by then, or the
+        // row, whole, would stand round a card already smaller than it.
+        val byWay = ((1f - motion.value) / LIFT_WAY).coerceIn(0f, 1f)
+        return max(byTime, byWay)
+    }
+
+    /**
+     * While leaving, the row goes with the pill by its translation alone: the stack moves its
+     * rows that way with their glass drawn, where this morph's transform leaves the glass out -
+     * stood still, it was left behind as a ghost of the card while the pill went down (#122).
+     * The stack writes the same translation as it scrolls: what is there and not ours is its
+     * own, and ours goes on top of it. NaN when not moved.
+     */
+    private var liftOurTy = Float.NaN
+    private var liftStackTy = 0f
+    private var liftDy = 0f
+
+    /** The stack's own translation, taken again if it has written one since ours. */
+    private fun liftReadStack() {
+        val ty = header.translationY
+        if (liftOurTy.isNaN() || ty != liftOurTy) liftStackTy = ty
+    }
+
+    private fun liftWrite() {
+        val ty = liftStackTy + liftDy
+        if (header.translationY != ty) header.translationY = ty
+        liftOurTy = ty
+    }
+
+    /** The row's translation the stack's again, if what is there is still ours. */
+    private fun liftRelease() {
+        if (liftOurTy.isNaN()) return
+        if (header.translationY == liftOurTy) header.translationY = liftStackTy
+        liftOurTy = Float.NaN
+        liftDy = 0f
+    }
+
+    private var tailDone: (() -> Unit)? = null
+    private var tailAt = 0L
+    private var tailBox: CoverMorphMotion.Box? = null
+    private var tailRadius = 0f
+    private val tailAlpha = FloatArray(5)
+
+    /**
+     * Arrived: the row is itself again at once - its glass in this very frame - and the pill
+     * stays on it as it was, glass and lines, fading out over CROSS_MS. [done] when it has
+     * gone, or at once when it cannot; [cancel] ends it early, and calls [done] all the same.
+     */
+    fun handOff(done: () -> Unit) {
+        if (!running) {
+            done()
+            return
+        }
+        running = false
+        Gen.unframe(this)
+        observe(false)
+        placedBox = null
+        releaseHeader()
+        tailBox = boxDrawn
+        tailRadius = radiusDrawn
+        pieces.forEachIndexed { i, piece -> if (i < tailAlpha.size) tailAlpha[i] = piece.view.alpha }
+        tailDone = done
+        tailAt = SystemClock.uptimeMillis()
+        Gen.frame(tailFrame)
+    }
+
+    private val tailFrame = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (tailDone == null) return
+            val e = ((SystemClock.uptimeMillis() - tailAt) / CROSS_MS.toFloat()).coerceIn(0f, 1f)
+            val k = 1f - smooth(0f, 1f, e)
+            tailBox?.let { mini.setMorphFrame(it, tailRadius, k) }
+            pieces.forEachIndexed { i, piece -> if (i < tailAlpha.size) piece.view.alpha = tailAlpha[i] * k }
+            if (e >= 1f || !Main.islandMorphStillEligible(mini)) endTail() else Gen.frame(this)
+        }
+    }
+
+    private fun endTail() {
+        val done = tailDone ?: return
+        tailDone = null
+        Gen.unframe(tailFrame)
+        restoreMini()
+        tailBox = null
+        listener.onSettled(this, toNative, true)
+        done()
     }
 
     override fun doFrame(frameTimeNanos: Long) { android.os.Trace.beginSection("MC cardMorph"); try {
@@ -372,23 +535,29 @@ internal class MiniCardMorph(
             return
         }
         if (dragging) {
-            // The finger writes the progress; this only keeps the far end live under it. A
-            // leader posing it this frame has done that already.
-            if (SystemClock.uptimeMillis() - ledAt < LED_FRESH_MS) Choreographer.getInstance().postFrameCallback(this)
+            notePull?.let { pull ->
+                val dt = if (lastFrame == 0L) 1f / 120f else (frameTimeNanos - lastFrame) / 1e9f
+                lastFrame = frameTimeNanos
+                pull.advance(dt)
+                motion.value = pull.progress
+                nudgeX.value = pull.offsetX / NUDGE_UNIT
+            }
+            // A leader posing its follower this frame has already refreshed its endpoints.
+            if (SystemClock.uptimeMillis() - ledAt < LED_FRESH_MS) Gen.frame(this)
             else if (!apply()) {
                 lastCancel = geometryWhy()
                 finish(false)
             }
-            else Choreographer.getInstance().postFrameCallback(this)
+            else Gen.frame(this)
             return
         }
         // Stepped by the real gap, as CoverMorphLayer does: holding a slow frame read worse.
         val dt = if (lastFrame == 0L) 1f / 120f
-            else ((frameTimeNanos - lastFrame) / 1e9f).coerceIn(0f, 0.05f)
+            else ((frameTimeNanos - lastFrame) / 1e9f).coerceIn(0f, if (noteHandoff != null) 1f / 60f else 0.05f)
         lastFrame = frameTimeNanos
-        motion.step(dt, Main.sClockResponse)
-        nudge.step(dt, Main.sClockResponse)
-        nudgeX.step(dt, Main.sClockResponse)
+        motion.step(dt, Settings.SPRING.get())
+        nudge.step(dt, Settings.SPRING.get())
+        nudgeX.step(dt, Settings.SPRING.get())
         if (!apply()) {
             lastCancel = geometryWhy()
             finish(false)
@@ -397,7 +566,7 @@ internal class MiniCardMorph(
         val late = SystemClock.uptimeMillis() - startedAt > SETTLE_LIMIT_MS
         if (motion.atRest() && nudge.atRest() && nudgeX.atRest()
             && (late || listener.canSettle(this, toNative))) finish(true)
-        else Choreographer.getInstance().postFrameCallback(this)
+        else Gen.frame(this)
     } finally { android.os.Trace.endSection() } }
 
     /**
@@ -419,38 +588,79 @@ internal class MiniCardMorph(
     private fun apply(): Boolean {
         val miniRest = traced("MC m.rest") { restBox?.invoke() ?: mini.restBoxOnScreen() } ?: return false
         miniEndDrawn = miniRest
-        val nativeRest = traced("MC m.native") { headerRestBox() } ?: return false
+        val nativeHeight = drawnHeight()
+        if (!liftOurTy.isNaN()) liftReadStack()
+        val nativeRaw = traced("MC m.native") { headerRestBox(nativeHeight) } ?: return false
+        // Where the stack has the row, without the lift's own offset on it.
+        val ownScale = nativeRaw.h / max(1, header.height)
+        val nativeRest = if (liftOurTy.isNaN()) nativeRaw else CoverMorphMotion.Box(nativeRaw.x,
+            nativeRaw.y - (header.translationY - liftStackTy) * ownScale, nativeRaw.w, nativeRaw.h)
         if (miniRest.w <= 0f || nativeRest.w <= 0f) return false
-        val c = motion.value.coerceIn(0f, 1f)
-        val framed = containerFrame(miniRest, nativeRest, motion.value)
+        val handoff = noteHandoff ?: if (notePull != null) {
+            NoteHandoff(miniRest).also { noteHandoff = it }
+        } else null
+        val now = if (handoff == null) 0L else SystemClock.uptimeMillis()
+        val framed = handoff?.frame(miniRest, nativeRest, motion.value, now)
+            ?: containerFrame(miniRest, nativeRest, motion.value)
+        val shapeHome = handoff?.shapeHome ?: miniRest
+        val c = progress.coerceIn(0f, 1f)
+        val optical = focus.sample(if (dragging && drivenFocus.isFinite()) drivenFocus else c,
+            returning = !dragging && !toNative)
         // The nudge moves the whole container toward the card (up from the pill, down from it).
-        val towardNative = if (nativeRest.y <= miniRest.y) -1f else 1f
+        val towardNative = handoff?.direction ?: if (nativeRest.y <= miniRest.y) -1f else 1f
+        if (handoff?.finished(now) == true) noteHandoff = null
+        // The provisional pill may already be well above its rest slot when a delayed
+        // row joins. Preserve that screen pose even if the stack changes the far end on a
+        // later pre-draw; keep the equivalent spring offset ready for the releasing frame.
+        notePull?.let { nudge.value = heldNudge(framed.y, towardNative, it.top) / NUDGE_UNIT }
         val box = CoverMorphMotion.Box(framed.x + nudgeX.value * NUDGE_UNIT,
             framed.y + towardNative * nudge.value * NUDGE_UNIT, framed.w, framed.h)
-        val radius = lerp(miniRest.h / 2f, nativeRadius, c)
+        val radius = lerp(shapeHome.h / 2f, nativeRadius, c)
 
         // The card, at the container's width and cut to its height. s is in the card's own
         // pixels, before the stack's transform.
         val s = box.w / header.width
         if (header.visibility != View.VISIBLE) header.visibility = View.VISIBLE
-        traced("MC m.place") { placeHeader(box, s) }
+        val lift = liftShare()
+        if (lift < 1f) {
+            // Still leaving: the row where the stack has it, untransformed, fading under the
+            // pill's glass coming in - its own glass drawn for as long as it shows.
+            if (placedBox != null) {
+                placedBox = null
+                header.setAnimationMatrix(null)
+            }
+            if (liftOurTy.isNaN()) liftReadStack()
+            liftDy = (box.y - nativeRest.y) / max(ownScale, 0.05f)
+            liftWrite()
+            header.transitionAlpha = saved.transitionAlpha * (1f - lift)
+        } else {
+            liftRelease()
+            traced("MC m.place") { placeHeader(box, s) }
+        }
         clipW = header.width.toFloat()
-        clipH = min(drawnHeight(), box.h / s)
+        clipH = min(nativeHeight, box.h / s)
         clipR = radius / s
-        if (header.outlineProvider !== clipOutline) header.outlineProvider = clipOutline
-        if (!header.clipToOutline) header.clipToOutline = true
-        header.invalidateOutline()
-        header.transitionAlpha = saved.transitionAlpha * nativeIn(c)
+        // Still leaving, not cut: the row is whole where it stands.
+        if (lift >= 1f) {
+            if (header.outlineProvider !== clipOutline) header.outlineProvider = clipOutline
+            if (!header.clipToOutline) header.clipToOutline = true
+            header.invalidateOutline()
+        }
+        // Left by a cross-over, the row is gone for the rest of the way: the pill carries it.
+        if (lift >= 1f) header.transitionAlpha = if (liftAt != 0L) 0f else saved.transitionAlpha * nativeIn(c)
 
         // Both ends' whole content in and out of focus, the glass of neither: the pill's going
         // out as it heads for the card, the card's coming in once the pill's glass leaves it.
         // In the card's own pixels, which the stack's transform and the morph's scale s shrink.
-        blurCard(blurPx * (1f - cardFocus(c)) / max(s, 0.05f))
-        mini.setMorphContentBlur(blurPx * pillBlur(c))
+        blurCard(blurPx * (1f - cardFocus(optical)) / max(s, 0.05f))
+        mini.setMorphContentBlur(blurPx * if (holdMaterial) heldPillBlur(optical) else pillBlur(optical))
 
         // The mini player's frame is the container itself; its material fades last.
         boxDrawn = box
-        traced("MC m.frame") { mini.setMorphFrame(box, radius, materialOut(c)) }
+        radiusDrawn = radius
+        traced("MC m.frame") {
+            mini.setMorphFrame(box, radius, if (holdMaterial) lift * materialHeld(c) else materialOut(c))
+        }
 
         // Its content: first scaled with the container, then onto the card's own elements. From
         // a small island's circle, the pill's layout is not what is at rest there: the circle
@@ -459,7 +669,7 @@ internal class MiniCardMorph(
         // camera for its last frames home, then snapped to the circle (filmed 2026-09-25).
         val laidW = max(1, mini.layoutParams?.width ?: mini.width).toFloat()
         val round = roundness?.invoke()?.coerceIn(0f, 1f) ?: if (circle) 1f else 0f
-        val m = lerp(box.w / miniRest.w, box.w / laidW, round)
+        val m = lerp(box.w / shapeHome.w, box.w / laidW, round)
         val mix = pieceMix(c)
         val bridged = listener.artBridged()
         android.os.Trace.beginSection("MC m.pieces")
@@ -501,7 +711,7 @@ internal class MiniCardMorph(
                     // Under the pill's line fading off it, the card's is whole well before the
                     // pill's is gone: two equal lines at a and 1 - a composite to 1 - a + a*a,
                     // and the time dipped to three quarters on every crossing (2026-09-26).
-                    n.transitionAlpha = piece.nativeTransitionAlpha * min(1f, NATIVE_TEXT_LEAD * (1f - pairedOut(c)))
+                    n.transitionAlpha = piece.nativeTransitionAlpha * min(1f, NATIVE_TEXT_LEAD * (1f - handOver(c)))
                     // The card's colour and words by the time the two lines meet: a focus row's
                     // grey under the pill's white, and a timer's two clocks a second apart,
                     // crossed over on every open and close - a flash each time (2026-09-26).
@@ -517,8 +727,14 @@ internal class MiniCardMorph(
                         // out for the card's size, typeface and hyphenation, and setText throws on
                         // a TextView whose own differ - from a frame callback, so the whole of
                         // SystemUI went down with it (issue #11, 2026-09-26).
-                        val copy = if (words is android.text.Spanned) android.text.SpannedString(words)
-                            else words.toString()
+                        // And the characters only, not its spans: a timer row's are the plugin's
+                        // HyperChronometerEffectSpan, one per character and stateful (the last
+                        // text it drew, a number width and an effect paint taken from the first
+                        // paint it saw, its switch bitmaps). Copied, the same span objects were
+                        // drawn by both views, a second apart and in two paints, each restarting
+                        // the other's digit animation - and the row's minutes stayed garbled
+                        // after the switch (issue #131). The pill turns its own digits.
+                        val copy = words?.toString().orEmpty()
                         try {
                             tv.text = copy
                             piece.tookText = true
@@ -535,7 +751,7 @@ internal class MiniCardMorph(
             v.scaleY = ky
             v.translationX = tx - layoutX - ax * kx
             v.translationY = ty - layoutY - ay * ky
-            val asPill = if (piece.paired) pairedOut(c) else earlyOut(c)
+            val asPill = if (piece.paired) handOver(c) else earlyOut(c)
             // The blur is on the two ends' whole content (blurCard, setMorphContentBlur), not the
             // pieces: per piece (2d269db, 2026-09-26) the unpaired buttons, rings and pictures
             // showed sharp through it, and it was taken out.
@@ -544,7 +760,7 @@ internal class MiniCardMorph(
                 piece.art -> asPill
                 // Out of a circle, only the picture is there at first; the lines join it once
                 // the shape has room for them.
-                else -> lerp(asPill, if (piece.paired) circleIn(c) * pairedOut(c) else 0f, round)
+                else -> lerp(asPill, if (piece.paired) circleIn(c) * handOver(c) else 0f, round)
             }
             // Keep the subtitle's resting opacity, blending to the native line as it lands.
             v.alpha = fade * if (piece.text)
@@ -568,7 +784,7 @@ internal class MiniCardMorph(
     private fun finish(completed: Boolean) {
         if (!running) return
         running = false
-        Choreographer.getInstance().removeFrameCallback(this)
+        Gen.unframe(this)
         observe(false)
         placedBox = null
         restore()
@@ -606,10 +822,23 @@ internal class MiniCardMorph(
     }
 
     /**
+     * The pill's paired pieces handing over to the card's own. With the material held to the end
+     * ([holdMaterial]) they go exactly as it does: gone at 0.93 as usual, the card's own lines
+     * were still under the held glass, and the card read empty for those frames; gone just
+     * ahead of it (0.95-0.99), the lines left were the card's seen through the glass, and the
+     * card went sharp, blurred, and sharp again (#122, 2026-11-04).
+     */
+    private fun handOver(c: Float): Float =
+        if (holdMaterial) materialHeld(c) else pairedOut(c)
+
+    /**
      * DECAL, not CLAMP: clamped, the edge pixels were stretched out to the content view's bounds
      * and the blur stood there as a hard-edged block (filmed 2026-09-30, "竖状裁切").
      */
     private fun blurCard(radius: Float) {
+        // A media card has no separate notification content to blur. Avoid allocating a
+        // RenderEffect each frame when there is no view that can receive it.
+        if (cardContent.isEmpty()) return
         val r = if (radius < 0.5f) 0f else radius
         if (cardBlurred >= 0f && abs(r - cardBlurred) < 0.25f && (r == 0f) == (cardBlurred == 0f)) return
         cardBlurred = r
@@ -642,8 +871,27 @@ internal class MiniCardMorph(
     }
 
     private fun restore() {
+        releaseHeader()
+        restoreMini()
+    }
+
+    /** The row given back to the stack as it was: untransformed, its outline, alpha and lines. */
+    private fun releaseHeader() {
+        liftRelease()
         clearBlur()
-        mini.setMorphContentBlur(0f)
+        pieces.forEach { piece ->
+            if (piece.paired && piece.text) piece.native?.transitionAlpha = piece.nativeTransitionAlpha
+        }
+        header.setAnimationMatrix(null)
+        if (header.outlineProvider === clipOutline) header.outlineProvider = saved.outline
+        header.clipToOutline = saved.clip
+        header.transitionAlpha = saved.transitionAlpha
+        header.visibility = saved.visibility
+    }
+
+    /** The pill given back to itself: its pieces in their places, no blur, out of the morph. */
+    private fun restoreMini() {
+        mini.releaseMorphContentBlur()
         pieces.forEach { piece ->
             val v = piece.view
             v.scaleX = 1f
@@ -652,25 +900,25 @@ internal class MiniCardMorph(
             v.translationX = piece.baseTx
             v.translationY = piece.baseTy
             v.alpha = piece.ownAlpha
-            if (piece.paired && piece.text) piece.native?.transitionAlpha = piece.nativeTransitionAlpha
             (v as? TextView)?.let { tv ->
                 if (tv.currentTextColor != piece.ownColor) tv.setTextColor(piece.ownColor)
                 if (piece.tookText) tv.text = piece.ownText
             }
         }
         mini.endMorph()
-        header.setAnimationMatrix(null)
-        if (header.outlineProvider === clipOutline) header.outlineProvider = saved.outline
-        header.clipToOutline = saved.clip
-        header.transitionAlpha = saved.transitionAlpha
-        header.visibility = saved.visibility
     }
 
     /**
      * Where the stack has the card this frame, on screen: its slot plus the stack's own
      * transform, read live, so a stack that moves mid-morph simply moves the far end.
      */
-    private fun headerRestBox(): CoverMorphMotion.Box? {
+    fun upwardTravel(): Float? {
+        val start = restBox?.invoke() ?: mini.restBoxOnScreen() ?: return null
+        val end = headerRestBox() ?: return null
+        return start.y - end.y
+    }
+
+    private fun headerRestBox(height: Float = drawnHeight()): CoverMorphMotion.Box? {
         if (!header.isAttachedToWindow || header.width <= 0 || header.height <= 0) return null
         val origin = headerOrigin() ?: return null
         oemMatrix.set(header.matrix)
@@ -685,7 +933,7 @@ internal class MiniCardMorph(
         val w = corner[0] - x0
         val dy = nativeDy?.invoke() ?: 0f
         return CoverMorphMotion.Box(origin[0] + x0, origin[1] + y0 + dy,
-            w, drawnHeight() * (w / header.width))
+            w, height * (w / header.width))
     }
 
     /**
@@ -702,8 +950,9 @@ internal class MiniCardMorph(
     private fun headerOrigin(): FloatArray? {
         val parent = header.parent as? View ?: return null
         parent.getLocationOnScreen(xy)
-        return floatArrayOf(xy[0] - parent.scrollX + header.left.toFloat(),
-            xy[1] - parent.scrollY + header.top.toFloat())
+        originPoint[0] = xy[0] - parent.scrollX + header.left.toFloat()
+        originPoint[1] = xy[1] - parent.scrollY + header.top.toFloat()
+        return originPoint
     }
 
     /**
@@ -718,11 +967,12 @@ internal class MiniCardMorph(
         placedBox = box
         placedScale = s
         placedOem.set(oemMatrix)
+        placedOriginX = origin[0]
+        placedOriginY = origin[1]
         morphMatrix.setScale(s, s)
         morphMatrix.postTranslate(box.x - origin[0], box.y - origin[1])
         if (!oemMatrix.isIdentity) {
-            val inverse = Matrix()
-            if (oemMatrix.invert(inverse)) morphMatrix.preConcat(inverse)
+            if (oemMatrix.invert(inverseMatrix)) morphMatrix.preConcat(inverseMatrix)
         }
         header.setAnimationMatrix(morphMatrix)
     }
@@ -826,7 +1076,42 @@ internal class MiniCardMorph(
         return anchors[v]?.get(1)?.takeIf { !it.isNaN() } ?: 0f
     }
 
+    /** The real pill was translated under the finger but retained its size and material while
+     * the row was being laid out. Carry that appearance across the first render. */
+    internal class NoteHandoff(private val source: CoverMorphMotion.Box) {
+        var shapeHome = source
+            private set
+        var direction = -1f
+            private set
+        private var heldRow = source
+        private var releasedAt = -1L
+
+        fun release(now: Long) { releasedAt = now }
+
+        fun finished(now: Long): Boolean = releasedAt >= 0L && now - releasedAt >= NOTE_HANDOFF_MS
+
+        fun frame(home: CoverMorphMotion.Box, row: CoverMorphMotion.Box, p: Float, now: Long): CoverMorphMotion.Box {
+            val held = releasedAt < 0L
+            val k = if (held) 0f else smooth(0f, NOTE_HANDOFF_MS.toFloat(), (now - releasedAt).toFloat())
+            if (held) heldRow = row
+            // setFlightOut can replace the home pill and move or resize its row on UP.
+            shapeHome = blendBox(source, home, k)
+            val destination = blendBox(heldRow, row, k)
+            direction = lerp(if (heldRow.y <= source.y) -1f else 1f, if (row.y <= home.y) -1f else 1f, k)
+            return containerFrame(shapeHome, destination, p)
+        }
+
+        private fun blendBox(a: CoverMorphMotion.Box, b: CoverMorphMotion.Box, share: Float): CoverMorphMotion.Box {
+            if (share <= 0f || a === b) return a
+            if (share >= 1f) return b
+            return CoverMorphMotion.Box(lerp(a.x, b.x, share), lerp(a.y, b.y, share),
+                lerp(a.w, b.w, share), lerp(a.h, b.h, share))
+        }
+    }
+
     companion object {
+        private const val NOTE_HANDOFF_MS = 96L
+
         /** The most progress per second a let-go hands the spring. */
         private const val MAX_RELEASE_SPEED = 5f
 
@@ -838,6 +1123,10 @@ internal class MiniCardMorph(
 
         /** The nudge spring runs in hundreds of pixels, the scale its thresholds were made for. */
         private const val NUDGE_UNIT = 100f
+
+        /** Signed offset from this frame's live box to the top edge the finger holds. */
+        fun heldNudge(framedTop: Float, towardNative: Float, fingerTop: Float): Float =
+            (fingerTop - framedTop) * towardNative
 
         /**
          * The container runs straight between the two, unlike the artwork's bowed path: a
@@ -900,6 +1189,30 @@ internal class MiniCardMorph(
          */
         fun materialOut(p: Float) = 1f - smooth(0.45f, 0.85f, p)
 
+        /** The two glasses' cross-over where the row is at rest, leaving it and arriving (liftAt, handOff). */
+        const val CROSS_MS = 90L
+
+        /** A pull this far from the row (in progress) ends the leaving cross-over, whatever the time. */
+        const val LIFT_WAY = 0.1f
+
+        /**
+         * [holdMaterial]: whole for as long as the morph runs; the hand-over to the row's glass
+         * is crossed over where the row is at rest (liftAt, handOff), since the row's draws
+         * again in the very frame its transform comes off. Faded over the last 3% instead, a
+         * slow pull spent 7 frames (134ms, logged 2026-11-04) with the row's glass not drawn
+         * and the pill's going.
+         */
+        @Suppress("UNUSED_PARAMETER")
+        fun materialHeld(p: Float) = 1f
+
+        /**
+         * [holdMaterial]: the pill's content comes back into focus before it lands. Its lines
+         * are the card's by then (words, colour, place - pieceMix is done at 0.5), and the card's
+         * own are under the held glass and cannot be sharp: left at full blur to the handover,
+         * the card sat in place blurred through the list's slow last stretch (#122, 2026-11-04).
+         */
+        fun heldPillBlur(p: Float) = pillBlur(p) * (1f - smooth(0.7f, 0.9f, p))
+
         fun smooth(start: Float, end: Float, value: Float): Float {
             val t = ((value - start) / (end - start)).coerceIn(0f, 1f)
             return t * t * (3f - 2f * t)
@@ -915,5 +1228,39 @@ internal class MiniCardMorph(
             if (x <= 0f || limit <= 0f) return 0f
             return limit * (1f - 1f / (x * give / limit + 1f))
         }
+    }
+}
+
+/** A quick fling can deliver most of the pull in one batched MOVE. Advance the actual
+ * container on display frames, with the same fraction for its width, top and side offset. */
+internal class NotePullFrames(initialTop: Float, initialX: Float, travel: Float) {
+    var progress = 0f
+        private set
+    var top = initialTop
+        private set
+    var offsetX = initialX
+        private set
+    private val span = abs(travel).coerceAtLeast(1f)
+    private var targetProgress = 0f
+    private var targetTop = initialTop
+    private var targetX = initialX
+
+    fun target(progress: Float, top: Float, offsetX: Float) {
+        targetProgress = progress
+        targetTop = top
+        targetX = offsetX
+    }
+
+    fun advance(dtSeconds: Float) {
+        val dp = targetProgress - progress
+        val dy = targetTop - top
+        val dx = targetX - offsetX
+        val distance = maxOf(abs(dp), abs(dy) / span, abs(dx) / span)
+        if (distance == 0f) return
+        val step = 5f * dtSeconds.coerceIn(0f, 1f / 60f)
+        val t = minOf(1f, step / distance)
+        progress += dp * t
+        top += dy * t
+        offsetX += dx * t
     }
 }

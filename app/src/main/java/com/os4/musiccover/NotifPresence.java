@@ -1,5 +1,7 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.clock.ClockRoom;
+
 import com.os4.musiccover.island.MiniPlayerRuntime;
 import java.lang.reflect.Method;
 
@@ -48,7 +50,7 @@ public final class NotifPresence {
                     sUpdate = m;
                 }
             }
-            Xp.hookAll(panel, NAME, chain -> {
+            Xp.hookAll("sysui.notif.presence", panel, NAME, chain -> {
                 Object[] args = chain.getArgs().toArray();
                 if (args.length != 2 || !(args[1] instanceof Boolean)) return chain.proceed();
                 sPanel = args[0];
@@ -93,12 +95,12 @@ public final class NotifPresence {
      * Asked whenever the room under the clock is worked out again, which is whenever the rows
      * move: throws the switch again if what we passed on no longer matches.
      */
-    static void recheck() {
+    public static void recheck() {
         recheck(false);
     }
 
     /** @param force skip the rate limit - the cover has just let go, and no frame follows. */
-    static void recheck(boolean force) {
+    public static void recheck(boolean force) {
         final Object panel = sPanel;
         final Method m = sUpdate;
         if (panel == null || m == null) return;
@@ -108,7 +110,7 @@ public final class NotifPresence {
         if (wanted(sSystemSays) == shown(panel)) return;
         android.view.View v = Main.sContainer;
         if (v == null) return;
-        v.post(() -> {
+        Gen.postOn(v, () -> {
             if (wanted(sSystemSays) == shown(panel)) return;
             sOurs = true;
             try {

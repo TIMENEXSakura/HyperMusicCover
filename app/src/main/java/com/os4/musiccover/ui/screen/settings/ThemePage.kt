@@ -1,6 +1,7 @@
 package com.os4.musiccover.ui.screen.settings
 
 import com.os4.musiccover.ui.util.nextCard
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import com.os4.musiccover.ui.util.FoldUnder
 import androidx.compose.foundation.layout.Column
@@ -17,7 +18,7 @@ import com.os4.musiccover.R
 import com.os4.musiccover.ui.util.PageScaffold
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
+import com.os4.musiccover.ui.util.AppDropdownPreference
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 
 /**
@@ -38,6 +39,11 @@ import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 fun ThemePageView(
     currentMode: ColorSchemeMode,
     onModeChange: (ColorSchemeMode) -> Unit,
+    useOs4Ui: Boolean,
+    os4Supported: Boolean,
+    onUseOs4UiChange: (Boolean) -> Unit,
+    cardGlass: Boolean,
+    onCardGlassChange: (Boolean) -> Unit,
     isFloatingNavbar: Boolean,
     onFloatingNavbarChange: (Boolean) -> Unit,
     isLiquidGlass: Boolean,
@@ -52,11 +58,26 @@ fun ThemePageView(
         onBack = onBack,
     ) {
         item(key = "theme") {
-            Card(
+            AppCard(
                 modifier = Modifier.firstCard()
                     .padding(bottom = 12.dp)
             ) {
                 Column {
+                    // The whole app's look, and the first thing on the page because everything
+                    // under it depends on the answer. Hidden where the device cannot render
+                    // glass: an option that would silently do nothing is worse than no option.
+                    if (os4Supported) {
+                        val styles = listOf(
+                            stringResource(R.string.ui_style_os4),
+                            stringResource(R.string.ui_style_os3),
+                        )
+                        AppDropdownPreference(
+                            title = stringResource(R.string.ui_style),
+                            items = styles,
+                            selectedIndex = if (useOs4Ui) 0 else 1,
+                            onSelectedIndexChange = { onUseOs4UiChange(it == 0) },
+                        )
+                    }
                     val modes = listOf(
                         stringResource(R.string.theme_system),
                         stringResource(R.string.theme_light),
@@ -77,7 +98,7 @@ fun ThemePageView(
                     val currentIndex =
                         modesEnum.indexOf(currentMode).takeIf { it >= 0 } ?: 0
 
-                    WindowDropdownPreference(
+                    AppDropdownPreference(
                         title = stringResource(R.string.theme_mode),
                         summary = modes[currentIndex],
                         items = modes,
@@ -86,31 +107,49 @@ fun ThemePageView(
                         onExpandedChange = { expanded = it }
                     )
 
-                    SwitchPreference(
-                        title = stringResource(R.string.floating_navbar),
-                        summary = stringResource(R.string.floating_navbar_summary),
-                        checked = isFloatingNavbar,
-                        onCheckedChange = onFloatingNavbarChange
-                    )
-
-                    // Glass is a style of the floating bar, so the row for it only exists while
-                    // that bar is the one on screen. Expanding rather than appearing keeps the
-                    // card's height continuous - the switch below does not jump.
-                    FoldUnder(isFloatingNavbar) {
+                    // Only means something while OS4 is the interface being drawn.
+                    if (os4Supported && useOs4Ui) {
                         SwitchPreference(
-                            title = stringResource(R.string.liquid_glass),
-                            summary = stringResource(R.string.liquid_glass_summary),
-                            checked = isLiquidGlass,
-                            onCheckedChange = onLiquidGlassChange
+                            title = stringResource(R.string.card_glass),
+                            summary = stringResource(R.string.card_glass_summary),
+                            checked = cardGlass,
+                            onCheckedChange = onCardGlassChange,
                         )
                     }
 
-                    SwitchPreference(
-                        title = stringResource(R.string.blur_enabled),
-                        summary = stringResource(R.string.blur_enabled_summary),
-                        checked = isBlurEnabled,
-                        onCheckedChange = onBlurEnabledChange
-                    )
+                    // The three switches below only describe the OS3 chrome, which OS4 replaces
+                    // wholesale. Folded rather than disabled, and only folded while OS4 is what
+                    // is actually drawn - off, they are exactly the switches they always were,
+                    // values kept.
+                    FoldUnder(!(useOs4Ui && os4Supported)) {
+                        Column {
+                            SwitchPreference(
+                                title = stringResource(R.string.floating_navbar),
+                                summary = stringResource(R.string.floating_navbar_summary),
+                                checked = isFloatingNavbar,
+                                onCheckedChange = onFloatingNavbarChange
+                            )
+
+                            // Glass is a style of the floating bar, so the row for it only exists
+                            // while that bar is the one on screen. Expanding rather than appearing
+                            // keeps the card's height continuous - the switch below does not jump.
+                            FoldUnder(isFloatingNavbar) {
+                                SwitchPreference(
+                                    title = stringResource(R.string.liquid_glass),
+                                    summary = stringResource(R.string.liquid_glass_summary),
+                                    checked = isLiquidGlass,
+                                    onCheckedChange = onLiquidGlassChange
+                                )
+                            }
+
+                            SwitchPreference(
+                                title = stringResource(R.string.blur_enabled),
+                                summary = stringResource(R.string.blur_enabled_summary),
+                                checked = isBlurEnabled,
+                                onCheckedChange = onBlurEnabledChange
+                            )
+                        }
+                    }
                 }
             }
         }

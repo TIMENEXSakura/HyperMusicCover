@@ -1,0 +1,2 @@
+# MiniPlayerPartsTest: what each mini player part still reaches through the whole controller.
+# One "<file> <reference>" per line; it only gets shorter (MiniPlayerController plan, M2).

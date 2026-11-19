@@ -1,4 +1,11 @@
 package com.os4.musiccover;
+import com.os4.musiccover.card.MediaCard;
+import com.os4.musiccover.clock.ClockCollapse;
+import com.os4.musiccover.clock.ClockGlass;
+import com.os4.musiccover.clock.ClockViews;
+import com.os4.musiccover.cover.CoverPush;
+import com.os4.musiccover.cover.Prefetch;
+import com.os4.musiccover.Gen;
 
 import android.animation.ValueAnimator;
 import android.content.Context;
@@ -26,13 +33,13 @@ import java.lang.reflect.Method;
  * ink reports, the geometry and transition traces, the AOD probe, the frame census and the
  * looper/queue dumps. Read-only by intent - nothing here is on the path of drawing the cover.
  *
- * The op dispatch that calls into it is still Main.registerReceiver.
+ * The op dispatch that calls into it is still Main.boot.
  *
  * Carved out of Main as it was (2026-10-14, after PreviewShots): every member moved whole with
  * its comments, references across the line prefixed with Main. or Diagnostics., nothing else
  * changed.
  */
-final class Diagnostics {
+public final class Diagnostics {
     private Diagnostics() {}
 
     /** Dumps the declared API of one view in the clock tree, to find the size knobs. */
@@ -102,8 +109,15 @@ final class Diagnostics {
      * the modes instead of guessing at integers.
      */
     static void dumpClockStyleInfo() {
+        // The container class is missing on a build that renamed it, and then so are the
+        // clock's features (FeatureHost skips them); there is nothing of the clock to dump.
+        Class<?> container = Main.sContainerCls;
+        if (container == null) {
+            Xp.log(Main.TAG + "ClockStyleInfo: no clock container class on this build");
+            return;
+        }
         try {
-            Class<?> tv = Xp.findClass(Main.CLS_TIME_VIEW, Main.sContainerCls.getClassLoader());
+            Class<?> tv = Xp.findClass(Main.CLS_TIME_VIEW, container.getClassLoader());
             Class<?> info = tv.getDeclaredMethod("getClockStyleInfo").getReturnType();
             Xp.log(Main.TAG + "ClockStyleInfo = " + info.getName());
             for (Class<?> c = info; c != null && c != Object.class; c = c.getSuperclass()) {
@@ -187,7 +201,7 @@ final class Diagnostics {
     static void dumpGeom() {
         final View v = Main.sContainer;
         if (v == null) { Xp.log(Main.TAG + "geom: no container"); return; }
-        v.post(new Runnable() {
+        Gen.postOn(v, new Runnable() {
             @Override
             public void run() {
                 try {
@@ -218,7 +232,7 @@ final class Diagnostics {
      * sInkUnit and the cached box are what the next real placement is made from and a diagnostic
      * that moves them is measuring itself.
      */
-    static RectF measureLiveBox() {
+    public static RectF measureLiveBox() {
         RectF keepBox = ClockViews.sGlyphCache;
         long keepAt = ClockViews.sGlyphAt;
         float keepUnit = ClockViews.sInkUnit;
@@ -249,7 +263,7 @@ final class Diagnostics {
      * something else, `dtop` moves instead. One or the other, and no way to tell them apart from
      * a settled reading.
      */
-    static volatile long sGeomTraceUntil;
+    public static volatile long sGeomTraceUntil;
 
     static int sGeomTraceN;
 
@@ -263,7 +277,7 @@ final class Diagnostics {
         View v = Main.sContainer;
         if (v != null) {
             try {
-                v.getViewTreeObserver().addOnPreDrawListener(sGeomTraceL);
+                Gen.preDraw(v, sGeomTraceL);
                 sGeomTraced = v;
             } catch (Throwable t) {
                 Xp.log(Main.TAG + "geomtrace not installed: " + t);
@@ -277,7 +291,7 @@ final class Diagnostics {
         sGeomTraced = null;
         if (v == null) return;
         try {
-            v.getViewTreeObserver().removeOnPreDrawListener(sGeomTraceL);
+            Gen.unpreDraw(v, sGeomTraceL);
         } catch (Throwable ignored) {
         }
     }
@@ -393,7 +407,7 @@ final class Diagnostics {
     static void dumpInk() {
         final View v = Main.sContainer;
         if (v == null) { Xp.log(Main.TAG + "ink: no container"); return; }
-        v.post(new Runnable() {
+        Gen.postOn(v, new Runnable() {
             @Override
             public void run() {
                 for (View root : Main.clockRoots()) {
@@ -493,7 +507,7 @@ final class Diagnostics {
     static void pokeGlassData(final int idx, final float value) {
         final View v = Main.sContainer;
         if (v == null) { Xp.log(Main.TAG + "no clock container"); return; }
-        v.post(new Runnable() {
+        Gen.postOn(v, new Runnable() {
             @Override
             public void run() {
                 for (View root : Main.clockRoots()) {
@@ -604,7 +618,7 @@ final class Diagnostics {
                 return true;
             }
         };
-        root.getViewTreeObserver().addOnPreDrawListener(sTrace);
+        Gen.preDraw(root, sTrace);
     }
 
     /**
@@ -668,7 +682,7 @@ final class Diagnostics {
         sTrace = null;
         if (on == null || t == null) return;
         try {
-            on.getViewTreeObserver().removeOnPreDrawListener(t);
+            Gen.unpreDraw(on, t);
         } catch (Throwable ignored) {
         }
     }
@@ -746,13 +760,18 @@ final class Diagnostics {
     static void dumpClockViewTypes() {
         final View v = Main.sContainer;
         if (v == null) { Xp.log(Main.TAG + "viewtypes: no container"); return; }
-        v.post(new Runnable() {
+        Gen.postOn(v, new Runnable() {
             @Override
             public void run() {
                 Class<?> cvt;
                 Object[] all;
+                Class<?> container = Main.sContainerCls;
+                if (container == null) {
+                    Xp.log(Main.TAG + "viewtypes: no clock container class on this build");
+                    return;
+                }
                 try {
-                    cvt = Xp.findClass(Main.CLS_CLOCK_VIEW_TYPE, Main.sContainerCls.getClassLoader());
+                    cvt = Xp.findClass(Main.CLS_CLOCK_VIEW_TYPE, container.getClassLoader());
                     all = cvt.getEnumConstants();
                 } catch (Throwable t) {
                     Xp.log(Main.TAG + "viewtypes: no ClockViewType (" + Main.CLS_CLOCK_VIEW_TYPE + "): " + t);
@@ -811,7 +830,7 @@ final class Diagnostics {
           .append(" moduleScreen=").append(Main.sScreenW).append('x').append(Main.sScreenH)
           .append(" statusBar=").append(sysDimen(v, "status_bar_height"))
           .append("\n");
-        sb.append("state: cover=").append(Main.sCoverMode).append(" auto=").append(Main.sAuto)
+        sb.append("state: cover=").append(Main.sCoverMode).append(" auto=").append(Settings.AUTO.on())
           .append(" card=").append(MediaCard.sCardKnown ? (MediaCard.sCardShowing ? "showing" : "gone") : "unknown")
           .append(" keyguard=").append(Main.onKeyguardNow())
           .append(" videoWallpaper=").append(Main.sVideoWallpaper)
@@ -819,24 +838,23 @@ final class Diagnostics {
           .append("\nhold: y=").append(Main.sHoldY)
           .append(" lastSystem=").append(Main.r1(Main.sLastSystemY))
           .append("\nclock: ").append(ClockCollapse.describe()).append('\n')
-          .append(" clockH=").append(Main.r1(Main.sClockHeightDp)).append("dp")
-          .append(" size=").append(Float.isNaN(Main.sClockSize) ? "dp" : Main.r3(Main.sClockSize))
-          .append(" offset=").append(Main.r1(Main.sClockOffsetDp)).append("dp")
-          .append(" response=").append(Main.r2(Main.sClockResponse)).append("s")
-          .append(" fades=").append(Main.fadeMsFor(Main.sClockResponse)).append("ms")
+          .append(" clockH=").append(Main.r1(Settings.CLOCK_HEIGHT.get())).append("dp")
+          .append(" size=").append(Float.isNaN(Settings.CLOCK_SIZE.get()) ? "dp" : Main.r3(Settings.CLOCK_SIZE.get()))
+          .append(" offset=").append(Main.r1(Settings.CLOCK_OFFSET.get())).append("dp")
+          .append(" response=").append(Main.r2(Settings.SPRING.get())).append("s")
+          .append(" fades=").append(Main.fadeMsFor(Settings.SPRING.get())).append("ms")
           // Whether the app's glass slider is live at all: the morph exists only on the styles
           // whose clock view has updateGlassValue, and this is what tells the app which those
           // are. The first thing to look at when the slider appears to do nothing.
           .append(" anchored=").append(ClockViews.anchoredStyle())
           .append(" glassStyle=").append(ClockGlass.clockHasGlass())
-          .append("\ndate: rest=").append(Main.r1(ClockCollapse.coverDateY(ClockViews.visibleDate())))
-          .append("px from the top; cover mode leaves the date there and hangs the clock under"
-                  + " it")
+          .append("\nblock: top=").append(Main.r1(ClockCollapse.coverBlockTop()))
+          .append("px; anchored to window safe area, date optional")
           .append("\ngap=").append(Main.CLOCK_GAP_DP).append("dp\n");
 
         View date = ClockViews.visibleDate();
         if (date == null) {
-            sb.append("date: NOT FOUND - nothing to anchor the clock to\n");
+            sb.append("date: hidden or absent; no header space reserved\n");
         } else {
             int[] loc = new int[2];
             date.getLocationOnScreen(loc);
@@ -1194,7 +1212,7 @@ final class Diagnostics {
         boolean sbDone = false;
         StringBuilder sb = new StringBuilder("aodprobe cover=" + Main.sCoverMode
                 + " screenOn=" + Main.sScreenOn + " grey=" + Main.sAodGrey
-                + " aodsmall=" + Main.sAodSmall + " fullAod=" + Main.fullAodOn()
+                + " aodsmall=" + Settings.AOD_SMALL.on() + " fullAod=" + Main.fullAodOn()
                 + " aodFull=" + ClockCollapse.aodFullScreen()
                 + " held=" + ClockCollapse.aodHeld()
                 + " coverGlass=" + (ClockGlass.sAodCoverGlassSet
@@ -1427,7 +1445,7 @@ final class Diagnostics {
     static void dumpOemTranslation(final float y) {
         final View v = Main.sContainer;
         if (v == null) { Xp.log(Main.TAG + "oemtrans: no container"); return; }
-        v.post(new Runnable() {
+        Gen.postOn(v, new Runnable() {
             @Override
             public void run() {
                 Object helper = null, anim = null, tr = null;

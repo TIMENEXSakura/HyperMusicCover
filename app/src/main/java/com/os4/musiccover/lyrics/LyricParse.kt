@@ -1,5 +1,7 @@
 package com.os4.musiccover.lyrics
+import com.os4.musiccover.Settings
 import com.os4.musiccover.Xp
+import com.mocharealm.accompanist.lyrics.core.model.ISyncedLine
 import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeAlignment
 import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
 import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
@@ -63,7 +65,7 @@ object LyricParse {
      * The same again with a romanisation beside the translation - QQ Music, NetEase and Kuwo
      * ship one for Japanese and Korean songs, as a third timed text joined by time like the
      * translation. Kept on the line as its own field, drawn above the translation under a
-     * switch of its own (LockLyrics.sRoma).
+     * switch of its own (Settings.LYRIC_ROMA).
      */
     @JvmStatic
     fun parse(body: String, translation: String?, roma: String?): List<LyricLine> {
@@ -319,22 +321,23 @@ object LyricParse {
 
     /** The same line carrying a translation it did not come with. */
     private fun withTranslation(line: LyricLine, text: String): LyricLine {
-        val copy = LyricLine(line.text, text, line.roma, line.start, line.end, line.opposite,
+        val copy = LyricLine(line.text, text, line.roma, line.start, line.voiceEnd, line.opposite,
             line.sylStart, line.sylEnd, line.charEnd)
-        copy.bg = line.bg
+        copy.copyBackgrounds(line)
         return copy
     }
 
     /** The same line carrying a romanisation it did not come with. */
     private fun withRoma(line: LyricLine, roma: String): LyricLine {
-        val copy = LyricLine(line.text, line.translation, roma, line.start, line.end,
+        val copy = LyricLine(line.text, line.translation, roma, line.start, line.voiceEnd,
             line.opposite, line.sylStart, line.sylEnd, line.charEnd)
-        copy.bg = line.bg
+        copy.copyBackgrounds(line)
         return copy
     }
 
     @JvmStatic
     fun parse(body: String): List<LyricLine> {
+        val flexibleDuet = Settings.LYRIC_FLEX_DUET.on()
         // lyrics-core throws on lyrics it cannot make sense of - EnhancedLrcParser's
         // rearrangeUncheckedLineTime trips SyncedLine's require() on NetEase 2057709543 (邓紫棋
         // Pasión). Uncaught on a worker thread that is the whole of SystemUI going down, once per
@@ -342,13 +345,21 @@ object LyricParse {
         // no lyric.
         val prepared = bracketWords(body)
         val lyrics = try {
-            AutoParser().parse(prepared.body)
+            AutoParser().parse(TtmlVoices.parserBody(prepared.body, flexibleDuet))
         } catch (t: Throwable) {
             // The log is SystemUI's; on the JVM the tests run on it is not there to write to.
             runCatching { Xp.log("[MCLyric] the parser gave up on a lyric (" + body.length + " chars): " + t) }
             return emptyList()
         }
-        val src = lyrics.lines
+        val resolved = TtmlVoices.resolve(prepared.body, unswallow(lyrics.lines, prepared.body), flexibleDuet)
+        val src = resolved.lines
+        fun placed(source: ISyncedLine, converted: LyricLine): LyricLine {
+            val role = resolved.placements[source]
+            val positioned = role?.side?.let { relabel(converted, 0, it) } ?: converted
+            return if (role?.backing == true || source is KaraokeLine.AccompanimentKaraokeLine) {
+                unwrapBackground(positioned)
+            } else positioned
+        }
         val out = ArrayList<LyricLine>(src.size)
         // Where the tail of a line may run to when the file left it without an end of its own:
         // the arrival of the line after it. Looked up by time and not read off the list: the list
@@ -357,7 +368,10 @@ object LyricParse {
         // the last word down to the few milliseconds before the echo.
         val mains = src.filter { it !is KaraokeLine.AccompanimentKaraokeLine }
             .map { it.start }.sorted().toIntArray()
-        for (line in src) {
+        // In time order: "the last one started by then" below is read off what is already out,
+        // and the parser does not promise its lines in order.
+        for (line in src.sortedBy { it.start }) {
+            try {
             val nextStart = nextAfter(mains, line.start, line.end)
             when (line) {
                 // Background vocals overlap the main line in time, so they are not lines of their
@@ -365,43 +379,241 @@ object LyricParse {
                 // the focus for the length of an echo. They hang under the main line they belong
                 // to (the last one started by then), and stretch it if they outlast it.
                 is KaraokeLine.AccompanimentKaraokeLine -> {
-                    val b = karaoke(line, nextStart) ?: continue
-                    val owner = out.lastOrNull { it.start <= b.start } ?: continue
-                    if (owner.bg == null) {
-                        owner.bg = b
-                        if (b.end > owner.end) owner.end = b.end
-                    }
+                    val b = karaoke(line, nextStart)?.let { placed(line, it) } ?: continue
+                    val owner = out.lastOrNull { it.start <= b.start }
+                    if (owner == null) out.add(b) else owner.addBackground(b)
                 }
                 is KaraokeLine -> {
-                    val main = karaoke(line, nextStart)
+                    // Where the accompaniment actually arrives. The branch above is written
+                    // for a parser that hands background vocals back as lines of their own,
+                    // and lyrics-core 0.4.7 does not: it hangs them on the main line as a
+                    // property, so that branch never fires and every background vocal was
+                    // being dropped. Both are kept - which shape comes back is the library's
+                    // business, and a version that goes back to separate lines still works.
+                    // Every one of them: a TTML line can carry several x-bg spans (PR #106).
+                    val backs = (line as? KaraokeLine.MainKaraokeLine)?.accompanimentLines
+                        .orEmpty().mapNotNull { acc -> karaoke(acc, nextStart)?.let { placed(acc, it) } }
+                    val lead = karaoke(line, nextStart)?.let { placed(line, it) }
+                    // A line with nothing but a background vocal in it - a TTML <p> holding only
+                    // an x-bg - is that vocal, sung as a line of its own. Hung under an empty
+                    // lead it would leave a blank row of full-size text above it.
+                    val main = lead ?: backs.firstOrNull()?.let { b ->
+                        if (b.translation == null && line.translation != null) {
+                            withTranslation(b, line.translation!!)
+                        } else b
+                    }
                     if (main != null) {
                         out.add(main)
-                        // Where the accompaniment actually arrives. The branch above is written
-                        // for a parser that hands background vocals back as lines of their own,
-                        // and lyrics-core 0.4.7 does not: it hangs them on the main line as a
-                        // property, so that branch never fires and every background vocal was
-                        // being dropped. Both are kept - which shape comes back is the library's
-                        // business, and a version that goes back to separate lines still works.
-                        val acc = (line as? KaraokeLine.MainKaraokeLine)
-                            ?.accompanimentLines?.firstOrNull()
-                        val b = acc?.let { karaoke(it, nextStart) }
-                        if (b != null) {
-                            main.bg = b
-                            if (b.end > main.end) main.end = b.end
-                        }
+                        for (b in if (lead == null) backs.drop(1) else backs) main.addBackground(b)
                     }
                 }
                 is SyncedLine -> {
-                    // Instrumental breaks arrive as empty lines; a row of nothing would take a
-                    // slot in the stack for its whole duration.
-                    if (line.content.isBlank()) continue
-                    out.add(LyricLine(line.content.trim(), line.translation,
-                        line.start, line.end, false, null, null, null))
+                        // Instrumental breaks arrive as empty lines; a row of nothing would take a
+                        // slot in the stack for its whole duration.
+                        if (line.content.isBlank()) continue
+                        val plain = LyricLine(line.content.trim(), line.translation, line.start, line.end,
+                            false, null, null, null)
+                        out.add(placed(line, plain))
+                    }
                 }
+            } catch (error: Exception) {
+                runCatching { Xp.w("[MCLyric] invalid row skipped: $error") }
             }
         }
         out.sortBy { it.start }
-        return speakers(withLanes(out, prepared.lanes))
+        return speakers(withLanes(out, prepared.lanes), flexibleDuet)
+    }
+
+    /**
+     * Lines the parser took for the translation of the line before them (#113). lyrics-core makes
+     * any line starting within 150ms of another, in other words, that line's translation - and a
+     * file that crowds its credits into the first fraction of a second ("Lyrics by" at 60ms,
+     * "Composed by" at 130, "Produced by" at 200, the first sung line at 271) lost every other
+     * one, the first sung line with them: it went under "Produced by" as its translation, and its
+     * own translation, at its start with nothing left there to belong to, was drawn as the line.
+     *
+     * A translation sits at its line's start (LANE_MS). A row of the body further off than that
+     * is a line, and goes back to being one - parsed on its own, so its word timings come with
+     * it - taking the row left on its own at its start as its translation.
+     */
+    private fun unswallow(lines: List<ISyncedLine>, body: String): List<ISyncedLine> {
+        val rows = body.split('\n').mapNotNull { r ->
+            val m = LRC_TIME.find(r.trimStart()) ?: return@mapNotNull null
+            Triple(ms(m) ?: return@mapNotNull null,
+                r.replace(LRC_TAG, "").replace(ANGLE_TAG, "").trim(), r.trim())
+        }
+        if (rows.isEmpty()) return lines
+        val out = lines.toMutableList()
+        var fixed = 0
+        var i = 0
+        while (i < out.size) {
+            val line = out[i]
+            val tr = translationOf(line)?.trim()
+            val row = if (tr.isNullOrEmpty()) null else rows.firstOrNull {
+                val d = kotlin.math.abs(it.first - line.start)
+                it.second == tr && d > LANE_MS && d <= SWALLOW_MS
+            }
+            if (row == null) {
+                i++
+                continue
+            }
+            var back = try {
+                AutoParser().parse(row.third).lines.firstOrNull()
+            } catch (t: Throwable) {
+                null
+            }
+            if (back == null || back.start != row.first) {
+                i++
+                continue
+            }
+            out[i] = untranslated(line, row.first)
+            // A plain row parsed alone has no next line to end at.
+            if (back is SyncedLine) {
+                val next = out.map { it.start }.filter { it > row.first }.minOrNull()
+                back = back.copy(end = next ?: maxOf(back.end, line.end))
+            }
+            val text = textOf(back)
+            val own = out.indices.firstOrNull { j ->
+                val o = out[j]
+                j != i && o is SyncedLine && o.translation == null &&
+                    kotlin.math.abs(o.start - row.first) <= LANE_MS && o.content.trim() != text
+            }
+            if (own != null) {
+                back = withTranslationOf(back, (out[own] as SyncedLine).content.trim())
+                out.removeAt(own)
+                if (own < i) i--
+            }
+            out.add(i + 1, back)
+            fixed++
+            i++
+        }
+        if (fixed == 0) return lines
+        runCatching { Xp.log("[MCLyric] $fixed lines taken for a translation put back") }
+        return out.sortedBy { it.start }
+    }
+
+    /**
+     * How far apart lyrics-core lets a line and its translation start; past it nothing is
+     * paired, so nothing further off can have been swallowed.
+     */
+    private const val SWALLOW_MS = 150
+
+    private fun translationOf(line: ISyncedLine): String? = when (line) {
+        is KaraokeLine -> line.translation
+        is SyncedLine -> line.translation
+        else -> null
+    }
+
+    private fun textOf(line: ISyncedLine): String = when (line) {
+        is KaraokeLine -> line.syllables.joinToString("") { it.content }.trim()
+        is SyncedLine -> line.content.trim()
+        else -> ""
+    }
+
+    private fun withTranslationOf(line: ISyncedLine, text: String?): ISyncedLine = when (line) {
+        is KaraokeLine.MainKaraokeLine -> line.copy(translation = text)
+        is KaraokeLine.AccompanimentKaraokeLine -> line.copy(translation = text)
+        is SyncedLine -> line.copy(translation = text)
+        else -> line
+    }
+
+    /** A line without the translation it swallowed, ending no later than that line starts. */
+    private fun untranslated(line: ISyncedLine, until: Int): ISyncedLine =
+        if (line is SyncedLine && line.end > until) line.copy(translation = null, end = until)
+        else withTranslationOf(line, null)
+
+    /**
+     * The translation some tag writers leave on the line itself, separated by a thin space
+     * instead of shipped as a row of its own (#95).
+     *
+     * MusicTag for Android and the NetEase exports written by it join a line and its translation
+     * with U+2009 - "Knows me the way I do when I feel overwhelmed\u2009无人像我自己一般了解我"
+     * - and Salt Player reads that separator. lyrics-core does not: the Chinese stayed in the
+     * line's text, drawn at the original's size inside its paragraph, and with no line carrying a
+     * translation the translation switch went and fetched a second one from a catalogue. One
+     * line, two translations, one of them twice the size it should be.
+     *
+     * Only a line that carries CJK is split: U+2009 is a typographic space too, and a Latin line
+     * using one has no translation after it. The head stays the line's text - its word timing
+     * clipped at the separator, since a translation is not sung a syllable at a time - and
+     * everything after becomes its translation, on its own row when there was more than one.
+     * Called on the lines of whichever route answered, before anything reads them, so that borrowing
+     * sees the translations the lyric came with and the layout draws them under the line.
+     */
+    @JvmStatic
+    fun splitInlineTranslations(lines: List<LyricLine>): List<LyricLine> {
+        var changed = false
+        val out = ArrayList<LyricLine>(lines.size)
+        for (line in lines) {
+            val split = splitInline(line)
+            if (split == null) out.add(line) else {
+                out.add(split)
+                changed = true
+            }
+        }
+        return if (changed) out else lines
+    }
+
+    /** The thin and narrow no-break spaces tag writers join a translation to its line with. */
+    private const val THIN_SPACE = '\u2009'
+    private const val NARROW_NO_BREAK_SPACE = '\u202f'
+
+    /** One line with its same-line translation taken off it, or null when it has none. */
+    private fun splitInline(line: LyricLine): LyricLine? {
+        val text = line.text
+        val at = text.indexOfFirst { it == THIN_SPACE || it == NARROW_NO_BREAK_SPACE }
+        if (at <= 0 || at >= text.length - 1) return null
+        if (!hasCjk(text)) return null
+        // The space before the separator is not part of the line either.
+        var cut = at
+        while (cut > 0 && text[cut - 1].isWhitespace()) cut--
+        if (cut == 0) return null
+        val tail = text.substring(at + 1)
+            .split(THIN_SPACE, NARROW_NO_BREAK_SPACE)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (tail.isEmpty()) return null
+        val head = text.substring(0, cut)
+        val rest = tail.joinToString("\n")
+        val translation = line.translation?.let { it + "\n" + rest } ?: rest
+        val starts = line.sylStart
+        val ends = line.sylEnd
+        val chars = line.charEnd
+        if (starts == null || ends == null || chars == null) {
+            val copy = LyricLine(head, translation, line.roma, line.start, line.voiceEnd,
+                line.opposite, null, null, null)
+            copy.copyBackgrounds(line)
+            return copy
+        }
+        // The syllables wholly inside the head stay; the one the separator falls in is cut
+        // there, and the rest - the translation - goes with it. charEnd has to run no further
+        // than the text's new length or the word path indexes past its end.
+        val startsOut = ArrayList<Int>(starts.size)
+        val endsOut = ArrayList<Int>(starts.size)
+        val charsOut = ArrayList<Int>(starts.size)
+        var from = 0
+        for (k in starts.indices) {
+            val to = chars[k]
+            if (from >= cut) break
+            val end = if (to > cut) cut else to
+            if (end > from) {
+                startsOut.add(starts[k])
+                endsOut.add(ends[k])
+                charsOut.add(end)
+            }
+            from = to
+        }
+        if (charsOut.isEmpty()) return null
+        val copy = LyricLine(head, translation, line.roma, line.start, line.voiceEnd,
+            line.opposite, startsOut.toIntArray(), endsOut.toIntArray(), charsOut.toIntArray())
+        copy.copyBackgrounds(line)
+        return copy
+    }
+
+    /** Han, kana or hangul: the scripts a same-line translation is written in. */
+    private fun hasCjk(s: String): Boolean = s.any {
+        it.code in 0x3400..0x4DBF || it.code in 0x4E00..0x9FFF
+            || it.code in 0x3040..0x30FF || it.code in 0xAC00..0xD7AF
     }
 
     /** A body made ready for the parser, and the translations taken off it by their line's start. */
@@ -672,6 +884,8 @@ object LyricParse {
      * by another. The last line of a song has nothing after it, and gets the fallback.
      */
     internal fun nextAfter(sorted: IntArray, t: Int, fallback: Int): Int {
+        // Nothing starts later than the last Int, and t + 1 would wrap round to the first line.
+        if (t == Int.MAX_VALUE) return fallback
         val i = sorted.binarySearch(t + 1)
         val at = if (i >= 0) i else -i - 1
         return if (at < sorted.size) sorted[at] else fallback
@@ -703,6 +917,73 @@ object LyricParse {
         val shown = text.substring(0, n)
         return LyricLine(shown, line.translation, romaOf(line.phonetic, shown), line.start,
             line.end, line.alignment == KaraokeAlignment.End, starts, ends, chars)
+    }
+
+    /**
+     * A background vocal without the one pair of brackets wrapping all of it.
+     *
+     * The line is already drawn smaller and fainter under the one it echoes, which is what the
+     * brackets were saying; files and bridges disagree on whether to send them - TTML's x-bg
+     * usually does, inside its first and last words, and Flamingo's published text does while its
+     * words do not (issue #102) - so they are taken off everywhere and every source reads the
+     * same. Only a pair that opens the line and closes it: "(oh) yeah (oh)" keeps both of its
+     * own, and so does an unpaired one. ASCII and full-width alike.
+     *
+     * The syllables keep their timing and lose the characters taken off; a syllable that was
+     * nothing but a bracket goes with it.
+     */
+    internal fun unwrapBackground(line: LyricLine): LyricLine {
+        line.asBacking()
+        val text = line.text
+        var from = 0
+        var until = text.length
+        while (from < until && text[from].isWhitespace()) from++
+        while (until > from && text[until - 1].isWhitespace()) until--
+        if (until - from < 2) return line
+        val open = text[from]
+        val close = when (open) {
+            '(' -> ')'
+            '（' -> '）'
+            else -> return line
+        }
+        if (text[until - 1] != close) return line
+        // The opening bracket has to be the one the last character closes, not one closed earlier.
+        var depth = 0
+        for (k in from until until - 1) {
+            if (text[k] == open) depth++ else if (text[k] == close) depth--
+            if (depth == 0) return line
+        }
+        from++
+        until--
+        while (from < until && text[from].isWhitespace()) from++
+        while (until > from && text[until - 1].isWhitespace()) until--
+        if (until == from) return line
+        val shown = text.substring(from, until)
+        val chars = line.charEnd
+        if (chars == null) {
+            return LyricLine(shown, line.translation, line.roma, line.start, line.voiceEnd,
+                line.opposite, null, null, null).also { it.copyBackgrounds(line) }
+        }
+        val starts = ArrayList<Int>(chars.size)
+        val ends = ArrayList<Int>(chars.size)
+        val cut = ArrayList<Int>(chars.size)
+        var prev = 0
+        for (k in chars.indices) {
+            val c = (chars[k] - from).coerceIn(0, shown.length)
+            if (c <= prev) continue
+            starts.add(line.sylStart[k])
+            ends.add(line.sylEnd[k])
+            cut.add(c)
+            prev = c
+        }
+        if (cut.isEmpty()) {
+            return LyricLine(shown, line.translation, line.roma, line.start, line.voiceEnd,
+                line.opposite, null, null, null).also { it.copyBackgrounds(line) }
+        }
+        // Whatever was left past the last syllable before is drawn by it now.
+        cut[cut.size - 1] = shown.length
+        return LyricLine(shown, line.translation, line.roma, line.start, line.voiceEnd, line.opposite,
+            starts.toIntArray(), ends.toIntArray(), cut.toIntArray()).also { it.copyBackgrounds(line) }
     }
 
     /**
@@ -782,10 +1063,19 @@ object LyricParse {
     private const val MAX_HELD_MS = 4000
 
     /** "筷：" or "Jay: " at the head of a line - a name, then a full- or half-width colon. */
-    private val LABEL = Regex("^([^\\s\\d:：]{1,6})\\s*[:：]\\s*")
+    private val LABEL = Regex("^((?i:harmony|backing|duet)|[^\\s\\d:：]{1,6})\\s*[:：]\\s*")
 
     /** Labels that mean everyone at once. Drawn on the first singer's side. */
     private val TOGETHER = setOf("合", "合唱", "全", "All", "ALL", "all")
+    private val BACKING_SINGER = setOf("和声", "和聲", "和音", "伴唱", "harmony", "backing")
+    private val DUET_SINGER = setOf("对唱", "對唱", "二重唱", "duet")
+    private val CREDITS = setOf("作词", "作詞", "作曲", "编曲", "編曲", "制作", "製作", "演唱")
+    private fun singerLabel(label: String?): String? = when (label) {
+        "男声", "男唱" -> "男"
+        "女声", "女唱" -> "女"
+        else -> if (label?.lowercase() in BACKING_SINGER || label?.lowercase() in DUET_SINGER)
+            label?.lowercase() else label
+    }
 
     /**
      * Duets marked the way NetEase lyrics mark them: the singer's name as a prefix on the line
@@ -796,36 +1086,76 @@ object LyricParse {
      * A name only counts once it has marked two lines, which leaves out the credits at the top
      * ("作词: ...", "作曲: ...") that appear once each. It takes two such names to be a duet; the
      * first to sing is on the left, the second on the right, and the prefix is not shown. A file
-     * whose lines already say which side they are on (TTML's agents) is left as it is.
+     * with explicit male and female labels is a duet even if either label appears only once.
+     * A file whose lines already say which side they are on (TTML's agents) is left as it is.
      */
-    private fun speakers(lines: List<LyricLine>): List<LyricLine> {
-        if (lines.any { it.opposite }) return lines
-        val labels = lines.map { LABEL.find(it.text)?.groupValues?.get(1) }
+    internal fun flexibleSpeakers(lines: List<LyricLine>, enabled: Boolean): List<LyricLine> =
+        if (enabled) speakers(lines, true) else lines
+
+    private fun speakers(lines: List<LyricLine>, flexible: Boolean): List<LyricLine> {
+        val structured = lines.any { it.opposite }
+        val labels = lines.map {
+            val label = LABEL.find(it.text)?.groupValues?.get(1)
+            if (flexible) singerLabel(label) else label
+        }.toMutableList()
+        // A backing-vocal credit among the opening credits names a contributor, not a sung line.
+        var creditAt: Int? = null
+        for (i in lines.indices) {
+            val label = labels[i]
+            if (label in CREDITS) creditAt = lines[i].start
+            else if (label != null && label in BACKING_SINGER && creditAt != null &&
+                lines[i].start - creditAt in 0..2000) {
+                labels[i] = null
+                creditAt = lines[i].start
+            } else creditAt = null
+        }
         val counts = labels.filterNotNull().groupingBy { it }.eachCount()
+        val explicitDuet = flexible && "男" in counts && "女" in counts
+        val hasRole = flexible && labels.any { it != null && (it in BACKING_SINGER || it in DUET_SINGER) }
         val singers = LinkedHashSet<String>()
         for (l in labels) {
-            if (l != null && l !in TOGETHER && (counts[l] ?: 0) >= 2) singers.add(l)
+            if (l != null && l !in CREDITS && l !in TOGETHER && l !in BACKING_SINGER && l !in DUET_SINGER &&
+                ((counts[l] ?: 0) >= 2 || (explicitDuet && (l == "男" || l == "女")))) singers.add(l)
         }
-        if (singers.size < 2) return lines
+        if ((!hasRole && structured) || (singers.size < 2 && !hasRole)) return lines
         val order = singers.toList()
         val out = ArrayList<LyricLine>(lines.size)
         var right = false
+        var harmony = false
         for ((i, line) in lines.withIndex()) {
             val label = labels[i]
-            val known = label != null && (label in TOGETHER || label in singers)
-            if (known) right = label !in TOGETHER && order.indexOf(label) % 2 == 1
+            val backing = flexible && label in BACKING_SINGER
+            val duet = flexible && label in DUET_SINGER
+            if (structured && !backing && !duet) {
+                out.add(line)
+                continue
+            }
+            val together = label != null && label in TOGETHER
+            val known = label != null && (together || backing || duet || label in singers)
+            if (known) {
+                harmony = backing
+                right = backing || duet || (!together && order.indexOf(label) % 2 == 1)
+            }
             val cut = if (known) LABEL.find(line.text)!!.range.last + 1 else 0
-            out.add(relabel(line, cut, right) ?: continue)
+            val sung = relabel(line, cut, right) ?: continue
+            out.add(if (harmony) unwrapBackground(sung) else sung)
         }
         return out
     }
 
     /** The same line with its first `cut` characters gone and put on the given side. */
     private fun relabel(line: LyricLine, cut: Int, opposite: Boolean): LyricLine? {
-        if (cut >= line.text.length) return null
+        if (cut == 0 && line.opposite == opposite) return line
+        if (cut >= line.text.length && line.backgrounds().isEmpty()) return null
+        if (cut >= line.text.length) {
+            val result = LyricLine("", line.translation, line.roma, line.start, line.voiceEnd,
+                opposite, null, null, null)
+            result.copyBackgrounds(line)
+            return result
+        }
         val text = line.text.substring(cut)
         val result = if (line.sylStart == null) {
-            LyricLine(text, line.translation, line.roma, line.start, line.end, opposite,
+            LyricLine(text, line.translation, line.roma, line.start, line.voiceEnd, opposite,
                 null, null, null)
         } else {
             // Syllables that lay wholly inside the prefix go with it; the rest shift left.
@@ -840,10 +1170,10 @@ object LyricParse {
                 chars.add(e)
             }
             if (chars.isEmpty()) return null
-            LyricLine(text, line.translation, line.roma, line.start, line.end, opposite,
+            LyricLine(text, line.translation, line.roma, line.start, line.voiceEnd, opposite,
                 starts.toIntArray(), ends.toIntArray(), chars.toIntArray())
         }
-        result.bg = line.bg
+        result.copyBackgrounds(line)
         return result
     }
 }

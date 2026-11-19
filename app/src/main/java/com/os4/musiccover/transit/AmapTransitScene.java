@@ -1,15 +1,18 @@
 package com.os4.musiccover.transit;
-import com.os4.musiccover.ClockViews;
-import com.os4.musiccover.ClockCollapse;
+import com.os4.musiccover.Settings;
+import com.os4.musiccover.clock.ClockViews;
+import com.os4.musiccover.clock.ClockCollapse;
 import com.os4.musiccover.immersive.CountdownScene;
 import com.os4.musiccover.Http;
 import com.os4.musiccover.immersive.ImmersiveHost;
 import com.os4.musiccover.immersive.ImmersiveScene;
 import com.os4.musiccover.island.LockIslands;
 import com.os4.musiccover.Main;
+import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.island.MiniPlayerRuntime;
 import com.os4.musiccover.PageSpring;
 import com.os4.musiccover.ProbeGuard;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import android.content.Context;
 import android.content.Intent;
@@ -98,7 +101,7 @@ public final class AmapTransitScene implements ImmersiveScene {
         return 30L * 60_000L;
     }
 
-    private final Handler mMain = new Handler(Looper.getMainLooper());
+    private final Handler mMain = Gen.handler();
 
     private AmapTransitCard.Trip mTrip;
     private AmapTransitCard.Card mCard;
@@ -126,15 +129,17 @@ public final class AmapTransitScene implements ImmersiveScene {
 
     // ---------------------------------------------------------------- the switch
 
-    /**
-     * The app's 「高德公交地铁」 switch: off, neither this page nor the trip's island in 高德
-     * (AmapTransitShare.setEnabled) is put up. Held here, in Main's state file; 高德 is told.
-     */
-    public static volatile boolean sOn = true;
+    /** The settings table's effect for 「高德公交地铁」, registered at install (stage 5.1). */
+    public void bindSettings() {
+        Settings.TRANSIT.apply((c, on) -> {
+            setOn(c, on);
+            return true;
+        });
+    }
 
     /** The switch moved ({@code op transitcfg --ez on}): 高德 told, and a page up taken down. */
     public void setOn(Context ctx, boolean on) {
-        sOn = on;
+        Settings.TRANSIT.set(on);
         Xp.log(TAG + "switch " + (on ? "on" : "off"));
         if (!on) mMain.post(() -> end("switch off"));
         tellAmap(ctx);
@@ -144,7 +149,7 @@ public final class AmapTransitScene implements ImmersiveScene {
     public void tellAmap(Context ctx) {
         try {
             ProbeGuard.send(ctx, new Intent(AmapNavScene.AMAP_PROBE).setPackage(PKG)
-                    .putExtra("transiton", sOn));
+                    .putExtra("transiton", Settings.TRANSIT.on()));
         } catch (Throwable t) {
             Xp.log(TAG + "switch not told: " + t);
         }
@@ -154,7 +159,7 @@ public final class AmapTransitScene implements ImmersiveScene {
 
     /** {@code op transit}, any thread. The answer is the state as it is now. */
     public String command(String json, String what, boolean demo) {
-        if (!sOn) {
+        if (!Settings.TRANSIT.on()) {
             // A 高德 that has not heard yet - started before SystemUI, or missed the change.
             if (json != null && !demo && Main.appContext() != null) tellAmap(Main.appContext());
             return "off " + describe();
@@ -176,7 +181,7 @@ public final class AmapTransitScene implements ImmersiveScene {
     }
 
     /** Whether 高德 has a trip on the card now. Main thread. */
-    boolean tripUp() {
+    public boolean tripUp() {
         return mTrip != null;
     }
 
@@ -187,6 +192,7 @@ public final class AmapTransitScene implements ImmersiveScene {
             return;
         }
         boolean was = ready();
+        boolean tripWasUp = tripUp();
         mShares++;
         mTrip = t;
         mTripAt = SystemClock.uptimeMillis();
@@ -208,6 +214,7 @@ public final class AmapTransitScene implements ImmersiveScene {
             if (mDozing) ImmersiveHost.lift(mView);
         }
         if (was != ready()) ImmersiveHost.readyChanged(this);
+        else if (!tripWasUp) LockLyrics.refresh();
     }
 
     private final Runnable mStale = () -> end("silence");
@@ -223,6 +230,7 @@ public final class AmapTransitScene implements ImmersiveScene {
         mEndedBy = by;
         Xp.log(TAG + "ended by " + by);
         if (was) ImmersiveHost.readyChanged(this);
+        else LockLyrics.refresh();
     }
 
     /** The pictures for the card they were asked for, once they are here; main thread. */
@@ -643,8 +651,8 @@ public final class AmapTransitScene implements ImmersiveScene {
         }
 
         private static final ExecutorService IO =
-                Executors.newSingleThreadExecutor(r -> new Thread(r, "mc-transit-art"));
-        private static final Handler MAIN = new Handler(Looper.getMainLooper());
+                Gen.executor("mc-transit-art", Thread.NORM_PRIORITY, false);
+        private static final Handler MAIN = Gen.handler();
 
         /** Fetches [pick] and hands it to [done] on the main thread; nothing if nothing came. */
         static void request(Context ctx, Pick pick, Done done) {

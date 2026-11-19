@@ -4,6 +4,7 @@ package com.os4.musiccover.app
 import com.os4.musiccover.island.MiniPlayerConfig
 import com.os4.musiccover.R
 import com.os4.musiccover.ui.util.FoldUnder
+import com.os4.musiccover.ui.util.AppCard
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -33,7 +34,7 @@ import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
+import com.os4.musiccover.ui.util.AppDropdownPreference
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import kotlin.math.roundToInt
 
@@ -49,7 +50,7 @@ class MiniPlayerActivity : ComponentActivity() {
         val theme = runCatching { ColorSchemeMode.valueOf(settings.themeMode) }
             .getOrDefault(ColorSchemeMode.System)
         setContent {
-            AppTheme(themeMode = theme) { MiniPlayerPage(settings.isBlurEnabled, resumes, ::finish) }
+            AppTheme(themeMode = theme, useOs4Ui = settings.useOs4Ui, cardGlass = settings.cardGlass) { MiniPlayerPage(settings.isBlurEnabled, resumes, ::finish) }
         }
     }
 
@@ -99,12 +100,12 @@ private fun MiniPlayerPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
         onBack = onBack) {
         item(key = "demo") {
             // What the islands do, played on a drawn phone, before the switches that turn them on.
-            Card(Modifier.firstCard()) {
+            AppCard(Modifier.firstCard()) {
                 IslandDemo(Modifier.padding(top = 16.dp))
             }
         }
         item(key = "master") {
-            Card(Modifier.nextCard()) {
+            AppCard(Modifier.nextCard()) {
                 SwitchPreference(title = stringResource(R.string.mini_enabled),
                     // Why it cannot be moved, as every master switch in the app says it: not
                     // answering at all, or answering from a build older than these settings.
@@ -124,8 +125,8 @@ private fun MiniPlayerPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
             FoldUnder(on, settled = ready) {
                 Column {
                     SmallTitle(text = stringResource(R.string.mini_section_look))
-                    Card(Modifier.nextCard()) {
-                        WindowDropdownPreference(
+                    AppCard(Modifier.nextCard()) {
+                        AppDropdownPreference(
                             title = stringResource(R.string.mini_style),
                             items = listOf(stringResource(R.string.mini_style_row), stringResource(R.string.mini_style_stack)),
                             selectedIndex = config.optInt(MiniPlayerConfig.STYLE, MiniPlayerConfig.STYLE_ROW)
@@ -153,13 +154,12 @@ private fun MiniPlayerPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
                         // colours and soft glass and there is nothing to turn off. See
                         // MiniPlayerConfig.NOTIFICATION_MATERIAL.
                         SwitchPreference(title = stringResource(R.string.mini_widen),
-                            summary = stringResource(R.string.mini_widen_summary),
                             checked = config.optBoolean(MiniPlayerConfig.ADAPTIVE_WIDTH),
                             enabled = ready,
                             onCheckedChange = { push(MiniPlayerConfig.ADAPTIVE_WIDTH, it) })
                     }
                     SmallTitle(text = stringResource(R.string.mini_section_notifications))
-                    Card(Modifier.nextCard()) {
+                    AppCard(Modifier.nextCard()) {
                         // Above the grouping it switches off: with ordinary notifications staying
                         // in the system list there is nothing for that row to group.
                         SwitchPreference(title = stringResource(R.string.mini_normals_in_stack),
@@ -183,20 +183,29 @@ private fun MiniPlayerPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
                         }
                     }
                     SmallTitle(text = stringResource(R.string.mini_section_other))
-                    Card(Modifier.nextCard()) {
+                    AppCard(Modifier.nextCard()) {
                         // A switch was here and is gone: the shortcuts always go with the
                         // full-screen doze now. See MiniPlayerConfig.HIDE_AOD_SHORTCUTS.
                         // A switch was here and is gone: a long line scrolls once and rests cut.
                         // See MiniPlayerView.scrollOnce.
+                        SwitchPreference(title = stringResource(R.string.mini_haptic_feedback),
+                            summary = stringResource(R.string.mini_haptic_feedback_summary),
+                            checked = config.optBoolean(MiniPlayerConfig.HAPTIC_FEEDBACK, false),
+                            enabled = ready,
+                            onCheckedChange = { push(MiniPlayerConfig.HAPTIC_FEEDBACK, it) })
                         SwitchPreference(title = stringResource(R.string.mini_nav_keep_on),
                             summary = stringResource(R.string.mini_nav_keep_on_summary),
                             checked = config.optBoolean(MiniPlayerConfig.NAV_KEEP_ON),
                             enabled = ready,
                             onCheckedChange = { push(MiniPlayerConfig.NAV_KEEP_ON, it) })
-                        // No 状态显示在日期后面 row: the placement is fixed with the islands on
-                        // (MiniPlayerRuntime.statusAtDate), so there is nothing left to switch.
+                        // Off puts 勿扰, charging and the like back at the bottom, where the OEM
+                        // keeps them and the pill can cover them (DateStatus).
+                        SwitchPreference(title = stringResource(R.string.mini_status_at_date),
+                            summary = stringResource(R.string.mini_status_at_date_summary),
+                            checked = config.optBoolean(MiniPlayerConfig.STATUS_AT_DATE, true),
+                            enabled = ready,
+                            onCheckedChange = { push(MiniPlayerConfig.STATUS_AT_DATE, it) })
                         SwitchPreference(title = stringResource(R.string.mini_fod_lift),
-                            summary = stringResource(R.string.mini_fod_lift_summary),
                             checked = config.optBoolean(MiniPlayerConfig.FOD_LIFT),
                             enabled = ready,
                             onCheckedChange = { push(MiniPlayerConfig.FOD_LIFT, it) })

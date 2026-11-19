@@ -15,14 +15,34 @@ data class AppSettings(
     val isFloatingNavbar: Boolean = false,
     val isLiquidGlass: Boolean = false,
     val isBlurEnabled: Boolean = true,
+    /**
+     * Whether the app draws the OS4 glass interface. On by default for everyone, new installs
+     * and upgrades alike: the OS3 screens stay one switch away in the theme page, and a device
+     * without runtime shaders falls back to them on its own (`LocalOs4Ui` is false there).
+     */
+    val useOs4Ui: Boolean = true,
+    /**
+     * Whether the OS4 cards draw the bloom frame - the edge stroke and the shadow. Off leaves a
+     * plain card, the way the miuix demo draws its cards; the card's own fill is unchanged.
+     */
+    val cardGlass: Boolean = true,
     val language: String = "",
+    /**
+     * Whether the welcome page has been through. It is not a setting anyone can switch off - the
+     * page is shown once on a first launch and again only from Settings - so it rides along here
+     * solely because this is where the app's own persisted state already lives.
+     */
+    val welcomeShown: Boolean = false,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("themeMode", themeMode)
         put("isFloatingNavbar", isFloatingNavbar)
         put("isLiquidGlass", isLiquidGlass)
         put("isBlurEnabled", isBlurEnabled)
+        put("useOs4Ui", useOs4Ui)
+        put("cardGlass", cardGlass)
         put("language", language)
+        put("welcomeShown", welcomeShown)
     }.toString(2)
 
     companion object {
@@ -31,6 +51,9 @@ data class AppSettings(
         private const val KEY_FLOATING_NAVBAR = "floating_navbar"
         private const val KEY_LIQUID_GLASS = "liquid_glass"
         private const val KEY_BLUR_ENABLED = "blur_enabled"
+        private const val KEY_OS4_UI = "os4_ui"
+        private const val KEY_CARD_GLASS = "card_glass"
+        private const val KEY_WELCOME_SHOWN = "welcome_shown"
 
         fun fromJson(json: String): AppSettings = try {
             val obj = JSONObject(json)
@@ -39,7 +62,10 @@ data class AppSettings(
                 isFloatingNavbar = obj.optBoolean("isFloatingNavbar", false),
                 isLiquidGlass = obj.optBoolean("isLiquidGlass", false),
                 isBlurEnabled = obj.optBoolean("isBlurEnabled", true),
+                useOs4Ui = obj.optBoolean("useOs4Ui", true),
+                cardGlass = obj.optBoolean("cardGlass", true),
                 language = obj.optString("language", ""),
+                welcomeShown = obj.optBoolean("welcomeShown", true),
             )
         } catch (_: Exception) {
             AppSettings()
@@ -52,7 +78,17 @@ data class AppSettings(
                 isFloatingNavbar = prefs.getBoolean(KEY_FLOATING_NAVBAR, false),
                 isLiquidGlass = prefs.getBoolean(KEY_LIQUID_GLASS, false),
                 isBlurEnabled = prefs.getBoolean(KEY_BLUR_ENABLED, true),
+                useOs4Ui = prefs.getBoolean(KEY_OS4_UI, true),
+                cardGlass = prefs.getBoolean(KEY_CARD_GLASS, true),
                 language = LocaleHelper.getSavedLanguage(context).code,
+                // A first launch is the only one that has no settings at all. Anyone whose
+                // preferences predate this key has used the app for a while and should not be
+                // shown the welcome page just because it was added.
+                welcomeShown = if (prefs.contains(KEY_WELCOME_SHOWN)) {
+                    prefs.getBoolean(KEY_WELCOME_SHOWN, false)
+                } else {
+                    prefs.all.isNotEmpty()
+                },
             )
         }
 
@@ -62,6 +98,9 @@ data class AppSettings(
                 putBoolean(KEY_FLOATING_NAVBAR, settings.isFloatingNavbar)
                 putBoolean(KEY_LIQUID_GLASS, settings.isLiquidGlass)
                 putBoolean(KEY_BLUR_ENABLED, settings.isBlurEnabled)
+                putBoolean(KEY_OS4_UI, settings.useOs4Ui)
+                putBoolean(KEY_CARD_GLASS, settings.cardGlass)
+                putBoolean(KEY_WELCOME_SHOWN, settings.welcomeShown)
             }
             val lang = LocaleHelper.Language.entries.find { it.code == settings.language }
                 ?: LocaleHelper.Language.SYSTEM

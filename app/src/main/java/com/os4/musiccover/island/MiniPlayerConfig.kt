@@ -7,7 +7,7 @@ import org.json.JSONObject
 /** Portable settings for the HyperChanger lockscreen mini player. */
 object MiniPlayerConfig {
     /** Sent by SystemUI so the settings app can reject an older loaded module. */
-    const val SCHEMA_VERSION = 8
+    const val SCHEMA_VERSION = 10
     const val ENABLED = "enabled"
     const val WIDTH = "widthDp"
     const val HEIGHT_RADIUS = "heightRadiusDp"
@@ -24,6 +24,8 @@ object MiniPlayerConfig {
     /** Always on and no longer a setting; see normalizedJson. */
     const val NOTIFICATION_MATERIAL = "notificationMaterial"
     const val MEDIA_COLLAPSED_DEFAULT = "mediaCollapsedDefault"
+    /** User opt-in for tactile feedback on accepted capsule taps. */
+    const val HAPTIC_FEEDBACK = "hapticFeedback"
     const val GROUP_NOTIFICATIONS_BY_APP = "groupNotificationsByApp"
     /** Ordinary notifications stay in the OEM list; focus notifications still become islands. */
     const val NORMALS_IN_STACK = "normalsInStack"
@@ -40,9 +42,8 @@ object MiniPlayerConfig {
     /**
      * 勿扰, charging and the like drawn after the date, clear of the pill (DateStatus).
      *
-     * Not a setting any more (2026-10-09): it is always on, so it sits with the sizes below and
-     * nothing that arrives from anywhere can turn it off. The key stays in the JSON so the state
-     * file and [DateStatus] keep reading the same map.
+     * A switch again (2026-10-19): on by default, so the line stands after the date as it has
+     * since 2026-10-09; off puts the whole line back at the bottom, where the OEM keeps it.
      */
     const val STATUS_AT_DATE = "statusAtDate"
 
@@ -50,7 +51,7 @@ object MiniPlayerConfig {
     const val FOD_LIFT = "fodLift"
 
     private val switches = setOf(ENABLED, ADAPTIVE_WIDTH, NAV_KEEP_ON, FOD_LIFT,
-        NORMALS_IN_STACK)
+        NORMALS_IN_STACK, STATUS_AT_DATE, HAPTIC_FEEDBACK)
 
     private val defaults = linkedMapOf<String, Any>(
         ENABLED to false,
@@ -61,6 +62,7 @@ object MiniPlayerConfig {
         HIDE_AOD_SHORTCUTS to true,
         NOTIFICATION_MATERIAL to true,
         MEDIA_COLLAPSED_DEFAULT to false,
+        HAPTIC_FEEDBACK to false,
         GROUP_NOTIFICATIONS_BY_APP to false,
         NORMALS_IN_STACK to true,
         STYLE to STYLE_ROW,
@@ -73,8 +75,9 @@ object MiniPlayerConfig {
 
     /**
      * The config as the module will use it: the switches ([ENABLED], [ADAPTIVE_WIDTH],
-     * [NAV_KEEP_ON], [FOD_LIFT], [NORMALS_IN_STACK]) and the height radius from the input, and the
-     * width, the artwork radius and [STATUS_AT_DATE] always at the values above. The height radius
+     * [NAV_KEEP_ON], [FOD_LIFT], [NORMALS_IN_STACK], [STATUS_AT_DATE], [HAPTIC_FEEDBACK])
+     * and the height radius from
+     * the input, and the width and the artwork radius always at the values above. The height radius
      * is shared by the island and both shortcut discs.
      *
      * 221dp is the requested pill width before the runtime fits it between the shortcuts.

@@ -1,5 +1,26 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.card.CardPageButton;
+import com.os4.musiccover.card.CardTouch;
+import com.os4.musiccover.card.CardVideo;
+import com.os4.musiccover.card.MediaCard;
+import com.os4.musiccover.clock.AodColour;
+import com.os4.musiccover.clock.ClockCollapse;
+import com.os4.musiccover.clock.ClockGlass;
+import com.os4.musiccover.clock.ClockMove;
+import com.os4.musiccover.clock.ClockViews;
+import com.os4.musiccover.cover.AlbumArt;
+import com.os4.musiccover.cover.CoverCardLayer;
+import com.os4.musiccover.cover.CoverPalette;
+import com.os4.musiccover.cover.CoverPush;
+import com.os4.musiccover.cover.MotionCover;
+import com.os4.musiccover.cover.PaletteThrottle;
+import com.os4.musiccover.feature.FeatureHost;
+import com.os4.musiccover.fingerprint.Fingerprint;
+import com.os4.musiccover.fingerprint.FingerprintQuick;
+import com.os4.musiccover.fingerprint.InstallFingerprint;
+import com.os4.musiccover.hotreload.HotReload;
+import com.os4.musiccover.wallpaper.KeepDim;
 import com.os4.musiccover.lyrics.LocalLyrics;
 import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.lyrics.LyricSourcePolicy;
@@ -7,6 +28,7 @@ import com.os4.musiccover.lyrics.LyricSource;
 import com.os4.musiccover.lyrics.LyriconSource;
 import com.os4.musiccover.lyrics.NcmLyrics;
 import com.os4.musiccover.lyrics.OnlineLyrics;
+import com.os4.musiccover.lyrics.SuperLyricSource;
 import com.os4.musiccover.lyrics.WebLyrics;
 import com.os4.musiccover.island.DateStatus;
 import com.os4.musiccover.island.MiniPlayerConfig;
@@ -100,212 +122,96 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
     private boolean appSetting(Context c, Intent i, String op) throws Exception {
         if ("pushart".equals(op)) {
             boolean on = i.getBooleanExtra("on", true);
-            if (i.hasExtra("bias")) Main.sBias = Main.clamp01(i.getFloatExtra("bias", Main.sBias));
-            Main.sTrackKey = on ? Main.trackKey(Main.pickController(c)) : "";
+            if (i.hasExtra("bias")) Settings.BIAS.set(Main.clamp01(i.getFloatExtra("bias", Settings.BIAS.get())));
+            MediaController mc = on ? AlbumArt.select(c, Main.sArtworkSession.snapshot()).controller : null;
+            Main.sTrackKey = on ? Main.trackKey(mc) : "";
             Main.setCoverEnabled(on, i.getBooleanExtra("anim", true), false);
-        } else if ("coverstyle".equals(op)) {
-            String key = i.getStringExtra("key");
-            float value = i.getFloatExtra("v", Float.NaN);
-            CoverCardStyle next = Main.sCoverCardStyle.with(key, value);
-            boolean modeChanged = next.mode != Main.sCoverCardStyle.mode;
-            Main.sCoverCardStyle = next;
-            CoverCardLayer.style(next);
-            CoverCardLayer.refresh();
+        } else if ("lyricclockindependent".equals(op)) {
+            LockLyrics.setClockIndependentMotion(i.getBooleanExtra("on", !Settings.LYRIC_CLOCK_INDEPENDENT.on()));
+        } else if ("lyricflexduet".equals(op)) {
+            LockLyrics.setFlexibleDuet(i.getBooleanExtra("on", Settings.LYRIC_FLEX_DUET.on()));
             ModuleState.saveStateSoon();
-            if (Main.sCoverMode && modeChanged) {
-                if (next.mode == CoverCardStyle.CARD) {
-                    CoverCardLayer.attach(CoverPush.coverLayer());
-                    CoverCardLayer.playback(Main.sCoverCardPlaying);
-                }
-                CoverPush.pushArtAsync(true, false);
-                // Into or out of 保留壁纸, the clock changes hands between cover mode and the
-                // lyric page.
-                Main.syncCoverHold(true);
-            }
-        } else if ("mediacard".equals(op)) {
-            if (i.hasExtra("hideart")) Main.sMcHideArt = i.getBooleanExtra("hideart", false);
-            if (i.hasExtra("lyricart")) {
-                Main.sMcArtInLyrics = i.getBooleanExtra("lyricart", false);
-            }
-            if (i.hasExtra("titletap")) {
-                Main.sMcTitleTap = i.getBooleanExtra("titletap", false);
-            }
-            if (i.hasExtra("pagebtn")) {
-                Main.sMcPageBtn = i.getBooleanExtra("pagebtn", false);
-            }
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "media card hideArt=" + Main.sMcHideArt
-                    + " artInLyrics=" + Main.sMcArtInLyrics
-                    + " titleTap=" + Main.sMcTitleTap + " pageBtn=" + Main.sMcPageBtn);
-            MediaCard.applyMediaCard();
-        } else if ("lyrics".equals(op)) {
-            boolean on = i.getBooleanExtra("on", !LockLyrics.sEnabled);
-            LockLyrics.setEnabled(on, Main.sTrackKey, Main.sWatched);
-            ModuleState.saveState();
-        } else if ("lyrichdr".equals(op)) {
-            LockLyrics.sHdr = i.getBooleanExtra("on", !LockLyrics.sHdr);
-            Xp.log(Main.TAG + "lyrics HDR highlight: " + LockLyrics.sHdr);
-            LockLyrics.refresh();
-            ModuleState.saveState();
-        } else if ("lyrictrans".equals(op)) {
-            LockLyrics.sTrans = i.getBooleanExtra("on", !LockLyrics.sTrans);
-            Xp.log(Main.TAG + "lyrics translations: " + LockLyrics.sTrans);
-            // The view notices the switch itself and lays the lines out again around
-            // it; refresh only has to start the frames that let it.
-            LockLyrics.refresh();
-            ModuleState.saveState();
-        } else if ("lyricroma".equals(op)) {
-            LockLyrics.sRoma = i.getBooleanExtra("on", !LockLyrics.sRoma);
-            Xp.log(Main.TAG + "lyrics romanisations: " + LockLyrics.sRoma);
-            LockLyrics.refresh();
-            ModuleState.saveState();
-        } else if ("lyricstyle".equals(op)) {
-            String key = i.getStringExtra("key");
-            if (LockLyrics.setStyle(key, i.getFloatExtra("v", Float.NaN))) {
-                ModuleState.saveStateSoon();
-            }
+        } else if ("lyricbtsync".equals(op)) {
+            LockLyrics.setBluetoothSync(i.getBooleanExtra("on", Settings.LYRIC_BT_SYNC.on()),
+                    i.getIntExtra("classic", Settings.LYRIC_BT_CLASSIC.get()),
+                    i.getIntExtra("le", Settings.LYRIC_BT_LE.get()));
+            ModuleState.saveStateSoon();
         } else if ("lyricsourcepolicy".equals(op)) {
-            LyricSourcePolicy.Config current = LyricSourcePolicy.current;
+            LyricSourcePolicy.Config current = LyricSourcePolicy.current();
             LockLyrics.setSourcePolicy(i.getBooleanExtra("custom", current.custom),
                     i.getBooleanExtra("network", current.allowNetwork),
                     i.hasExtra("sources") ? i.getStringExtra("sources") : current.sourceOrder,
-                    i.hasExtra("formats") ? i.getStringExtra("formats") : current.formatOrder);
-            ModuleState.saveStateSoon();
+                    i.hasExtra("localformat") ? i.getStringExtra("localformat") : current.localFormat);
+            ModuleState.saveState();
         } else if ("lyricmaxlines".equals(op)) {
-            if (LockLyrics.setMaxLines(i.getIntExtra("v", LockLyrics.sMaxLines))) {
+            if (LockLyrics.setMaxLines(i.getIntExtra("v", Settings.LYRIC_MAX_LINES.get()))) {
                 LockLyrics.refresh();
                 ModuleState.saveStateSoon();
             }
-        } else if ("lyricalign".equals(op)) {
-            // Same shape as the translation switch: the view notices the change and
-            // lays the lines out again, refresh only has to start the frames that let
-            // it. Saved the way lyricstyle is, folding a quick run of picks into one
-            // write.
-            if (LockLyrics.setAlign(i.getIntExtra("v", LockLyrics.sAlign))) {
-                Xp.log(Main.TAG + "lyrics alignment: " + LockLyrics.sAlign);
-                LockLyrics.refresh();
-                ModuleState.saveStateSoon();
-            }
-        } else if ("lyrickeep".equals(op)) {
-            LockLyrics.sKeepOn = i.getBooleanExtra("on", !LockLyrics.sKeepOn);
-            Xp.log(Main.TAG + "lyrics keep the screen on: " + LockLyrics.sKeepOn);
-            LockLyrics.refresh();
-            ModuleState.saveState();
-        } else if ("motion".equals(op)) {
-            // Motion covers. `--ez on` switches them, `--ez forget true` empties the
-            // cache; either way the answer is the state. See MotionCover.
-            if (i.hasExtra("on")) {
-                MotionCover.sEnabled = i.getBooleanExtra("on", false);
-                ModuleState.saveState();
-                Xp.log(Main.TAG + "motion covers " + (MotionCover.sEnabled ? "on" : "off"));
-                // The cover on screen now gets one, or loses its own.
-                if (Main.sCoverMode) CoverPush.pushArtAsync(true, false);
-            }
-            // `--ez data true`: download on mobile data too.
-            if (i.hasExtra("data")) {
-                MotionCover.sOnData = i.getBooleanExtra("data", false);
-                ModuleState.saveState();
-                Xp.log(Main.TAG + "motion covers on mobile data " + (MotionCover.sOnData ? "on" : "off"));
-                if (MotionCover.sOnData) Main.main().post(MotionCover::retry);
-            }
-            if (i.getBooleanExtra("forget", false)) MotionCover.forget(c);
-            setResultData(MotionCover.describe());
-        } else if ("colon".equals(op)) {
-            HyperTweaks.sForceColon = i.getBooleanExtra("on",
-                    !HyperTweaks.sForceColon);
-            ModuleState.saveState();
-            // The always-on display draws its own clock in its own process, which
-            // can read neither this flag nor the file it is saved in, so the switch
-            // is mirrored somewhere both can see.
-            HyperTweaks.publishColon(Main.sAppCtx);
-            // Nothing to re-apply: the clock asks its bean whether to draw the colon
-            // on the next layout, which the keyguard does every time it comes up.
-            Xp.log(Main.TAG + "force clock colon "
-                    + (HyperTweaks.sForceColon ? "on" : "off"));
-        } else if ("seekglow".equals(op)) {
-            HyperTweaks.sBarGlow = i.getBooleanExtra("on", !HyperTweaks.sBarGlow);
-            ModuleState.saveState();
-            // The card on screen was built before this switch was read, so it is
-            // changed in place - lit as applyBarGlow lights a new one, or put back to
-            // the flat bar it was built as (HyperTweaks.clearBarGlow).
-            View bar = Main.findLockScreenView("media_progress_bar");
-            String r = bar == null ? "no card up" : HyperTweaks.sBarGlow
-                    ? HyperTweaks.applyBarGlow(bar) : HyperTweaks.clearBarGlow(bar);
-            Xp.log(Main.TAG + "media bar glow " + (HyperTweaks.sBarGlow ? "on" : "off")
-                    + " - " + r);
-            setResultData((HyperTweaks.sBarGlow ? "on " : "off ") + r);
-        } else if ("hidefp".equals(op)) {
-            Fingerprint.sHideFp = i.getBooleanExtra("on", !Fingerprint.sHideFp);
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "hide fingerprint " + (Fingerprint.sHideFp ? "on" : "off"));
-            Fingerprint.applyHideFp();
-        } else if ("aodclock".equals(op)) {
-            Main.sAodSmall = i.getBooleanExtra("small", !Main.sAodSmall);
-            ModuleState.saveState();
-            // The pose a held doze was drawn at is the small one, and the fall into an
-            // OEM doze aims at that remembered pose rather than at the live clock. Left
-            // standing, turning the setting off would still land on the small clock
-            // once. Dropped, it is the state a doze that never settled is in.
-            ClockCollapse.forgetAodPose();
-            Xp.log(Main.TAG + "AOD keeps the small clock " + (Main.sAodSmall ? "on" : "off")
-                    + " (full-screen AOD now: " + Main.fullAodOn() + ")");
-        } else if ("fpavoid".equals(op)) {
-            Fingerprint.sFpAvoid = i.getIntExtra("mode", 0);
-            ModuleState.saveState();
-            Main.refreshNotificationSink();
-            Xp.log(Main.TAG + "fingerprint avoid mode=" + Fingerprint.sFpAvoid);
-        } else if ("bias".equals(op)) {
-            Main.setBias(i.getFloatExtra("v", Main.DEFAULT_BIAS));
-        } else if ("clockscale".equals(op)) {
-            Main.setClockHeightDp(i.getFloatExtra("v", Main.DEFAULT_CLOCK_HEIGHT_DP));
-            ModuleState.saveState();
-            // A settled clock has no frames left to carry a new size on; ask for one.
-            ClockCollapse.refresh();
-        } else if ("clocksize".equals(op)) {
-            Main.setClockSize(i.getFloatExtra("v", 1f));
-            ModuleState.saveState();
-            ClockCollapse.refresh();
-        } else if ("clockoffset".equals(op)) {
-            Main.setClockOffsetDp(i.getFloatExtra("v", 0f));
-            ModuleState.saveState();
-            ClockCollapse.refresh();
-        } else if ("glassend".equals(op)) {
-            Main.sGlassEnd = Main.clamp01(i.getFloatExtra("v", Main.DEFAULT_GLASS_END));
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "glass end = " + Main.sGlassEnd);
-            ClockCollapse.refresh();
-        } else if ("clockspring".equals(op)) {
-            // Nothing forced on screen: see setClockResponse(). The fades it pushes
-            // are the only thing outside this process.
-            Main.setClockResponse(i.getFloatExtra("v", Main.EASE_COVER[1]));
-        } else if ("auto".equals(op)) {
-            Main.setAuto(i.getBooleanExtra("on", true));
-        } else if ("coverfeature".equals(op)) {
-            Main.setCoverFeature(i.getBooleanExtra("on", true));
         } else if ("shadecfg".equals(op)) {
             // One op for the whole settings page. The key is validated and the value
             // clamped in ShadeLayer.configure, so adb and the UI go through exactly
             // the same door.
             ShadeLayer.configure(i.getStringExtra("key"), i.getIntExtra("v", 0));
+            // Switched on with a cover up: the pushes so far did not build the background
+            // (ShadeLayer.setArt skips it while off), so ask for one now rather than at the
+            // next track.
+            if (ShadeLayer.missingArt() && Main.coverModeOn()) CoverPush.pushArtAsync(true, false);
             ModuleState.saveState();
+        } else if ("fpquick".equals(op)) {
+            // 指纹快捷功能: --es json '{"total":ms,"move":bool,"items":[...]}', or nothing to
+            // just read it back. The format belongs to FingerprintQuick. --ez sys writes the
+            // system's own switch; --es shortcuts <pkg> answers that app's shortcuts in the
+            // extras, for the settings page's picker.
+            if (i.hasExtra("sys")) FingerprintQuick.setSystemSwitch(c, i.getBooleanExtra("sys", true));
+            if (i.getBooleanExtra("shortcutapps", false)) {
+                setResultExtras(FingerprintQuick.shortcutApps(c));
+            }
+            if (i.hasExtra("shortcuts")) {
+                setResultExtras(FingerprintQuick.shortcuts(c, i.getStringExtra("shortcuts")));
+            }
+            setResultData(FingerprintQuick.apply(c, i.getStringExtra("json")));
         } else if ("minicfg".equals(op)) {
             MiniPlayerRuntime.applyConfig(c, i.getStringExtra("json"));
             ModuleState.saveState();
+        } else if (Settings.dispatch(c, i, op)) {
+            settingAnswer(c, i, op);
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * What a few of the table's ops do besides setting (Settings.dispatch has applied, saved and
+     * followed up the setting by now): an answer to the sender, or a command riding on the op.
+     */
+    private void settingAnswer(Context c, Intent i, String op) {
+        if ("seekglow".equals(op)) {
+            // The card on screen was built before this switch was read, so it is
+            // changed in place - lit as applyBarGlow lights a new one, or put back to
+            // the flat bar it was built as (HyperTweaks.clearBarGlow).
+            View bar = Main.findLockScreenView("media_progress_bar");
+            // With advanced material off the stock flat bar stays (#121); the switch is
+            // kept, and the bar lights when the material comes back on.
+            String r = bar == null ? "no card up" : !Settings.SEEK_GLOW.on()
+                    ? HyperTweaks.clearBarGlow(bar)
+                    : HyperTweaks.materialOn(bar.getContext())
+                            ? HyperTweaks.applyBarGlow(bar) : "advanced material off, left flat";
+            Xp.log(Main.TAG + "media bar glow " + (Settings.SEEK_GLOW.on() ? "on" : "off")
+                    + " - " + r);
+            setResultData((Settings.SEEK_GLOW.on() ? "on " : "off ") + r);
+        } else if ("motion".equals(op)) {
+            // Motion covers: `--ez on` switches them, `--ez data true` downloads on mobile
+            // data too, `--ez forget true` empties the cache; whichever, the answer is the
+            // state. See MotionCover.
+            if (i.getBooleanExtra("forget", false)) MotionCover.forget(c);
+            setResultData(MotionCover.describe());
         } else if ("pickup".equals(op)) {
-            // 取餐码: --ez on true|false from the app; --es do read for one read now;
-            // --es do vdtest [--ei task N] [--ei min M] for the hidden display's
+            // 取餐码: --ez on true|false and --ez card from the app; --es do read for one
+            // read now; --es do vdtest [--ei task N] [--ei min M] for the hidden display's
             // experiment (§6 of 取餐码方案.md); --es do vdoff to put it back. The state
             // of both halves is the result either way.
-            if (i.hasExtra("on")) {
-                PickupCodeIsland.INSTANCE.setOn(i.getBooleanExtra("on", true));
-                ModuleState.saveState();
-            }
-            // --ez card false draws the island with the system's focus template again,
-            // which is the way back if ColorOS's card does not come up on this build.
-            if (i.hasExtra("card")) {
-                PickupCodeIsland.sCard = i.getBooleanExtra("card", true);
-                ModuleState.saveState();
-            }
             String doIt = i.getStringExtra("do");
             if ("read".equals(doIt)) PickupCodeIsland.INSTANCE.readNow();
             if ("vdtest".equals(doIt)) {
@@ -320,19 +226,11 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                 setResultData(PickupCodeIsland.INSTANCE.describe()
                         + " | " + PickupPark.INSTANCE.describe());
             }
-        } else if ("transitcfg".equals(op)) {
-            // 「高德公交地铁」: --ez on true|false from the app; without it, 高德
-            // asking as it starts (AmapImmerse), and told what it is.
-            if (i.hasExtra("on")) {
-                AmapTransitScene.INSTANCE.setOn(c, i.getBooleanExtra("on", true));
-                ModuleState.saveState();
-            } else {
-                AmapTransitScene.INSTANCE.tellAmap(c);
-            }
-        } else {
-            return false;
+        } else if ("transitcfg".equals(op) && !i.hasExtra("on")) {
+            // 「高德公交地铁」 without its switch: 高德 asking as it starts (AmapImmerse),
+            // and told what it is.
+            AmapTransitScene.INSTANCE.tellAmap(c);
         }
-        return true;
     }
 
     /**
@@ -346,118 +244,114 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             // Answered through the ordered broadcast's result extras: the app is a
             // separate process and this is the only channel it already has. A reply
             // arriving at all is also how the app knows the module is loaded.
-            android.os.Bundle out = new android.os.Bundle();
-            out.putBoolean("alive", true);
-            out.putBoolean("cover", Main.sCoverMode);
-            out.putString("minicfg", MiniPlayerRuntime.configJson(c));
-            out.putInt("minicfgschema", MiniPlayerConfig.SCHEMA_VERSION);
-            float[] shortcuts = MiniPlayerRuntime.shortcutGeometry();
-            if (shortcuts != null) out.putFloatArray("minishortcuts", shortcuts);
-            out.putBoolean("auto", Main.sAuto);
-            out.putBoolean("coverfeature", Main.sCoverFeatureOn);
-            out.putFloat("bias", Main.sBias);
-            out.putInt("coverstyle", Main.sCoverCardStyle.mode);
-            out.putFloat("covercardfill", Main.sCoverCardStyle.fill);
-            out.putFloat("covercardpos", Main.sCoverCardStyle.pos);
-            // No covercardcorner: the square's corners are the media card's own, and
-            // the app draws them from the cardradius it gets with the pictures.
-            out.putFloat("clock", Main.sClockHeightDp);
-            out.putFloat("clocksize", Main.effectiveClockSize());
-            out.putFloat("clockoff", Main.sClockOffsetDp);
-            out.putFloat("glass", Main.sGlassEnd);
-            out.putFloat("spring", Main.sClockResponse);
-            // The whole shade settings page, generated from the one key list so a new
-            // knob cannot reach the state file and miss the settings app.
-            for (String key : ShadeLayer.CFG_KEYS) {
-                out.putInt("shade_" + key, ShadeLayer.cfgInt(key));
-            }
-            out.putInt("shadeMode", ShadeLayer.mode());
-            out.putBoolean("card", MediaCard.sCardShowing);
-            // Checked live rather than reported from the cached flag: the user can
-            // change the wallpaper at any time and that is what breaks the feature.
-            out.putBoolean("lockwp", CoverPush.hasLockWallpaper(c));
-            out.putString("track", MediaCard.sCardKey);
-            MediaController mc = Main.sWatched;
-            out.putString("player", mc == null ? "" : mc.getPackageName());
-            out.putBoolean("mcart", Main.sMcHideArt);
-            out.putBoolean("mclyricart", Main.sMcArtInLyrics);
-            out.putBoolean("mctap", Main.sMcTitleTap);
-            out.putBoolean("mcpage", Main.sMcPageBtn);
-            out.putBoolean("tap", Main.sTapToggle);
-            out.putBoolean("fadewp", Main.sFadeWp);
-            out.putBoolean("motion", MotionCover.sEnabled);
-            out.putBoolean("motiondata", MotionCover.sOnData);
-            out.putInt("fsmode2", Main.sFadeMode);
-            out.putBoolean("vcfade", Main.sVideoFade);
-            out.putBoolean("hidefp", Fingerprint.sHideFp);
-            out.putBoolean("aodsmall", Main.sAodSmall);
-            out.putBoolean("colon", HyperTweaks.sForceColon);
-            out.putBoolean("seekglow", HyperTweaks.sBarGlow);
-            out.putBoolean("lyrics", LockLyrics.sEnabled);
-            // Where the lock screen's words came from right now, and whether there is
-            // a Lyricon to talk to. The app's lyric-source row is these two: it names
-            // the source, and warns to install something only when both this and the
-            // LyricInfo package are absent. See FeaturesPage.
-            out.putString("lyricsrc", LockLyrics.sourceName());
-            out.putBoolean("lyricon", LyriconSource.installed());
-            out.putBoolean("lyrickeep", LockLyrics.sKeepOn);
-            out.putBoolean("lyrichdr", LockLyrics.sHdr);
-            out.putBoolean("lyrictrans", LockLyrics.sTrans);
-            out.putBoolean("lyricroma", LockLyrics.sRoma);
-            out.putInt("lyricalign", LockLyrics.sAlign);
-            out.putInt("lyricmaxlines", LockLyrics.sMaxLines);
-            out.putBoolean("lyricsourcecustom", LyricSourcePolicy.current.custom);
-            out.putBoolean("lyricnetwork", LyricSourcePolicy.current.allowNetwork);
-            out.putString("lyricsourceorder", LyricSourcePolicy.current.sourceOrder);
-            out.putString("lyricformatorder", LyricSourcePolicy.current.formatOrder);
-            out.putFloat("lyricfill", LockLyrics.sStyle.fill);
-            out.putFloat("lyricpos", LockLyrics.sStyle.pos);
-            out.putFloat("lyricside", LockLyrics.sStyle.sideDp);
-            out.putFloat("lyricsize", LockLyrics.sStyle.sizeSp);
-            out.putInt("lyricweight", LockLyrics.sStyle.weight);
-            // Whether anything has actually written a lyric to a session, which is
-            // what tells a working provider module from a merely installed one.
-            out.putBoolean("sessionlyric", LockLyrics.sSawSessionLyric
-                    || LyricSource.hasLyricInfo(Main.sWatched));
-            out.putInt("fpavoid", Fingerprint.sFpAvoid);
-            out.putBoolean("transit", AmapTransitScene.sOn);
-            out.putBoolean("pickup", PickupCodeIsland.sOn);
-            out.putBoolean("card", PickupCodeIsland.sCard);
-            // 设置页那行「手动刷新取餐码云端规则」的副标题，和这一份名单有几个小程序。
-            out.putString("rulesdate", PickupCloud.INSTANCE.stamp(PickupCloud.INSTANCE.getUpdatedAt()));
-            out.putInt("rulescount", PickupCloud.INSTANCE.count());
-            // Everything the app's preview needs to be to scale. It draws a lock
-            // screen it cannot see, and every one of these is device-specific, so
-            // they are measured here rather than written down twice.
-            out.putInt("sw", Main.sScreenW);
-            out.putInt("sh", Main.sScreenH);
-            out.putInt("cardl", MediaCard.sCardL);
-            out.putInt("cardt", MediaCard.sCardT);
-            out.putInt("cardw", MediaCard.sCardW);
-            out.putInt("cardh", MediaCard.sCardH);
-            float[] cg = ClockViews.clockGeometry();
-            if (cg != null) {
-                out.putFloat("clockw", cg[0]);
-                out.putFloat("clockh", cg[1]);
-                out.putFloat("clocky", cg[2]);
-                out.putFloat("clockpad", Main.CLOCK_PAD);
-                out.putFloat("clockx", cg[3]);
-                out.putFloat("clockpivotx", cg[4]);
-                out.putFloat("clockfull", Main.clockFullRatio());
-            }
-            // Outside the block above: it is a property of the STYLE, not of the
-            // measurement, and the app needs it even on a frame where the clock
-            // could not be measured - that is exactly when the slider it disables
-            // would otherwise look like it was doing something.
-            out.putBoolean("clockglass", ClockGlass.clockHasGlass());
-            // Every op is acknowledged below; this tells the app it can rely on that,
-            // where a build from before it could only be sent to and hoped for.
-            out.putBoolean("acks", true);
-            setResultExtras(out);
+            setResultExtras(queryBundle(c));
+        } else if ("querydump".equals(op)) {
+            // The same answer as text, one key per line in key order, for adb: `am broadcast`
+            // prints result extras only as a parcel size, and a sender of its own cannot take
+            // an ordered result from outside an app process ("resultTo requires
+            // resultToApp"). What the settings refactor is checked against.
+            setResultData(dumpBundle(queryBundle(c)));
         } else {
             return false;
         }
         return true;
+    }
+
+    /** What `query` answers: every setting the app shows, and what its preview needs. */
+    private static android.os.Bundle queryBundle(Context c) {
+        android.os.Bundle out = new android.os.Bundle();
+        out.putBoolean("alive", true);
+        out.putBoolean("cover", Main.sCoverMode);
+        out.putString("minicfg", MiniPlayerRuntime.configJson(c));
+        out.putInt("minicfgschema", MiniPlayerConfig.SCHEMA_VERSION);
+        float[] shortcuts = MiniPlayerRuntime.shortcutGeometry();
+        if (shortcuts != null) out.putFloatArray("minishortcuts", shortcuts);
+        // The whole shade settings page, generated from the one key list so a new
+        // knob cannot reach the state file and miss the settings app.
+        for (String key : ShadeLayer.CFG_KEYS) {
+            out.putInt("shade_" + key, ShadeLayer.cfgInt(key));
+        }
+        out.putInt("shadeMode", ShadeLayer.mode());
+        out.putBoolean("card", MediaCard.sCardShowing);
+        // Checked live rather than reported from the cached flag: the user can
+        // change the wallpaper at any time and that is what breaks the feature.
+        out.putBoolean("lockwp", CoverPush.hasLockWallpaper(c));
+        out.putString("track", MediaCard.sCardKey);
+        MediaController mc = Main.sWatched;
+        out.putString("player", mc == null ? "" : mc.getPackageName());
+        // Where the lock screen's words came from right now, and whether there is
+        // a Lyricon to talk to. The app's lyric-source row is these two: it names
+        // the source, and warns to install something only when both this and the
+        // LyricInfo package are absent. See FeaturesPage.
+        out.putString("lyricsrc", LockLyrics.sourceName());
+        out.putBoolean("lyricon", LyriconSource.installed());
+        out.putInt("lyricpreviewseed", com.os4.musiccover.cover.CoverPush.lyricCoverTint());
+        out.putInt("lyricmaxlines", Settings.LYRIC_MAX_LINES.get());
+        out.putBoolean("superlyric", SuperLyricSource.installed());
+        // Whether anything has actually written a lyric to a session, which is
+        // what tells a working provider module from a merely installed one.
+        out.putBoolean("sessionlyric", LockLyrics.sSawSessionLyric
+                || LyricSource.hasLyricInfo(Main.sWatched));
+        out.putString("fpquick", FingerprintQuick.configJson(c));
+        out.putBoolean("fpquicksys", FingerprintQuick.systemSwitch(c));
+        out.putBoolean("fpquickok", FingerprintQuick.installed());
+        // The features that did not go in at start - failed, hooked nothing, or skipped for a
+        // missing clock container - for the home page's "N features not installed".
+        out.putStringArray("features_missing", FeatureHost.missing());
+        // Stage 5.2: whether the settings come from the app's group, and the last of the app's
+        // writes this generation applied. An older module answers neither, which is what tells
+        // the app to keep sending ops instead.
+        out.putBoolean("settings_prefs", SettingsPrefs.usesPrefs());
+        out.putLong("settings_rev", SettingsPrefs.rev());
+        // The installation this host's files belong to (stage 5.5). The app asks before it
+        // migrates: a different id means its data was wiped and the host still holds the old
+        // installation's settings, which must not be handed over.
+        out.putString("install_id", InstallFingerprint.recorded(c));
+        // 设置页那行「手动刷新取餐码云端规则」的副标题，和这一份名单有几个小程序。
+        out.putString("rulesdate", PickupCloud.INSTANCE.stamp(PickupCloud.INSTANCE.getUpdatedAt()));
+        out.putInt("rulescount", PickupCloud.INSTANCE.count());
+        // Everything the app's preview needs to be to scale. It draws a lock
+        // screen it cannot see, and every one of these is device-specific, so
+        // they are measured here rather than written down twice.
+        out.putInt("sw", Main.sScreenW);
+        out.putInt("sh", Main.sScreenH);
+        out.putInt("cardl", MediaCard.sCardL);
+        out.putInt("cardt", MediaCard.sCardT);
+        out.putInt("cardw", MediaCard.sCardW);
+        out.putInt("cardh", MediaCard.sCardH);
+        float[] cg = ClockViews.clockGeometry();
+        if (cg != null) {
+            out.putFloat("clockw", cg[0]);
+            out.putFloat("clockh", cg[1]);
+            out.putFloat("clocky", cg[2]);
+            out.putFloat("clockpad", Main.CLOCK_PAD);
+            out.putFloat("clockx", cg[3]);
+            out.putFloat("clockpivotx", cg[4]);
+            out.putFloat("clockfull", Main.clockFullRatio());
+        }
+        // Outside the block above: it is a property of the STYLE, not of the
+        // measurement, and the app needs it even on a frame where the clock
+        // could not be measured - that is exactly when the slider it disables
+        // would otherwise look like it was doing something.
+        out.putBoolean("clockglass", ClockGlass.clockHasGlass());
+        // Every op is acknowledged below; this tells the app it can rely on that,
+        // where a build from before it could only be sent to and hoped for.
+        out.putBoolean("acks", true);
+        Settings.query(out);
+        return out;
+    }
+
+    /** [b] as "key=Type:value" lines, sorted, arrays written out. */
+    static String dumpBundle(android.os.Bundle b) {
+        StringBuilder sb = new StringBuilder();
+        for (String k : new java.util.TreeSet<>(b.keySet())) {
+            Object v = b.get(k);
+            String s = v == null ? "null"
+                    : v instanceof float[] ? "float[]:" + java.util.Arrays.toString((float[]) v)
+                    : v.getClass().getSimpleName() + ":" + v;
+            sb.append(k).append('=').append(s).append('\n');
+        }
+        return sb.toString();
     }
 
     /** A message from the module's other halves: the wallpaper process's hand-shakes and
@@ -484,6 +378,9 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             // The wallpaper process, on its start or when asked, saying what it can
             // take. See sWpComposes.
             boolean composes = i.getBooleanExtra("composes", false);
+            // It starts with no dim; if it came back while the lyric page was up, hand it
+            // the one on record. See KeepDim.resend().
+            KeepDim.resend();
             // A restarted wallpaper process has forgotten the lyrics' blur.
             LockLyrics.resendBlur();
             if (composes != Main.sWpComposes) {
@@ -540,7 +437,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             // From WallpaperProbe, sent from inside the call that rebuilds the video
             // player - and also from the paths where no reload is coming at all, so
             // that the cover is never held for a message that will not arrive. See
-            // noteVideoReload() and sFadeMode.
+            // noteVideoReload() and Settings.FADE_MODE.
             CoverPush.noteVideoReload();
             // The window's content changes a few hundred ms AFTER this message, on
             // the wallpaper side, with nothing in this process asking for a frame -
@@ -570,6 +467,18 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
     private boolean debugOp(Context c, Intent i, String op) throws Exception {
         if ("info".equals(op)) {
             Diagnostics.dumpInfo();
+        } else if ("gen".equals(op)) {
+            // What this generation of the module holds in this process, and whether it still
+            // answers at all. The log line is for adb without an ordered sender.
+            String report = Gen.report() + " " + HotReload.status();
+            Xp.log(Main.TAG + "gen " + report);
+            setResultData(report);
+        } else if ("retire_dryrun".equals(op)) {
+            // Step 6's rehearsal: take every SystemUI feature down, sweep the ledger, and put
+            // the same generation back up. Hooks are not touched - see SystemUiRetire.
+            String report = SystemUiRetire.dryRun(c);
+            Xp.log(Main.TAG + "retire_dryrun " + report);
+            setResultData(report);
         } else if ("anim".equals(op)) {
             Diagnostics.dumpAnimConfigs();
         } else if ("hold".equals(op) || "release".equals(op)) {
@@ -603,7 +512,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
         } else if ("gdata".equals(op)) {
             Diagnostics.pokeGlassData(i.getIntExtra("idx", -1), i.getFloatExtra("v", 0f));
         } else if ("notifsink".equals(op)) {
-            setResultData("mode=" + Fingerprint.sFpAvoid + "\nhideFp=" + Fingerprint.sHideFp
+            setResultData("mode=" + Settings.FP_AVOID.get() + "\nhideFp=" + Settings.HIDE_FP.on()
                     + " suppressedFrames=" + Fingerprint.sFodFrames.pendingCount()
                     + " replayedFrames=" + Fingerprint.sFodFramesReplayed
                     + "\n" + Main.sNotificationSink.describe() + "\n"
@@ -719,7 +628,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                     + " maxPointersSeen=" + LockTaps.sTwoMaxPointers + " trail=" + LockTaps.sTwoTrail
                     + " lastTwoTrail=" + LockTaps.sTwoTrailLast + " cancelled=" + LockTaps.sTwoCancelled
                     + " last=" + LockTaps.sTwoWhy
-                    + " lyrics=" + LockLyrics.sEnabled
+                    + " lyrics=" + Settings.LYRICS.on()
                     + " tap=" + (LockLyrics.sTapHidden ? "hidden" : "shown"));
         } else if ("cardvideo".equals(op)) {
             // The square card's motion cover, fixed file for now; see CardVideo.
@@ -778,13 +687,15 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             }
         } else if ("lyricon".equals(op)) {
             setResultData(LyriconSource.describe());
+        } else if ("superlyric".equals(op)) {
+            setResultData(SuperLyricSource.describe());
         } else if ("local".equals(op)) {
             // On a worker: this one reads the media database and then the file, and
             // a broadcast receiver runs on the main thread.
             final MediaController lw = Main.sWatched;
             final java.io.File lf =
                     new java.io.File(c.getFilesDir(), "mc_local.txt");
-            new Thread(new Runnable() {
+            Gen.thread("MCLocalProbe", new Runnable() {
                 @Override
                 public void run() {
                     // Its own thread: anything thrown here would take SystemUI down.
@@ -808,7 +719,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                         Xp.w(Main.TAG + "local write failed: " + t);
                     }
                 }
-            }, "MCLocalProbe").start();
+            });
             setResultData("looking -> " + lf.getAbsolutePath());
         } else if ("metadump".equals(op)) {
             String d = LyricSource.dumpMetadata(Main.sWatched);
@@ -833,7 +744,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             final String qAlbum = i.getStringExtra("album");
             final long qDur = i.getLongExtra("dur", 0L);
             final java.io.File out = new java.io.File(c.getFilesDir(), "mc_ncm.txt");
-            new Thread(new Runnable() {
+            Gen.thread("MCNcmProbe", new Runnable() {
                 @Override
                 public void run() {
                     try {
@@ -865,40 +776,19 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                         Xp.w(Main.TAG + "ncm write failed: " + t);
                     }
                 }
-            }, "MCNcmProbe").start();
+            });
             setResultData("searching -> " + out.getAbsolutePath());
+        } else if ("features".equals(op)) {
+            // What went in at start and what did not, one line per feature (FeatureHost):
+            // answered and logged, like diag, so adb can read it without the app.
+            String report = FeatureHost.describe();
+            setResultData(report);
+            for (String line : report.split("\n")) Xp.log(Main.TAG + line);
         } else if ("tweaks".equals(op)) {
             // Which of the HyperOS restrictions actually came off in this process.
             // Over the probe rather than the log because the module's INFO lines are
             // not readable on this device - LSPosed keeps error level only.
             setResultData(HyperTweaks.describe());
-        } else if ("fadewp".equals(op)) {
-            Main.sFadeWp = i.getBooleanExtra("on", !Main.sFadeWp);
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "wallpaper crossfade " + (Main.sFadeWp ? "on" : "off"));
-        } else if ("vcfade".equals(op)) {
-            // Off by default: see the note on sVideoFade. Setting it here re-pushes
-            // the art, because the cover video that is on the device right now was
-            // built with whichever value was in force when it was pushed.
-            Main.sVideoFade = i.getBooleanExtra("on", !Main.sVideoFade);
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "cover video crossfade " + (Main.sVideoFade ? "on" : "off")
-                    + (Main.sCoverMode ? " - re-pushing the art" : ""));
-            if (Main.sCoverMode) CoverPush.pushArtAsync(true, false);
-        } else if ("fadesync".equals(op)) {
-            // --ei mode 0|1|2 picks one; with no mode it cycles, so the three can be
-            // compared on the phone with one command instead of three builds.
-            int mode = i.getIntExtra("mode", -1);
-            Main.sFadeMode = mode >= 0 && mode <= Main.FADE_MODE_STRETCH
-                    ? mode : (Main.sFadeMode + 1) % (Main.FADE_MODE_STRETCH + 1);
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "cover fade mode = " + CoverPush.fadeModeName()
-                    + " (0 off, 1 hold for the wallpaper window, 2 stretch by the"
-                    + " last measured gap " + CoverPush.sCoverFadeGapMs + "ms)");
-        } else if ("tap".equals(op)) {
-            Main.sTapToggle = i.getBooleanExtra("on", !Main.sTapToggle);
-            ModuleState.saveState();
-            Xp.log(Main.TAG + "tap-to-toggle " + (Main.sTapToggle ? "on" : "off"));
         } else if ("clockshot".equals(op)) {
             // For telling the two candidate causes apart by hand: with this off the
             // module never draws the live clock, and the preview falls back to its
@@ -1055,20 +945,20 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             Xp.log(Main.TAG + "state: holdY=" + Main.sHoldY
                     + " lastSystemY=" + Main.sLastSystemY + " clock " + ClockCollapse.describe()
                     + " container=" + (Main.sContainer != null) + " verbose=" + Main.sVerbose);
-            Xp.log(Main.TAG + "cover: on=" + Main.sCoverMode + " auto=" + Main.sAuto
-                    + " bias=" + Main.sBias + " screen=" + Main.sScreenW + "x" + Main.sScreenH
+            Xp.log(Main.TAG + "cover: on=" + Main.sCoverMode + " auto=" + Settings.AUTO.on()
+                    + " bias=" + Settings.BIAS.get() + " screen=" + Main.sScreenW + "x" + Main.sScreenH
                     + " card=" + (MediaCard.sCardKnown ? (MediaCard.sCardShowing ? MediaCard.sCardKey : "gone") : "unknown")
                     + " following=" + (Main.sWatched == null ? "none" : Main.sWatched.getPackageName())
                     + " track=" + Main.sTrackKey);
             Xp.log(Main.TAG + "card rect: " + MediaCard.sCardL + "," + MediaCard.sCardT + " "
-                    + MediaCard.sCardW + "x" + MediaCard.sCardH + " hideArt=" + Main.sMcHideArt
-                    + " titleTap=" + Main.sMcTitleTap
+                    + MediaCard.sCardW + "x" + MediaCard.sCardH + " hideArt=" + Settings.MC_HIDE_ART.on()
+                    + " titleTap=" + Settings.MC_TITLE_TAP.on()
                     + " title=" + (Main.sCardTitleTapped != null) + " cardP=" + MediaCard.sCardP
-                    + " pageBtn=" + Main.sMcPageBtn + " " + CardPageButton.describe());
-            Xp.log(Main.TAG + "tap: toggle=" + Main.sTapToggle
+                    + " pageBtn=" + Settings.MC_PAGE_BUTTON.on() + " " + CardPageButton.describe());
+            Xp.log(Main.TAG + "tap: toggle=" + Settings.TAP_TOGGLE.on()
                     + " suppressed=" + Main.sTapSuppressed
                     + " bouncer=" + Main.bouncerUp()
-                    + " wallpaperFade=" + Main.sFadeWp);
+                    + " wallpaperFade=" + Settings.FADE_WALLPAPER.on());
         } else if ("verbose".equals(op)) {
             Main.sVerbose = i.getBooleanExtra("on", !Main.sVerbose);
             LockLyrics.verbose = Main.sVerbose;
@@ -1091,7 +981,9 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
             if ("fetch".equals(i.getStringExtra("do"))) {
                 final PendingResult receipt = goAsync();
                 async = true;
-                new Thread(() -> {
+                // Finished either way: a receipt never finished holds the app's ordered
+                // broadcast until it times out.
+                Gen.thread("mc-pickup-cloud", () -> {
                     String said;
                     boolean ok = false;
                     try {
@@ -1108,7 +1000,7 @@ final class ProbeReceiver extends ProbeGuard.Receiver {
                     receipt.setResultData(said);
                     receipt.setResultCode(Main.OP_ACK);
                     receipt.finish();
-                }, "mc-pickup-cloud").start();
+                }, receipt::finish);
             } else {
                 setResultData(PickupCloud.INSTANCE.describe());
             }

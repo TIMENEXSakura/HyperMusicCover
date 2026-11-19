@@ -4,23 +4,30 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class LyricSourcePolicyTest {
-    @Test public void defaultStartsWithMetadataAndDirectory() {
+    @Test public void networkIsOffByDefaultButCanBeExplicitlyEnabled() {
+        assertFalse(LyricSourcePolicy.current().allowNetwork);
+        assertFalse(LyricSourcePolicy.current().permits("qq"));
+        assertTrue(new LyricSourcePolicy.Config(false, true, null, null).permits("qq"));
+    }
+
+    @Test public void defaultStartsWithProviderThenMetadataAndDirectory() {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(false, true, "qq,local", null);
-        assertEquals("metadata", config.sources()[0]);
-        assertEquals("local", config.sources()[1]);
-        assertEquals("lyricon", config.sources()[2]);
+        assertEquals("lyricon", config.sources()[0]);
+        assertEquals("superlyric", config.sources()[1]);
+        assertEquals("metadata", config.sources()[2]);
+        assertEquals("local", config.sources()[3]);
     }
 
     @Test public void customOrderIsDeduplicatedAndCompleted() {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(true, true, "QQ,qq,invalid, local ", null);
-        assertEquals(10, config.sources().length);
+        assertEquals(11, config.sources().length);
         assertEquals("qq", config.sources()[0]);
         assertEquals("local", config.sources()[1]);
-        assertEquals(LyricSourcePolicy.DEFAULT_FORMATS, config.formatOrder);
+        assertEquals(LocalLyricFormat.TTML, config.localFormat);
     }
 
     @Test public void formatsAreWhitelistedAndKeepRequestedPriority() {
-        assertEquals("lrc,ttml,yrc,krc,lys", LyricSourcePolicy.normalizeFormats("LRC,lrc,../ttml,ttml"));
+        assertArrayEquals(new String[]{"lrc", "ttml", "yrc", "krc", "lys"}, LocalLyricFormat.formats("LRC"));
         assertEquals(LyricSourcePolicy.DEFAULT_SOURCES, LyricSourcePolicy.normalizeSources(null));
     }
 
@@ -28,7 +35,7 @@ public class LyricSourcePolicyTest {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(false, true, null, null);
         assertFalse(config.mayReplace("metadata", "qq"));
         assertFalse(config.mayReplace("metadata", "local"));
-        assertFalse(config.mayReplace("local", "lyricon"));
+        assertTrue(config.mayReplace("local", "lyricon"));
         assertTrue(config.mayReplace("qq", "metadata"));
         assertTrue(config.mayReplace("metadata", "metadata"));
     }
@@ -37,6 +44,7 @@ public class LyricSourcePolicyTest {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(true, false, "qq,metadata", null);
         for (String source : config.sources()) assertEquals(!LyricSourcePolicy.network(source), config.permits(source));
         assertTrue(config.permits("lyricon"));
+        assertTrue(config.permits("superlyric"));
         assertFalse(config.mayReplace("none", "qq"));
         assertTrue(config.mayReplace("qq", "metadata"));
     }
@@ -45,5 +53,35 @@ public class LyricSourcePolicyTest {
         LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(true, true, "qq,local,metadata", null);
         assertTrue(config.mayReplace("metadata", "qq"));
         assertFalse(config.mayReplace("qq", "metadata"));
+    }
+    @Test public void positionsMoveStablyWithoutTies() {
+        assertEquals("local,lyricon,metadata", LyricSourcePolicy.move("lyricon,metadata,local", "local", 1));
+        assertEquals("lyricon,local,metadata", LyricSourcePolicy.move("lyricon,metadata,local", "metadata", 3));
+    }
+
+    @Test public void disabledNetworkNeverCallsOnlineSourcesEvenAfterLocalMisses() {
+        LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(true, false, "qq,lyricon,metadata,local", null);
+        java.util.List<String> called = new java.util.ArrayList<>();
+        Object result = LyricSourcePolicy.first(config, source -> { called.add(source); return null; }, () -> true);
+        assertNull(result);
+        assertEquals(java.util.Arrays.asList("lyricon", "superlyric", "metadata", "local"), called);
+    }
+
+    @Test public void parsingFailureFallsThroughButUsablePreferredSourceStopsRequests() {
+        LyricSourcePolicy.Config config = new LyricSourcePolicy.Config(false, true, null, null);
+        java.util.List<String> called = new java.util.ArrayList<>();
+        String result = LyricSourcePolicy.first(config, source -> {
+            called.add(source);
+            return source.equals("metadata") ? "valid" : null;
+        }, () -> true);
+        assertEquals("valid", result);
+        assertEquals(java.util.Arrays.asList("lyricon", "superlyric", "metadata"), called);
+    }
+
+    @Test public void supersededAnswerIsNeverPublished() {
+        final boolean[] current = {true};
+        String result = LyricSourcePolicy.first(new LyricSourcePolicy.Config(false, true, null, null),
+                source -> { current[0] = false; return "stale"; }, () -> current[0]);
+        assertNull(result);
     }
 }

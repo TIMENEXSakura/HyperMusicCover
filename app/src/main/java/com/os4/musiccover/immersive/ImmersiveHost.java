@@ -1,9 +1,12 @@
 package com.os4.musiccover.immersive;
-import com.os4.musiccover.ClockCollapse;
+import com.os4.musiccover.Settings;
+import com.os4.musiccover.clock.ClockCollapse;
 import com.os4.musiccover.EdgeBlurView;
 import com.os4.musiccover.island.LockIslands;
+import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.island.MiniPlayerRuntime;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import com.os4.musiccover.transit.AmapNavScene;
 import com.os4.musiccover.transit.AmapTransitScene;
@@ -143,7 +146,7 @@ public final class ImmersiveHost {
     /** The slot's Z in the window root: under anything the row lowers (MiniPlayerRuntime's -1). */
     private static final float SLOT_Z = -10f;
 
-    private static final Handler sMain = new Handler(Looper.getMainLooper());
+    private static final Handler sMain = Gen.handler();
 
     /**
      * Under every keyguard view: the scenes' pages, and the veil over them. Always VISIBLE itself:
@@ -164,7 +167,7 @@ public final class ImmersiveHost {
     /** The open scene has given way to the cover, which came after it. See the class comment. */
     private static boolean sYield;
     /** The lock screen is held for a page: open, with a page. See Main.clockHeld(). */
-    private static boolean sHolding;
+    private static volatile boolean sHolding;
     /** The page is on screen. */
     private static boolean sShown;
 
@@ -250,6 +253,42 @@ public final class ImmersiveHost {
     /** The lock screen is given up to a page: the clock is small and the cut-out gone for it. */
     public static boolean holdsClock() {
         return sHolding;
+    }
+
+    /** The navigation framework is armed, even while its map yields to a music cover. */
+    public static boolean navigationRunning() {
+        for (ImmersiveScene scene : SCENES) {
+            if (scene.isNavigation() && scene.ready()) return true;
+        }
+        // The transit page is deliberately disabled upstream. Its framework trip still
+        // runs and must not lose contrast merely because that page cannot be presented.
+        return Settings.TRANSIT.on() && AmapTransitScene.INSTANCE.tripUp();
+    }
+
+    /** A remote navigation page is actually in front; readiness alone is not visibility. */
+    public static String presentedNavigationKey() {
+        ImmersiveScene scene = sOpen;
+        return scene != null && scene.isNavigation() && isPresented(scene) ? scene.id() : null;
+    }
+
+    /** A map waiting for its surface still owns the background choice; never sample a cover. */
+    public static String requestedNavigationKey() {
+        ImmersiveScene scene = sOpen;
+        return scene != null && scene.isNavigation() && isOpenRequested(scene) ? scene.id() : null;
+    }
+
+    /** No map text/location: explains why a requested map cannot yet supply a pixel sample. */
+    public static String navigationContrastState() {
+        ImmersiveScene scene = sOpen;
+        return presentationState(scene) + (scene instanceof LiveAlertScene
+                ? " surface=" + ((LiveAlertScene) scene).contrastSurfaceState() : " surface=not-remote");
+    }
+
+    /** Read-only remote subtree, available only for the navigation page actually presented. */
+    public static LiveAlertScene.ContrastSurface presentedNavigationSurface() {
+        ImmersiveScene scene = sOpen;
+        return scene instanceof LiveAlertScene && scene.isNavigation() && isPresented(scene)
+                ? ((LiveAlertScene) scene).contrastSurface() : null;
     }
 
     /** The scene a tap on this focus island opens; null for an island that has none. */
@@ -436,7 +475,16 @@ public final class ImmersiveHost {
 
     /** From LockIslands: the scene's island was tapped open. */
     public static void open(ImmersiveScene scene) {
-        if (sOpen == scene && !sYield) return;
+        // Direct capsule actions keep the notification folded, so opening no longer guarantees
+        // a notification-list traversal. Restore the page's window and request its normal
+        // pre-draw preparation explicitly, including a retry after a window was rebuilt.
+        if (scene.ready()) ensureSlot();
+        if (sSlot != null) sSlot.invalidate();
+        if (sOpen == scene && !sYield) {
+            apply();
+            Xp.log(TAG + "open retry " + scene.id() + ": " + presentationState(scene));
+            return;
+        }
         // Another page on the lit lock screen - just closed for this one, or still open: the one
         // dips out and the other in (SWAP_OUT_SHARE). The new one appears from nothing - or, when it is
         // the one still fading out of the last crossfade, from where it has got to: a run of
@@ -454,12 +502,40 @@ public final class ImmersiveHost {
         sOpen = scene;
         // Opened after the cover: the page is the later one now.
         sYield = false;
+        if (scene.isNavigation()) {
+            try { Main.onNavigationPageOpened(scene.id()); }
+            catch (Throwable failure) { Xp.w(TAG + "music background suspended: " + failure); }
+        }
         // Opened again while its close is still fading: it turns round from where it is.
         if (sLeaving == scene) sLeaving = null;
         sFadeInNext = litNow();
         Xp.log(TAG + "open " + scene.id() + " (ready=" + scene.ready()
                 + " page=" + scene.hasContent() + ")");
         apply();
+        Xp.log(TAG + "open result " + scene.id() + ": " + presentationState(scene));
+    }
+
+    /** The current request, which can still be waiting for a remote page to arrive. */
+    public static boolean isOpenRequested(ImmersiveScene scene) {
+        return scene != null && sOpen == scene && !sYield;
+    }
+
+    /** A request is not a visible page. Used by capsule feedback after the real open action. */
+    public static boolean isPresented(ImmersiveScene scene) {
+        return isOpenRequested(scene) && sHolding && sShown && sFade > 0f
+                && sSlot != null && sSlot.isAttachedToWindow() && sPrepared.contains(scene)
+                && scene.hasContent() && mayShow();
+    }
+
+    /** Bounded diagnostics for one open attempt; no notification text or location data. */
+    public static String presentationState(ImmersiveScene scene) {
+        return "requested=" + isOpenRequested(scene)
+                + " ready=" + (scene != null && scene.ready())
+                + " prepared=" + sPrepared.contains(scene)
+                + " content=" + (scene != null && scene.hasContent())
+                + " slot=" + (sSlot != null && sSlot.isAttachedToWindow())
+                + " holding=" + sHolding + " shown=" + sShown + " fade=" + sFade
+                + " locked=" + onLockScreen();
     }
 
     /** From LockIslands: the scene's island was pulled back in. */
@@ -472,6 +548,7 @@ public final class ImmersiveHost {
         // Already out of sight under the cover, or on its way there: nothing more to fade.
         if (wasYielding) {
             Xp.log(TAG + "close " + scene.id() + " (had yielded to the cover)");
+            restoreNavigationBackground(scene);
             apply();
             return;
         }
@@ -486,7 +563,16 @@ public final class ImmersiveHost {
             sMain.postDelayed(LEAVE_CHECK, COVER_DECIDE_MS);
         }
         Xp.log(TAG + "close " + scene.id() + (sLeaving == scene ? ", fading out" : ""));
+        // Claim the configured music background before releasing the immersive clock/slot.
+        // LEAVE_CHECK already waits for this cover's usual wallpaper acknowledgement.
+        restoreNavigationBackground(scene);
         apply();
+    }
+
+    private static void restoreNavigationBackground(ImmersiveScene scene) {
+        if (!scene.isNavigation()) return;
+        try { Main.onNavigationPageClosed(scene.id()); }
+        catch (Throwable failure) { Xp.w(TAG + "music background handoff failed: " + failure); }
     }
 
     /** From a scene: it has become ready, or stopped being. */
@@ -500,9 +586,14 @@ public final class ImmersiveHost {
             if (sSlot != null) sSlot.invalidate();
         } else {
             sLetGo.remove(scene);
-            if (sPrepared.remove(scene)) scene.release();
-            if (sOpen == scene) {
+            boolean closing = sOpen == scene;
+            if (closing) {
                 sOpen = null;
+                sYield = false;
+                restoreNavigationBackground(scene);
+            }
+            if (sPrepared.remove(scene)) scene.release();
+            if (closing) {
                 try {
                     LockIslands.INSTANCE.forgetScene(scene);
                 } catch (Throwable t) {
@@ -512,6 +603,7 @@ public final class ImmersiveHost {
             if (!anyReady()) dropSlot();
         }
         apply();
+        if (scene.isNavigation()) LockLyrics.refresh();
     }
 
     /** From a scene: its page arrived, or went. */
@@ -531,6 +623,7 @@ public final class ImmersiveHost {
 
     /** The phone was unlocked (ACTION_USER_PRESENT). Main thread. */
     public static void onUnlocked() {
+        MiniPlayerRuntime.cancelSceneFeedback();
         armRelease("user present");
     }
 
@@ -563,6 +656,7 @@ public final class ImmersiveHost {
      * is asked to draw, so the doze's first frame prepares it.
      */
     public static void onScreenOff() {
+        MiniPlayerRuntime.cancelSceneFeedback();
         cancelRelease("screen off");
         if (sSlot != null) sSlot.invalidate();
     }
@@ -696,7 +790,7 @@ public final class ImmersiveHost {
         // A page that yielded to this cover comes back when it goes (coverLeft), and CoverPush
         // asks before cover mode has ended: the whole fade in is still ahead of it.
         if (sYield && sOpen != null && sOpen.ready() && sOpen.hasContent() && litNow()) {
-            return Main.fadeMsFor(Main.sClockResponse) + 32L;
+            return Main.fadeMsFor(Settings.SPRING.get()) + 32L;
         }
         ValueAnimator a = sFadeAnim;
         if (a == null || sFadeTo != 1f || !sShown) return 0L;
@@ -773,6 +867,7 @@ public final class ImmersiveHost {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         ((ViewGroup) root).addView(slot, 0, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        Gen.ownView((ViewGroup) root, slot);
         // First to draw by Z too, not only by index: the row puts an island headed for the small
         // island's place at Z -1 to pass under the pill, which drew it before this slot - and the
         // page's SurfaceView, punching its hole through the window here, erased it. The small
@@ -784,7 +879,7 @@ public final class ImmersiveHost {
         sVeil = veil;
         sShown = false;
         sVto = root.getViewTreeObserver();
-        sVto.addOnPreDrawListener(PRE_DRAW);
+        Gen.preDraw(root, PRE_DRAW);
         Xp.log(TAG + "slot in the lock screen window");
         root.invalidate();
     }
@@ -795,7 +890,7 @@ public final class ImmersiveHost {
         sPrepared.clear();
         sLetGo.clear();
         for (ImmersiveScene s : prepared) s.release();
-        if (sVto != null && sVto.isAlive()) sVto.removeOnPreDrawListener(PRE_DRAW);
+        if (sVto != null && sVto.isAlive()) Gen.unpreDraw(sVto, PRE_DRAW);
         sVto = null;
         if (sSlot != null) {
             ViewGroup parent = (ViewGroup) sSlot.getParent();
@@ -810,6 +905,55 @@ public final class ImmersiveHost {
         sPadP = 0f;
         sPadFrameAt = 0L;
         beat(false);
+    }
+
+    /**
+     * Retirement: the page, the slot and every scene's preparation. The busy check already
+     * refuses while a page holds the clock, so this normally finds the slot empty; the fades,
+     * the let-go counts and the touch gesture are cleared anyway, because they can be armed
+     * without a page being up.
+     */
+    public static void retire() {
+        sMain.removeCallbacks(LEAVE_CHECK);
+        sMain.removeCallbacks(LET_GO_EXPIRED);
+        sMain.removeCallbacks(RELEASE_UNLOCKED);
+        sMain.removeCallbacks(LIFT_RELEASE);
+        // The display listener is Gen's and the sweep takes it; the latch must not stay on.
+        sDisplayWatched = false;
+        // So is the proximity listener, and sProximity is its latch.
+        sProximity = null;
+        sCovered = false;
+        sLiftView = null;
+        sLiftUp = false;
+        sLiftDrawnUp = false;
+        if (sDrawLock != null && sDrawLock.isHeld()) {
+            try {
+                sDrawLock.release();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (sFadeAnim != null) {
+            try {
+                sFadeAnim.cancel();
+            } catch (Throwable ignored) {
+            }
+            sFadeAnim = null;
+        }
+        sOpen = null;
+        sLeaving = null;
+        // Cancels the crossfade too: left running, it would fade the old page and apply() at
+        // its end, both this generation's code.
+        endSwap();
+        sYield = false;
+        sFadeInNext = false;
+        sShown = false;
+        sReleasePending = false;
+        sTapOwned = false;
+        sTapView = null;
+        sTapScene = null;
+        sTapPage = false;
+        dropSlot();
+        sLetGo.clear();
     }
 
     /**
@@ -1029,7 +1173,7 @@ public final class ImmersiveHost {
                 : Main.sAppCtx.getSystemService(android.hardware.SensorManager.class);
         if (sm == null) return;
         if (!on) {
-            sm.unregisterListener(sProximity);
+            Gen.unsensorListener(sm, sProximity);
             sProximity = null;
             sCovered = false;
             return;
@@ -1050,7 +1194,8 @@ public final class ImmersiveHost {
             public void onAccuracyChanged(android.hardware.Sensor sensor, int accuracy) {
             }
         };
-        sm.registerListener(sProximity, s, android.hardware.SensorManager.SENSOR_DELAY_NORMAL, sMain);
+        Gen.sensorListener(sm, sProximity, s,
+                android.hardware.SensorManager.SENSOR_DELAY_NORMAL, sMain);
     }
 
     private static boolean litNow() {
@@ -1151,9 +1296,10 @@ public final class ImmersiveHost {
     private static void startFade(final ImmersiveScene page, final float to, boolean late) {
         stopFade();
         final float from = sFade;
-        long ms = Main.fadeMsFor(Main.sClockResponse);
-        // The share of the full fade this one still has to go, so a turn half way is not slower.
-        ms = Math.max(1L, Math.round(ms * Math.abs(to - from)));
+        // The share still to travel keeps a reversal continuous. Navigation is brought up
+        // faster, without shortening a close or another scene's existing animation.
+        long ms = ImmersiveOpenTiming.duration(Main.fadeMsFor(Settings.SPRING.get()),
+                to - from, page.isNavigation(), to > from);
         ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
         a.setDuration(ms);
         // The cover crossfade's ease-out (WallpaperProbe): a spring is all front-loaded, and the
@@ -1165,10 +1311,11 @@ public final class ImmersiveHost {
                 return e * e;
             });
         } else if (to > from && sSwapOut != null) {
-            // Coming in over a page going out: not until that one has all but gone. Two pages of
-            // words crossfaded read as one jumble for the middle of it (2026-10-07).
+            // Navigation starts promptly while the outgoing page completes its own fade.
+            // Other scenes keep the longer dip that avoids overlapping their text.
+            final float delay = ImmersiveOpenTiming.swapDelay(SWAP_IN_DELAY, ms, page.isNavigation());
             a.setInterpolator(t -> {
-                float u = Math.max(0f, (t - SWAP_IN_DELAY) / (1f - SWAP_IN_DELAY));
+                float u = Math.max(0f, (t - delay) / (1f - delay));
                 return 1f - (1f - u) * (1f - u) * (1f - u);
             });
         } else {
@@ -1219,7 +1366,7 @@ public final class ImmersiveHost {
         sSwapOut = out;
         final float from = sFade;
         sSwapFade = from;
-        long ms = Math.max(1L, Math.round(Main.fadeMsFor(Main.sClockResponse) * from * SWAP_OUT_SHARE));
+        long ms = Math.max(1L, Math.round(Main.fadeMsFor(Settings.SPRING.get()) * from * SWAP_OUT_SHARE));
         ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
         a.setDuration(ms);
         a.setInterpolator(t -> 1f - (1f - t) * (1f - t) * (1f - t));
@@ -1448,7 +1595,7 @@ public final class ImmersiveHost {
         if (sDisplayWatched) return;
         try {
             DisplayManager dm = ctx.getSystemService(DisplayManager.class);
-            dm.registerDisplayListener(new DisplayManager.DisplayListener() {
+            Gen.displayListener(dm, new DisplayManager.DisplayListener() {
                 @Override
                 public void onDisplayAdded(int id) {
                 }

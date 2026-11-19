@@ -1,6 +1,7 @@
 package com.os4.musiccover.app
 import com.os4.musiccover.R
 import com.os4.musiccover.ui.util.nextCard
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import com.os4.musiccover.ui.util.FoldUnder
 import android.content.Context
@@ -9,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -26,24 +28,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.os4.musiccover.ui.component.SettingsNotices
 import com.os4.musiccover.ui.screen.features.TransitDemo
 import com.os4.musiccover.ui.theme.AppTheme
 import com.os4.musiccover.ui.util.PageScaffold
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.os4.musiccover.ui.util.AppDialog
+import com.os4.musiccover.ui.util.AppDialogButton
+import com.os4.musiccover.ui.util.AppDialogButtonRole
 
 /**
  * 高德's bus and subway trip - its island (AmapTransitIsland) and its lock screen page
@@ -64,7 +67,7 @@ class TransitActivity : ComponentActivity() {
         val theme = runCatching { ColorSchemeMode.valueOf(settings.themeMode) }
             .getOrDefault(ColorSchemeMode.System)
         setContent {
-            AppTheme(themeMode = theme) { TransitPage(settings.isBlurEnabled, resumes, ::finish) }
+            AppTheme(themeMode = theme, useOs4Ui = settings.useOs4Ui, cardGlass = settings.cardGlass) { TransitPage(settings.isBlurEnabled, resumes, ::finish) }
         }
     }
 
@@ -81,7 +84,9 @@ class TransitActivity : ComponentActivity() {
 @Composable
 private fun TransitPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
     val context = LocalContext.current
-    var module by remember { mutableStateOf(ModuleBridge.State()) }
+    // The app's copy first once it is the source (stage 5.3); see FeaturesPage.
+    var module by remember { mutableStateOf(ModuleBridge.initialState()) }
+    val migrated by SettingsStore.migratedState.collectAsState()
     var asked by remember { mutableStateOf(false) }
     // 取餐码云端名单那一行：正在同步，和上一次失败的原因（成功了就清掉，日期自己会变）。
     var syncing by remember { mutableStateOf(false) }
@@ -99,13 +104,15 @@ private fun TransitPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
         module = ModuleBridge.queryAlive(context)
         asked = true
     }
+    // Editable on the app's copy alone once it is the source; see FeaturesPage.
+    val enabled = module.alive || migrated
 
     PageScaffold(title = stringResource(R.string.features_transit_title), isBlurEnabled = blur,
         onBack = onBack) {
         item(key = "demo") {
             // What the trip's island does, played on a drawn phone, before the switch (as the
             // islands' own page has it).
-            Card(Modifier.firstCard()) {
+            AppCard(Modifier.firstCard()) {
                 TransitDemo(Modifier.padding(top = 16.dp))
             }
         }
@@ -113,38 +120,41 @@ private fun TransitPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
             // 通勤这一节的抬头，和这一节的第一张卡：「启用高德公交地铁」。这个开关管的是整节
             // （逐站岛和通勤学习都在它下面），所以它落在抬头之下、学习通勤路线之上。
             SmallTitle(text = stringResource(R.string.commute_title))
-            Card(Modifier.nextCard()) {
-                // Only an answer can put this on (ShadePageView says why).
-                SwitchPreference(title = stringResource(R.string.transit_enabled),
-                    summary = if (asked && !module.alive) {
-                        stringResource(R.string.home_status_inactive_hint)
-                    } else {
-                        null
-                    },
-                    checked = module.alive && module.transit, enabled = module.alive,
-                    onCheckedChange = {
-                        module = module.copy(transit = it)
-                        ModuleBridge.setTransit(context, it)
-                    })
+            AppCard(Modifier.nextCard()) {
+                Column {
+                    SettingsNotices(alive = module.alive)
+                    // Only an answer can put this on (ShadePageView says why).
+                    SwitchPreference(title = stringResource(R.string.transit_enabled),
+                        summary = if (asked && !module.alive && !migrated) {
+                            stringResource(R.string.home_status_inactive_hint)
+                        } else {
+                            null
+                        },
+                        checked = enabled && module.transit, enabled = enabled,
+                        onCheckedChange = {
+                            module = module.copy(transit = it)
+                            ModuleBridge.setTransit(context, it)
+                        })
+                }
             }
         }
         item(key = "commute") {
             // The commute is the trip island's: it folds away under that switch (FoldUnder).
-            FoldUnder(module.alive && module.transit, settled = module.alive) {
+            FoldUnder(enabled && module.transit, settled = enabled) {
                 CommuteSection(refreshKey)
             }
         }
         item(key = "pickup") {
             SmallTitle(text = stringResource(R.string.pickup_title))
-            Card(Modifier.nextCard()) {
+            AppCard(Modifier.nextCard()) {
                 SwitchPreference(title = stringResource(R.string.pickup_enabled),
                     // The same hint as the switch above, for a phone that scrolled past it.
-                    summary = if (asked && !module.alive) {
+                    summary = if (asked && !module.alive && !migrated) {
                         stringResource(R.string.home_status_inactive_hint)
                     } else {
                         null
                     },
-                    checked = module.alive && module.pickup, enabled = module.alive,
+                    checked = enabled && module.pickup, enabled = enabled,
                     onCheckedChange = {
                         module = module.copy(pickup = it)
                         ModuleBridge.setPickup(context, it)
@@ -153,7 +163,7 @@ private fun TransitPage(blur: Boolean, refreshKey: Int, onBack: () -> Unit) {
                 // are only read for the pickup island.
                 // 云端那一份是 ColorOS 自己的微信小程序名单（93 条），比随包的规则 XML 新也比它全；
                 // 拉一次要过网络，所以给一个手动按钮，副标题显示当前这份的更新日期。
-                FoldUnder(module.alive && module.pickup, settled = module.alive) {
+                FoldUnder(enabled && module.pickup, settled = enabled) {
                     BasicComponent(
                         title = stringResource(R.string.pickup_cloud_refresh),
                         summary = when {
@@ -212,7 +222,7 @@ private fun CommuteSection(refreshKey: Int) {
         state = ModuleBridge.commute(context)
         asked = true
     }
-    Card(Modifier.nextCard()) {
+    AppCard(Modifier.nextCard()) {
         SwitchPreference(title = stringResource(R.string.commute_learn),
             summary = if (asked && !state.reached) {
                 stringResource(R.string.commute_unreached)
@@ -239,23 +249,23 @@ private fun CommuteSection(refreshKey: Int) {
                 onClick = { confirming = true })
         }
     }
-    WindowDialog(show = confirming,
+    AppDialog(show = confirming,
         title = stringResource(R.string.commute_forget_confirm),
         summary = stringResource(R.string.commute_forget_confirm_summary, state.trips),
         onDismissRequest = { confirming = false }) {
         val dismiss = LocalDismissState.current
         Row(horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(modifier = Modifier.weight(1f),
+            AppDialogButton(modifier = Modifier.weight(1f),
                 text = stringResource(R.string.update_cancel),
                 onClick = { dismiss?.invoke() })
             Spacer(Modifier.width(20.dp))
-            TextButton(modifier = Modifier.weight(1f),
+            AppDialogButton(modifier = Modifier.weight(1f),
                 text = stringResource(R.string.commute_forget_do),
                 onClick = {
                     confirming = false
                     scope.launch { state = ModuleBridge.commute(context, "forget") }
                 },
-                colors = ButtonDefaults.textButtonColorsPrimary())
+                role = AppDialogButtonRole.Primary)
         }
     }
 }

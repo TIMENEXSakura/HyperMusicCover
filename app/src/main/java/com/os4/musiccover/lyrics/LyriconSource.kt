@@ -1,7 +1,9 @@
 package com.os4.musiccover.lyrics
+import com.os4.musiccover.Settings
 import com.os4.musiccover.Xp
 import android.content.Context
 import android.content.ContextWrapper
+import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
 import io.github.proify.lyricon.subscriber.ActivePlayerListener
@@ -40,9 +42,8 @@ object LyriconSource {
     @Volatile
     private var sSong: Song? = null
 
-    /** The last connection state, for the probe. Words rather than the enum, which is internal. */
-    @Volatile
-    private var sState = "not started"
+    /** Live subscriber status, shared with the settings and lookup paths. */
+    private val availability = LyriconAvailability()
 
     /** How many songs have arrived, so a probe can tell "connected" from "connected and working". */
     @Volatile
@@ -87,20 +88,32 @@ object LyriconSource {
     /** The package this subscriber registers as - see attach. Our applicationId, so it is unique. */
     private const val SUBSCRIBER_NAME = "com.github.zyl6932.HyperMusicCover"
 
-    /**
-     * Whether there is a Lyricon service on this phone at all - what "Lyricon is installed" means
-     * for the settings page's lyric-source row.
-     *
-     * Not a package to look up: what a subscriber talks to is the Lyricon central, which may be
-     * an app of its own or built into another module's, so the only thing that can answer the
-     * question is whether one replied. "no service" is the connect timeout and is the one state
-     * that means no; "failed" is our own subscriber throwing, which says nothing about the phone
-     * and is left as a no for that reason.
-     */
-    @JvmStatic
-    fun installed(): Boolean = when (sState) {
-        "connected", "reconnected", "disconnected" -> true
-        else -> false
+    /** A framework handshake has been observed in this process, even if it later disconnected. */
+    @JvmStatic fun installed(): Boolean = availability.observed()
+    @JvmStatic fun connected(): Boolean = availability.connected()
+    @JvmStatic fun status(): String = availability.status()
+
+    private fun connection(state: String) {
+        try {
+            availability.connection(state)
+            if (!availability.connected()) {
+                synchronized(sSongLock) {
+                    sSong = null
+                    sProvider = null
+                    sPlayer = null
+                    sPlayerSongs = 0
+                    sSongLock.notifyAll()
+                }
+                LockLyrics.onProviderUnavailable()
+            } else if (!sSong?.lyrics.isNullOrEmpty()) {
+                // bindService can synchronously deliver the initial song before onConnected.
+                LockLyrics.onProviderLyrics()
+            }
+            // No song titles, lyric text or notification payloads in connection diagnostics.
+            Xp.log("[MCLyricon] framework=" + status() + " observed=" + installed())
+        } catch (t: Throwable) {
+            sError = t.toString()
+        }
     }
 
     /**
@@ -123,6 +136,7 @@ object LyriconSource {
             sAttached = true
         }
         try {
+            connection("connecting")
             // Under a name of our own. The central keys a subscriber by (package, process) and a
             // second one under a key it already has is handed the FIRST one's connection, which
             // holds a single listener - so ours, registered from SystemUI as
@@ -136,19 +150,19 @@ object LyriconSource {
             })
             subscriber.addConnectionListener(object : ConnectionListener {
                 override fun onConnected(subscriber: LyriconSubscriber) {
-                    sState = "connected"
+                    connection("connected")
                 }
 
                 override fun onReconnected(subscriber: LyriconSubscriber) {
-                    sState = "reconnected"
+                    connection("reconnected")
                 }
 
                 override fun onDisconnected(subscriber: LyriconSubscriber) {
-                    sState = "disconnected"
+                    connection("disconnected")
                 }
 
                 override fun onConnectTimeout(subscriber: LyriconSubscriber) {
-                    sState = "no service"
+                    connection("no service")
                 }
             })
             subscriber.subscribeActivePlayer(Listener)
@@ -156,10 +170,51 @@ object LyriconSource {
             subscriber.register()
             Xp.log("[MCLyricon] subscribed: " + describe())
         } catch (t: Throwable) {
-            sState = "failed"
+            connection("failed")
             sError = t.toString()
             Xp.log("[MCLyricon] could not subscribe: " + t)
         }
+    }
+
+    /**
+     * Retirement: everything the bridge holds of ours is released.
+     *
+     * <p>The listener below and the connection listener in attach() are objects of the class
+     * loader that is going away, and the central keys a subscriber by (package, process): a live
+     * one left behind would be handed to the next generation instead of the one it creates (see
+     * the identity collision this module already hit). destroy() releases the connection; the
+     * active-player listener is taken off first, so no callback can arrive mid-teardown.
+     *
+     * <p>Safe to call when nothing was ever attached, and safe to call twice.
+     */
+    @JvmStatic
+    fun detach() {
+        val sub = synchronized(this) {
+            if (!sAttached) return
+            sAttached = false
+            val s = sSubscriber
+            sSubscriber = null
+            s
+        }
+        try {
+            sub?.unsubscribeActivePlayer(Listener)
+        } catch (t: Throwable) {
+            Xp.log("[MCLyricon] unsubscribe failed: " + t)
+        }
+        try {
+            sub?.destroy()
+        } catch (t: Throwable) {
+            Xp.log("[MCLyricon] destroy failed: " + t)
+        }
+        synchronized(sSongLock) {
+            sSong = null
+            sSongLock.notifyAll()
+        }
+        availability.connection("not started")
+        sPlayer = null
+        sProvider = null
+        sPlayerSongs = 0
+        Xp.log("[MCLyricon] detached")
     }
 
     /**
@@ -183,7 +238,10 @@ object LyriconSource {
                     sSongLock.notifyAll()
                     changed
                 }
-                if (changed && !song?.lyrics.isNullOrEmpty()) LockLyrics.onProviderLyrics()
+                if (changed && connected()) {
+                    if (song?.lyrics.isNullOrEmpty()) LockLyrics.onProviderUnavailable()
+                    else LockLyrics.onProviderLyrics()
+                }
             } catch (t: Throwable) {
                 sError = t.toString()
             }
@@ -195,8 +253,17 @@ object LyriconSource {
                     it.providerPackageName + " -> " + it.playerPackageName
                 }
                 val player = providerInfo?.playerPackageName
-                if (player != sPlayer) sPlayerSongs = 0
-                sPlayer = player
+                availability.provider(providerInfo != null)
+                synchronized(sSongLock) {
+                    if ((sPlayer != null && player != sPlayer) || player == null) {
+                        sPlayerSongs = 0
+                        sSong = null
+                    }
+                    sPlayer = player
+                    sSongLock.notifyAll()
+                }
+                if (providerInfo == null) LockLyrics.onProviderUnavailable()
+                Xp.log("[MCLyricon] framework=" + status())
             } catch (t: Throwable) {
                 sError = t.toString()
             }
@@ -232,20 +299,23 @@ object LyriconSource {
      * the bridge was still holding, and the per-track cache kept it for every later play.
      *
      * When the song in hand is not this one but the active provider is reading this player, the
-     * right one is on its way, so this waits for it - briefly, on the lookup's worker - rather
-     * than handing the track to the catalogues, which is where the bridge's copy would be lost.
+     * right one may be on its way. When network lookup is enabled, wait briefly on the worker
+     * before asking catalogues. When it is disabled, report the current answer immediately;
+     * onSongChanged requests a fresh lookup if the provider subsequently publishes lyrics.
      */
     @JvmStatic
-    fun linesFor(title: String?, artist: String?, player: String?): List<LyricLine>? {
+    fun linesFor(track: TrackIdentity, player: String?, waitForProvider: Boolean): List<LyricLine>? {
+        if (!connected()) return null
+        val flexibleDuet = Settings.LYRIC_FLEX_DUET.on()
         var song = sSong
-        if (song == null || !isTrack(song, title, artist)) {
+        if (song == null || !isTrack(song, track)) {
             // Only a provider that has shown it publishes; see sPlayerSongs.
-            if (player != null && player == sPlayer && sPlayerSongs > 0) {
+            if (waitForProvider && player != null && player == sPlayer && sPlayerSongs > 0) {
                 val until = android.os.SystemClock.uptimeMillis() + CATCH_UP_MS
                 synchronized(sSongLock) {
-                    while (true) {
+                    while (connected()) {
                         song = sSong
-                        if (song != null && isTrack(song!!, title, artist)) break
+                        if (song != null && isTrack(song!!, track)) break
                         val left = until - android.os.SystemClock.uptimeMillis()
                         if (left <= 0) break
                         sSongLock.wait(left)
@@ -253,49 +323,50 @@ object LyriconSource {
                 }
             }
             val held = song
-            if (held == null || !isTrack(held, title, artist)) {
+            if (held == null || !isTrack(held, track)) {
                 if (held != null) {
-                    Xp.log("[MCLyricon] holding \"" + held.name + "\" while the track is \""
-                            + title + "\"; not reading it")
+                    Xp.log("[MCLyricon] holding \"" + held.name + "\" while the track is "
+                            + track.readings + "; not reading it")
                 }
                 return null
             }
         }
-        val rich = song!!.lyrics
+        if (!connected()) return null
+        val selectedSong = song ?: return null
+        val selectedPlayer = sPlayer
+        val rich = selectedSong.lyrics
         if (rich.isNullOrEmpty()) return null
         val out = ArrayList<LyricLine>(rich.size)
         // Where the tail of a line may run to when the bridge gave its last word no end of its
         // own: the arrival of the line after it, the same room every other word-timed source
         // leaves - see LyricParse.closeUntimedTail. By time, since the bridge's order is not
         // trusted either (the rows are sorted below).
-        val begins = rich.map { it.begin.toInt() }.sorted().toIntArray()
+        val begins = rich.map { ms(it.begin) }.sorted().toIntArray()
         for (line in rich) {
-            val nextStart = LyricParse.nextAfter(begins, line.begin.toInt(), line.end.toInt())
-            convert(line, nextStart)?.let { out.add(it) }
+            val nextStart = LyricParse.nextAfter(begins, ms(line.begin), ms(line.end))
+            LyriconConverter.convert(line, nextStart, flexibleDuet)?.let { out.add(it) }
         }
         if (out.isEmpty()) return null
         out.sortBy { it.start }
-        return out
+        val lines = LyricParse.flexibleSpeakers(out, flexibleDuet)
+        if (!connected() || selectedSong !== sSong || Settings.LYRIC_FLEX_DUET.on() != flexibleDuet) return null
+        val id = selectedSong.id
+        return if (selectedPlayer == AppleDuetRows.PLAYER && selectedPlayer == player &&
+            sPlayer == selectedPlayer && !id.isNullOrBlank()) {
+            AppleDuetRows(id, lines)
+        } else lines
     }
 
     /**
-     * Whether the bridge's song is this track: a title that agrees, and an artist that does not
-     * disagree - or, on the players that sing into TITLE, the song and singer ARTIST spells
-     * (TrackName.splits). Held against the title alone, 汽水's song was refused from its first
-     * sung line on, and the lookup went to the catalogues with the line as the song's name (#56).
+     * Whether the bridge's song is this track: a name that agrees with a reading of the session
+     * (TrackIdentity) and a singer that does not disagree with that same reading. Held against
+     * TITLE alone, 汽水's song was refused from its first sung line on, and the lookup went to the
+     * catalogues with the line as the song's name (#56). A session with nothing to hold it
+     * against takes nothing.
      */
-    private fun isTrack(song: Song, title: String?, artist: String?): Boolean {
+    private fun isTrack(song: Song, track: TrackIdentity): Boolean {
         if (song.name.isNullOrBlank()) return false
-        if (!title.isNullOrBlank() && names(song.name, title) && names(song.artist, artist)) return true
-        return TrackName.pairIn(song.name, song.artist, artist)
-    }
-
-    /** Whether two names agree, or say nothing. A blank on either side is not a contradiction. */
-    private fun names(theirs: String?, ours: String?): Boolean {
-        val a = theirs?.trim()?.lowercase().orEmpty()
-        val b = ours?.trim()?.lowercase().orEmpty()
-        if (a.isEmpty() || b.isEmpty()) return true
-        return a.contains(b) || b.contains(a)
+        return track.accepts(song.name, song.artist)
     }
 
     /**
@@ -308,51 +379,19 @@ object LyriconSource {
      * A line whose words are missing or unusable stays line-timed, which draws correctly and
      * simply does not fill word by word.
      */
-    private fun convert(line: RichLyricLine, nextStart: Int): LyricLine? {
-        val text = line.text?.trim().orEmpty()
-        val words = line.words
-        var built: LyricLine? = null
-        if (!words.isNullOrEmpty()) {
-            val sb = StringBuilder()
-            val starts = ArrayList<Int>(words.size)
-            val ends = ArrayList<Int>(words.size)
-            val chars = ArrayList<Int>(words.size)
-            for (w in words) {
-                val t = w.text ?: continue
-                if (t.isEmpty()) continue
-                sb.append(t)
-                starts.add(w.begin.toInt())
-                // A word with no end of its own is left to the tail-closing pass below, which is
-                // the same thing every other word-timed source here needs.
-                ends.add(if (w.end > w.begin) w.end.toInt() else w.begin.toInt())
-                chars.add(sb.length)
-            }
-            var n = sb.length
-            while (n > 0 && sb[n - 1].isWhitespace()) n--
-            if (n > 0 && starts.isNotEmpty()) {
-                for (k in chars.indices) if (chars[k] > n) chars[k] = n
-                val s = starts.toIntArray()
-                val e = ends.toIntArray()
-                LyricParse.closeUntimedTail(s, e, line.end.toInt(), nextStart)
-                built = LyricLine(sb.substring(0, n), line.translation,
-                    LyricParse.romaOf(line.roma, sb.substring(0, n)), line.begin.toInt(),
-                    line.end.toInt(), line.isAlignedRight, s, e, chars.toIntArray())
-            }
-        }
-        if (built == null) {
-            if (text.isEmpty()) return null
-            built = LyricLine(text, line.translation, LyricParse.romaOf(line.roma, text),
-                line.begin.toInt(), line.end.toInt(), line.isAlignedRight, null, null, null)
-        }
-        // The background vocal, which the renderer hangs under the line rather than beside it.
-        LyriconBackground.attach(built, line, nextStart)
-        return built
-    }
+    internal fun convert(line: RichLyricLine, nextStart: Int): LyricLine? =
+        LyriconConverter.convert(line, nextStart)
+
+    internal fun background(line: RichLyricLine, nextStart: Int): LyricLine? =
+        LyriconBackground.convert(line, nextStart)
+
+    private fun ms(v: Long) = v.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+
 
     /** Diagnostics: what the bridge is doing, for the probe. Never throws. */
     @JvmStatic
     fun describe(): String {
-        val sb = StringBuilder("state=").append(sState)
+        val sb = StringBuilder("state=").append(status()).append(" observed=").append(installed())
         sb.append(" songs=").append(sSongs).append(" playerSongs=").append(sPlayerSongs)
         sProvider?.let { sb.append(" provider=").append(it) }
         if (sSubscriber == null) {
@@ -367,6 +406,7 @@ object LyriconSource {
             sb.append(" song=").append(song.name).append(" / ").append(song.artist)
                 .append(" / ").append(song.duration).append("ms")
                 .append(" lines=").append(lines).append(" wordLines=").append(words)
+                .append(" alignedRightRows=").append(song.lyrics?.count { it.isAlignedRight } ?: 0)
         }
         sError?.let { sb.append(" lastError=").append(it) }
         return sb.toString()

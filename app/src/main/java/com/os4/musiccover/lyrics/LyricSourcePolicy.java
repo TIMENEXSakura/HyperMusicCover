@@ -5,18 +5,25 @@ import java.util.LinkedHashSet;
 import java.util.Locale;
 
 public final class LyricSourcePolicy {
-    public static final String DEFAULT_SOURCES = "metadata,local,lyricon,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
-    public static final String DEFAULT_FORMATS = "ttml,lrc,yrc,krc,lys";
-    public static volatile Config current = new Config(false, true, DEFAULT_SOURCES, DEFAULT_FORMATS);
+    public static final String DEFAULT_SOURCES = "lyricon,superlyric,metadata,local,amll,ttmlhub,qq,netease,kugou,kuwo,lrclib";
+    private static volatile Config cached;
+    public static Config current() {
+        boolean custom = com.os4.musiccover.Settings.LYRIC_SOURCE_CUSTOM.on();
+        boolean online = com.os4.musiccover.Settings.LYRIC_ONLINE.on();
+        String sources = com.os4.musiccover.Settings.LYRIC_SOURCE_ORDER.get();
+        String format = com.os4.musiccover.Settings.LYRIC_LOCAL_FORMAT.get();
+        Config old = cached;
+        if (old == null || old.custom != custom || old.allowNetwork != online
+                || !old.sourceOrder.equals(sources) || !old.localFormat.equals(format)) {
+            cached = old = new Config(custom, online, sources, format);
+        }
+        return old;
+    }
 
     private LyricSourcePolicy() { }
 
     public static String normalizeSources(String order) {
         return normalize(order, DEFAULT_SOURCES);
-    }
-
-    public static String normalizeFormats(String order) {
-        return normalize(order, DEFAULT_FORMATS);
     }
 
     private static String normalize(String order, String defaults) {
@@ -28,25 +35,56 @@ public final class LyricSourcePolicy {
                 if (allowed.contains(key)) result.add(key);
             }
         }
+        // Older saved priority lists gain the new bridge alongside Lyricon.
+        if (result.contains("lyricon") && !result.contains("superlyric")) {
+            LinkedHashSet<String> migrated = new LinkedHashSet<>();
+            for (String source : result) {
+                migrated.add(source);
+                if (source.equals("lyricon")) migrated.add("superlyric");
+            }
+            result = migrated;
+        }
         result.addAll(allowed);
         return String.join(",", result);
     }
 
+    /** Ordinal positions are unique: moving one source shifts the others stably. */
+    public static String move(String order, String source, int position) {
+        java.util.List<String> items = new java.util.ArrayList<>(Arrays.asList(order.split(",")));
+        if (!items.remove(source)) return order;
+        items.add(Math.max(0, Math.min(items.size(), position - 1)), source);
+        return String.join(",", items);
+    }
+
+    /** Sequential selection: a fast lower-priority answer cannot race the preferred source. */
+    static <T> T first(Config config, java.util.function.Function<String, T> read,
+                       java.util.function.BooleanSupplier stillCurrent) {
+        for (String source : config.sources()) {
+            if (!stillCurrent.getAsBoolean()) return null;
+            if (!config.permits(source)) continue;
+            T result = read.apply(source);
+            if (!stillCurrent.getAsBoolean()) return null;
+            if (result != null) return result;
+        }
+        return null;
+    }
+
     public static boolean network(String source) {
-        return !"metadata".equals(source) && !"local".equals(source) && !"lyricon".equals(source);
+        return !"metadata".equals(source) && !"local".equals(source) && !"lyricon".equals(source)
+                && !"superlyric".equals(source);
     }
 
     public static final class Config {
         public final boolean custom;
         public final boolean allowNetwork;
         public final String sourceOrder;
-        public final String formatOrder;
+        public final String localFormat;
 
-        public Config(boolean custom, boolean allowNetwork, String sourceOrder, String formatOrder) {
+        public Config(boolean custom, boolean allowNetwork, String sourceOrder, String localFormat) {
             this.custom = custom;
             this.allowNetwork = allowNetwork;
             this.sourceOrder = normalizeSources(sourceOrder);
-            this.formatOrder = normalizeFormats(formatOrder);
+            this.localFormat = LocalLyricFormat.normalize(localFormat);
         }
 
         public String[] sources() {
@@ -54,7 +92,7 @@ public final class LyricSourcePolicy {
         }
 
         public String[] formats() {
-            return formatOrder.split(",");
+            return LocalLyricFormat.formats(localFormat);
         }
 
         public boolean permits(String source) {

@@ -1,5 +1,6 @@
 package com.os4.musiccover.island
 import com.os4.musiccover.Main
+import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
 import com.os4.musiccover.immersive.CountdownScene
 import com.os4.musiccover.immersive.ImmersiveHost
@@ -54,6 +55,7 @@ internal object LockIslands {
         val summary: Boolean,
         /** Shown as the lock screen shows it: the public version. */
         val redacted: Boolean = false,
+        val category: String? = null,
         /**
          * The super island's own ranking of it, from the focus notification's param_island:
          * islandProperty, islandPriority (1 and 1 without one, as FocusNotifUtils fills in), and
@@ -164,7 +166,6 @@ internal object LockIslands {
     @Volatile var notes: List<Note> = emptyList()
         private set
 
-    private val main = Handler(Looper.getMainLooper())
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private var filter: WeakReference<Any>? = null
     private var active = false
@@ -184,26 +185,88 @@ internal object LockIslands {
      *
      * Opening it puts the page up behind the lock screen, the way tapping the music's island puts
      * the cover up, and like the cover it stays up across an unlock until it is pulled back into
-     * the island or the scene stops being ready. So it is kept when the rest of [released] is
-     * cleared, and dropped only by [recapture] or [forgetScene]. Kept by key rather than looked
+     * the island or the scene stops being ready. Navigation explicitly opened by a body tap
+     * also survives panel recapture; only its next body tap or scene ending closes that choice.
+     * It is kept when the rest of [released] is cleared. Kept by key rather than looked
      * up: the notification can be gone from the reads by the time it is dropped. One at a time:
      * another page's island opened takes over, and the first one's row stays a plain row until
      * the lock screen goes, as any other opened island does.
      */
     private var sceneKey: String? = null
     private var scene: ImmersiveScene? = null
+    private val sceneRetention = CapsuleSceneRetention()
 
     /** The open page's notification: its row is in the stack while the page is up. */
     fun openSceneKey(): String? = sceneKey
 
+    /** A retained page can be closed while its notification is being refreshed. */
+    fun openSceneFor(key: String): ImmersiveScene? = scene.takeIf { sceneKey == key }
+
     private fun sceneOf(key: String): ImmersiveScene? =
         noteFor(key)?.let { runCatching { ImmersiveHost.sceneFor(it.pkg, it.focus, key) }.getOrNull() }
 
-    /** What a clear of [released] leaves: the open page's island, if there is one. */
+    /** Toggle only the module's immersive content. The real navigation session is untouched. */
+    fun toggleScene(key: String): Boolean? {
+        if (sceneKey == key) {
+            val closing = scene ?: return null
+            sceneRetention.closed(key)
+            sceneKey = null
+            scene = null
+            sceneMissingSince = 0L
+            ImmersiveHost.close(closing)
+            return false
+        }
+        val target = sceneOf(key) ?: return null
+        if (!target.ready()) return null
+        scene?.let { ImmersiveHost.close(it) }
+        // Publish the request before opening: synchronous readiness/content callbacks may
+        // invalidate it. Writing it afterwards would resurrect a page those callbacks closed.
+        sceneKey = key
+        scene = target
+        sceneRetention.opened(key, target.isNavigation(), fromBody = true)
+        sceneMissingSince = 0L
+        try {
+            ImmersiveHost.open(target)
+        } catch (error: Throwable) {
+            if (sceneKey == key && scene === target) {
+                sceneRetention.closed(key)
+                sceneKey = null
+                scene = null
+            }
+            runCatching { ImmersiveHost.close(target) }
+            Xp.w("MCIsland: ${target.id()} open failed: $error")
+            return null
+        }
+        // Keep its capsule available for the next tap; release() is reserved for swipe-to-panel.
+        return true.takeIf { sceneOpenRequested(key) }
+    }
+
+    /** The scene request may still be loading. It is not a claim that its page is visible. */
+    fun sceneOpenRequested(key: String): Boolean =
+        sceneKey == key && scene?.let(ImmersiveHost::isOpenRequested) == true
+
+    fun sceneIsPresented(key: String): Boolean =
+        sceneKey == key && scene?.let(ImmersiveHost::isPresented) == true
+
+    fun scenePresentationState(key: String): String =
+        ImmersiveHost.presentationState(if (sceneKey == key) scene else sceneOf(key))
+
+    /** Keep released focus cards across an unlock, without releasing a body-tapped page. */
     private fun clearReleased() {
-        val keep = sceneKey
-        released.clear()
-        if (keep != null) released.add(keep)
+        val keep = sceneKey?.takeIf { it in released }
+        released.retainAll { it == keep || !isAppGroup(it) && lastRead[it]?.focus == true }
+    }
+
+    /** Match remove/repost in event order, even if main-thread delivery is delayed. */
+    private val releasedGrace = ReleasedNotificationGrace()
+
+    private fun dropRemoved(key: String, event: Long) {
+        if (!releasedGrace.removed(key, event)) return
+        Gen.postDelayed({
+            if (releasedGrace.expired(key, event) && key != sceneKey && released.remove(key))
+                invalidate("released $key removed")
+            releasedGrace.prune(released)
+        }, SCENE_GONE_MS)
     }
 
     /**
@@ -225,13 +288,14 @@ internal object LockIslands {
         if (sceneMissingSince == 0L) {
             sceneMissingSince = now
             // Nothing is sure to run the pipeline again once the notification is gone.
-            main.postDelayed({ invalidate("scene note check") }, SCENE_GONE_MS + 100L)
+            Gen.postDelayed({ invalidate("scene note check") }, SCENE_GONE_MS + 100L)
             return
         }
         if (now - sceneMissingSince < SCENE_GONE_MS) return
         sceneMissingSince = 0L
         val closed = scene ?: return
         Xp.log("MCIsland: ${closed.id()}'s notification is gone; closing its page")
+        sceneRetention.closed(key)
         sceneKey = null
         scene = null
         released.remove(key)
@@ -245,11 +309,14 @@ internal object LockIslands {
      * screen is the plain one with the list on it, the page's notification a card in that list
      * like any other opened one - still let out ([released]), so it folds home with the rest.
      * It stayed as the page's before, and was left standing over the folded stack (the user,
-     * 2026-09-30). Its key, or null with no page open.
+     * 2026-09-30). Explicit navigation choices now stay behind the list and survive its collapse.
+     * Returns its key in either case, or null with no page open.
      */
     fun closeSceneForList(): String? {
         val key = sceneKey ?: return null
+        if (sceneRetention.keeps(key)) return key
         val closed = scene
+        sceneRetention.closed(key)
         sceneKey = null
         scene = null
         sceneMissingSince = 0L
@@ -262,6 +329,7 @@ internal object LockIslands {
     fun forgetScene(which: ImmersiveScene) {
         if (scene !== which) return
         val key = sceneKey
+        sceneRetention.closed(key)
         sceneKey = null
         scene = null
         if (key != null && released.remove(key)) invalidate("${which.id()} over")
@@ -371,6 +439,30 @@ internal object LockIslands {
     /** The focus islands of the last run, before the stack island is put with them (publish). */
     private var focusShown: List<Note> = emptyList()
 
+    /**
+     * Retirement: the open page's island forgotten, the released set emptied, the spread and the
+     * fold given back. A controller's destroy() does most of this already; this is the same
+     * ground when no controller was alive to do it.
+     */
+    @JvmStatic
+    fun retire() {
+        if (spreading) setSpread(false, folded = true)
+        sceneKey = null
+        scene = null
+        sceneMissingSince = 0L
+        released.clear()
+        stackMembers = emptyList()
+        focusShown = emptyList()
+        setActive(false)
+        stopFolding()
+        // The receiver itself is in Gen's ledger and the sweep takes it. This guard is what
+        // would keep the next pipeline run from registering it again.
+        screenWatch = false
+        // The unlock watch clears itself when its loop ends; the sweep deletes the continuation
+        // instead, so the flag has to be cleared here or no later unlock ever watches.
+        unlockWatch = false
+    }
+
     fun install(classLoader: ClassLoader) {
         focusCheck = runCatching {
             Xp.findClass("com.android.systemui.statusbar.notification.utils.FocusUtils", classLoader)
@@ -385,7 +477,7 @@ internal object LockIslands {
             return
         }
         runCatching {
-            Xp.hookAll(filterClass, "shouldFilterOut") { chain ->
+            Xp.hookAll("sysui.island.filter", filterClass, "shouldFilterOut") { chain ->
                 val hidden = chain.proceed() as Boolean
                 runCatching { consider(chain.thisObject, chain.args, hidden) }
                     .getOrDefault(hidden)
@@ -394,11 +486,15 @@ internal object LockIslands {
         runCatching {
             val pluggable = Xp.findClass("com.android.systemui.statusbar.notification.collection." +
                 "listbuilder.pluggable.Pluggable", classLoader)
-            Xp.hookAll(pluggable, "onCleanup") { chain ->
+            Xp.hookAll("sysui.island.cleanup", pluggable, "onCleanup") { chain ->
                 val result = chain.proceed()
-                if (chain.thisObject === filter?.get()) runCatching { commit() }
+                if (chain.thisObject === filter?.get()) {
+                    endRun()
+                    runCatching { commit() }
+                }
                 result
             }
+            runEndHooked = true
         }.onFailure { Xp.w("MCIsland: run end unavailable: $it") }
         // The countdown reads its timer from locked runs only, and a countdown stopped with the
         // phone unlocked is gone before the next one: locked straight into the doze, every row
@@ -407,18 +503,35 @@ internal object LockIslands {
         runCatching {
             val collection = Xp.findClass("com.android.systemui.statusbar.notification.collection." +
                 "NotifCollection", classLoader)
-            Xp.hookAll(collection, "onNotificationRemoved") { chain ->
+            Xp.hookAll("sysui.island.removed", collection, "onNotificationRemoved") { chain ->
+                // Capture order at entry; proceed() may cause a nested repost before returning.
+                val event = releasedGrace.nextEvent()
                 val result = chain.proceed()
                 (chain.args.firstOrNull() as? StatusBarNotification)?.key?.let { key ->
                     runCatching { CountdownScene.INSTANCE.onRemoved(key) }
+                    Gen.post { if (key in released) dropRemoved(key, event) }
                 }
                 result
             }
         }.onFailure { Xp.w("MCIsland: removals unavailable: $it") }
+        // HyperOS dispatches posts through postNotification(Ranking, StatusBarNotification).
+        // Read the notification by type: the first argument is its ranking, not the post itself.
+        runCatching {
+            val collection = Xp.findClass("com.android.systemui.statusbar.notification.collection." +
+                "NotifCollection", classLoader)
+            Xp.hookAll("sysui.island.posted", collection, "postNotification") { chain ->
+                val event = releasedGrace.nextEvent()
+                val result = chain.proceed()
+                (chain.args.firstOrNull { it is StatusBarNotification } as? StatusBarNotification)?.key?.let { key ->
+                    Gen.post { if (key in released) releasedGrace.posted(key, event) }
+                }
+                result
+            }
+        }.onFailure { Xp.w("MCIsland: postings unavailable: $it") }
         NumState.install(classLoader)
         NumState.addListener { folded ->
             if (!nativeStack) return@addListener
-            main.post { followStack("stack ${if (folded) "folded" else "opened"}") }
+            Gen.post { followStack("stack ${if (folded) "folded" else "opened"}") }
         }
     }
 
@@ -468,14 +581,17 @@ internal object LockIslands {
         active = value
         // The row has the islands again: the cover's hold on the focus ones is over.
         if (value && cover) {
-            main.removeCallbacks(coverOff)
+            Gen.removeCallbacks(coverOff)
             cover = false
         }
         if (nativeStack) {
             // On for good once the islands have shown (off only with the feature: stopFolding).
             if (value) {
+                // Only the first time: the row going and coming back (a navigation's post can do
+                // that) is not a lock screen of its own, and the list the user opened stays (#105).
+                val first = !NumState.folding
                 NumState.setFolding(true)
-                NumState.foldIfPiled("row showing")
+                if (first) NumState.foldIfPiled("row first showing")
             }
             followStack("row ${if (value) "showing" else "gone"}")
         }
@@ -503,14 +619,14 @@ internal object LockIslands {
 
     fun setCoverMode(value: Boolean) {
         if (value) {
-            main.removeCallbacks(coverOff)
+            Gen.removeCallbacks(coverOff)
             if (!cover) {
                 cover = true
                 if (!active) invalidate("cover up")
             }
         } else if (cover) {
-            main.removeCallbacks(coverOff)
-            main.postDelayed(coverOff, COVER_RELEASE_MS)
+            Gen.removeCallbacks(coverOff)
+            Gen.postDelayed(coverOff, COVER_RELEASE_MS)
         }
     }
 
@@ -536,13 +652,17 @@ internal object LockIslands {
             }
             return
         }
-        if (released.add(key)) invalidate("island $key released")
+        if (released.add(key)) {
+            releasedGrace.forget(key)
+            invalidate("island $key released")
+        }
         if (isAppGroup(key)) return
         val opened = sceneOf(key)
         if (opened != null && key != sceneKey) {
             scene?.let { runCatching { ImmersiveHost.close(it) } }
             sceneKey = key
             scene = opened
+            sceneRetention.opened(key, opened.isNavigation(), fromBody = false)
             sceneMissingSince = 0L
             runCatching { ImmersiveHost.open(opened) }
                 .onFailure { Xp.log("MCIsland: ${opened.id()} not opened: $it") }
@@ -562,9 +682,13 @@ internal object LockIslands {
             }
             return
         }
-        if (released.remove(key)) invalidate("island $key recaptured")
-        if (key == sceneKey) {
+        if (released.remove(key)) {
+            releasedGrace.forget(key)
+            invalidate("island $key recaptured")
+        }
+        if (key == sceneKey && !sceneRetention.keeps(key)) {
             val closed = scene
+            sceneRetention.closed(key)
             sceneKey = null
             scene = null
             closed?.let { runCatching { ImmersiveHost.close(it) } }
@@ -647,10 +771,10 @@ internal object LockIslands {
         val ctx = Main.sAppCtx ?: return
         screenWatch = true
         runCatching {
-            ctx.registerReceiver(object : android.content.BroadcastReceiver() {
+            Gen.receiver(ctx, object : android.content.BroadcastReceiver() {
                 override fun onReceive(c: android.content.Context, i: android.content.Intent) {
                     // The keyguard locks a moment after the screen goes: once then, once to be sure.
-                    for (delay in SCREEN_OFF_READS) main.postDelayed({ invalidate("screen off") }, delay)
+                    for (delay in SCREEN_OFF_READS) Gen.postDelayed({ invalidate("screen off") }, delay)
                 }
             }, android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF))
         }.onFailure { screenWatch = false }
@@ -666,7 +790,7 @@ internal object LockIslands {
         val entry = args.firstOrNull() ?: return false
         if (!lockedOrLocking(filterObject)) {
             // Unlocked: what a tap put back is an island again on the next lock screen - all but
-            // 高德's, which stays open with its map as the cover stays up.
+            // the focus ones, which stay open as 高德's map stays up (clearReleased).
             clearReleased()
             if (!nativeStack) stackOut = false
             // Unlocking, the keyguard is "not locked" from the first frame of its fade-out,
@@ -728,11 +852,11 @@ internal object LockIslands {
         if (unlockWatch) return
         unlockWatch = true
         val started = android.os.SystemClock.uptimeMillis()
-        main.post(object : Runnable {
+        Gen.post(object : Runnable {
             override fun run() {
                 val waited = android.os.SystemClock.uptimeMillis() - started
                 if (Main.onKeyguardNow() && waited < UNLOCK_WATCH_MS) {
-                    main.postDelayed(this, 32L)
+                    Gen.postDelayed(this, 32L)
                     return
                 }
                 unlockWatch = false
@@ -744,8 +868,27 @@ internal object LockIslands {
     private var unlockWatch = false
     private const val UNLOCK_WATCH_MS = 3000L
 
+    /**
+     * Per pipeline run: neither whether the keyguard is locked nor whether a user's lock screen
+     * is in public mode changes in the middle of one, and both were asked for every notification.
+     * Cleared at the run's end (commit) - so only kept when that end is hooked.
+     */
+    private var runEndHooked = false
+    private var runLocked: Boolean? = null
+    private val runPublic = HashMap<Int, Boolean>()
+
+    private fun endRun() {
+        runLocked = null
+        runPublic.clear()
+    }
+
+    private fun lockedOrLocking(filterObject: Any): Boolean {
+        if (runEndHooked) runLocked?.let { return it }
+        return readLockedOrLocking(filterObject).also { runLocked = it }
+    }
+
     /** The provider's own reading of the keyguard: showing, or about to be. */
-    private fun lockedOrLocking(filterObject: Any): Boolean = runCatching {
+    private fun readLockedOrLocking(filterObject: Any): Boolean = runCatching {
         val found = provider?.get() ?: Xp.getObjectField(
             Xp.getObjectField(filterObject, "this\$0"), "keyguardNotificationVisibilityProvider")
             .also { provider = WeakReference(it) }
@@ -784,8 +927,12 @@ internal object LockIslands {
             val owner = (Xp.getObjectField(entry, "mSbn") as StatusBarNotification).userId
             val current = runCatching { Xp.getObjectField(manager, "mCurrentUserId") as Int }
                 .getOrDefault(owner)
-            val public = Xp.callMethod(manager, "isLockscreenPublicMode", current) == true ||
-                Xp.callMethod(manager, "isLockscreenPublicMode", owner) == true
+            fun publicMode(user: Int): Boolean {
+                if (runEndHooked) runPublic[user]?.let { return it }
+                return (Xp.callMethod(manager, "isLockscreenPublicMode", user) == true)
+                    .also { runPublic[user] = it }
+            }
+            val public = publicMode(current) || publicMode(owner)
             public && (Xp.callMethod(manager, "getRedactionType", entry) as Number).toInt() != 0
         }.getOrElse {
             if (!redactionUnreadable) {
@@ -805,17 +952,40 @@ internal object LockIslands {
         Xp.getObjectField(injector, "focusNotificationWithinInflatedView") == true
     }.getOrDefault(false)
 
+    /**
+     * Asked for every notification on every pipeline run, so nothing in it is looked up twice:
+     * a build without getInjector() threw for each one and then walked the row's whole class
+     * chain for its fields - inside the list rebuild that an island switch sets off, on the
+     * frames of its morph. Whether the method is there, the Injector-typed fields of each row
+     * class, and which classes carry the flag are each found once.
+     */
+    private var injectorCall: Boolean? = null
+    private val injectorFields = HashMap<Class<*>, List<java.lang.reflect.Field>>()
+    private val focusFlagClasses = HashMap<Class<*>, Boolean>()
+
     private fun rowInjector(row: Any): Any? {
-        runCatching { return Xp.callMethod(row, "getInjector") }
-        var c: Class<*>? = row.javaClass
-        while (c != null && c != Any::class.java) {
-            for (f in c.declaredFields) {
-                if (!f.type.name.endsWith("Injector")) continue
-                f.isAccessible = true
-                val v = f.get(row) ?: continue
-                if (hasField(v.javaClass, "focusNotificationWithinInflatedView")) return v
+        if (injectorCall != false) {
+            runCatching { return Xp.callMethod(row, "getInjector").also { injectorCall = true } }
+            if (injectorCall == null) injectorCall = false
+        }
+        val fields = injectorFields.getOrPut(row.javaClass) {
+            val found = ArrayList<java.lang.reflect.Field>()
+            var c: Class<*>? = row.javaClass
+            while (c != null && c != Any::class.java) {
+                for (f in c.declaredFields) {
+                    if (!f.type.name.endsWith("Injector")) continue
+                    f.isAccessible = true
+                    found.add(f)
+                }
+                c = c.superclass
             }
-            c = c.superclass
+            found
+        }
+        for (f in fields) {
+            val v = f.get(row) ?: continue
+            if (focusFlagClasses.getOrPut(v.javaClass) {
+                    hasField(v.javaClass, "focusNotificationWithinInflatedView")
+                }) return v
         }
         return null
     }
@@ -889,6 +1059,9 @@ internal object LockIslands {
         val shown = all.filter { !(it.summary && it.group in grouped) }
         // Every notification but the focus ones in one island, the newest in front.
         val members = shown.filter { !it.focus }.sortedWith(bigFirst)
+        // The same notifications as before, only written again (a navigation's posts every few
+        // seconds, a download's progress): nothing came or went that would leave the stack piled.
+        val membersChanged = members.map { it.key }.toSet() != stackMembers.toSet()
         stackMembers = members.map { it.key }
         stackNote = aggregate(members)
         if (groupByApp) buildAppGroups(members)
@@ -897,8 +1070,12 @@ internal object LockIslands {
             // The stack said nothing yet this lock screen: read where it is.
             stackOut = !stackFolded()
             // Not the spread's own run (its focus rows coming in): the stack is on its way to
-            // the list, and read as a pile on the way it was folded back (2026-09-30).
-            if (active && !spreading && members.isNotEmpty()) NumState.foldIfPiled("notifications changed")
+            // the list, and read as a pile on the way it was folded back (2026-09-30). Nor a run
+            // that only wrote the same ones again: a focus card's height changing under the list
+            // the user opened has the stack read itself as a pile, and the check folded the list
+            // away every time a navigation posted (#105).
+            if (active && !spreading && membersChanged && members.isNotEmpty())
+                NumState.foldIfPiled("notifications changed")
         }
         publish()
     }
@@ -917,7 +1094,7 @@ internal object LockIslands {
         // stopwatch paused or resumed - its `when` the same - never reached the island.
         if (next.size == notes.size && next.indices.all { next[it] === notes[it] }) return
         notes = next
-        main.post { listeners.forEach { runCatching { it() } } }
+        Gen.post { listeners.forEach { runCatching { it() } } }
     }
 
     /**
@@ -1056,7 +1233,8 @@ internal object LockIslands {
     private fun read(entry: Any, redacted: Boolean): Note? {
         val sbn = Xp.getObjectField(entry, "mSbn") as? StatusBarNotification ?: return null
         val n = sbn.notification ?: return null
-        val stamp = (sbn.postTime * 31 + n.`when`) * 2 + if (redacted) 1 else 0
+        val stamp = ((sbn.postTime * 31 + n.`when`) * 2 + (if (redacted) 1 else 0)) * 2 +
+            (if (darkCapsule()) 1 else 0)
         readCache[sbn.key]?.let { (at, note) -> if (at == stamp) return note }
         return readFresh(sbn, n, redacted, createdAt(entry, sbn), entry)?.also {
             if (readCache.size > 200) readCache.clear()
@@ -1117,8 +1295,15 @@ internal object LockIslands {
         // the island shows what the row does, so the landing is one and the same.
         val template = if (focus && !redacted) focusTemplate(n) ?: rowTemplate(entry) else null
         val picture = template?.let { focusPicture(n, sbn, entry, it.pics + islandPics(island)) }
-        val icon = picture?.icon ?: iconOf(sbn, shown ?: n, redacted)
+        val original = picture?.icon ?: iconOf(sbn, shown ?: n, redacted)
         val iconFrom = picture?.from ?: lastIconFrom
+        // Only navigation's functional artwork. App icons, photos and multicolor resources
+        // retain their colors; the raster classifier also rejects opaque tiles.
+        val navigation = sbn.packageName == "com.autonavi.minimap" && focus && !redacted &&
+            iconFrom != "app" && iconFrom != "row-app"
+        val icon = if (navigation) Main.sAppCtx?.resources?.let {
+            NavigationIconRenderer.prepare(original, it, darkCapsule(), iconFrom)
+        } ?: original else original
         val round = roundIcon(icon)
         return Note(
             key = sbn.key,
@@ -1134,6 +1319,7 @@ internal object LockIslands {
             focus = focus,
             time = if (n.`when` > 0) n.`when` else sbn.postTime,
             intent = n.contentIntent,
+            category = n.category,
             group = if (sbn.isGroup) sbn.groupKey else null,
             summary = n.flags and Notification.FLAG_GROUP_SUMMARY != 0,
             redacted = redacted,
@@ -1260,6 +1446,19 @@ internal object LockIslands {
      * notification with no param_v2. One that draws its own row (miui.focus.rv) is read from
      * miui.focus.param.custom ([customTemplate]).
      */
+    private fun darkCapsule(): Boolean {
+        val ctx = Main.sAppCtx ?: return true
+        val frost = runCatching {
+            android.provider.Settings.Secure.getInt(ctx.contentResolver, "material_style", 1) == 0
+        }.getOrDefault(false)
+        val night = (ctx.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        return !frost || night
+    }
+
+    private fun pictureKeys(keys: List<String>): List<String> =
+        NotificationPictureTheme.keys(keys, darkCapsule())
+
     private fun focusTemplate(n: Notification): Template? = runCatching {
         val raw = n.extras.getString("miui.focus.param") ?: return customTemplate(n)
         val root = org.json.JSONObject(raw)
@@ -1271,9 +1470,9 @@ internal object LockIslands {
                 it.optLong("timerSystemCurrent", System.currentTimeMillis()),
                 it.optLong("timerTotal", 0L))
         }
-        // The notification's own pictures by these names, dark first as the lock screen draws.
+        // Match the capsule material without recoloring the app's multicolor artwork.
         fun named(o: org.json.JSONObject, vararg keys: String) =
-            keys.map { str(o, it) }.filter { it.isNotEmpty() }.map { Pic(Pic.BUNDLE, it) }
+            pictureKeys(keys.toList()).map { str(o, it) }.filter { it.isNotEmpty() }.map { Pic(Pic.BUNDLE, it) }
         // What it gives the status bar and the AOD: a last resort before the row's picture.
         fun ticker(o: org.json.JSONObject) = named(o, "tickerPicDark", "tickerPic", "aodPic")
         // The flat template, the first protocol's and a param_v2 with no first-area module
@@ -1344,7 +1543,7 @@ internal object LockIslands {
         lines.removeAll { it.isBlank() }
         if (lines.isEmpty()) str(root, "aodTitle").takeIf { it.isNotEmpty() }?.let { lines += it }
         if (lines.isEmpty()) return null
-        val pics = listOf("tickerPicDark", "tickerPic", "aodPic").map { str(root, it) }
+        val pics = pictureKeys(listOf("tickerPicDark", "tickerPic", "aodPic")).map { str(root, it) }
             .filter { it.isNotEmpty() }.map { Pic(Pic.BUNDLE, it) }
         Template(html(lines[0]), html(lines.drop(1).joinToString(" ")), null, islandPics(island) + pics)
     }.getOrNull()
@@ -1410,7 +1609,7 @@ internal object LockIslands {
             if (from.lastOrNull() != p.toString()) from += p.toString()
             return Picture(still, anim, live, from.joinToString("+"))
         }
-        runCatching { rowIcon(entry) }.getOrNull()?.let { return Picture(it, anim, live, (from + "row").joinToString("+")) }
+        runCatching { rowIcon(entry, sbn.packageName == "com.autonavi.minimap") }.getOrNull()?.let { return Picture(it, anim, live, (from + "row").joinToString("+")) }
         return if (anim != null || live != null) Picture(null, anim, live, from.joinToString("+")) else null
     }
 
@@ -1556,10 +1755,15 @@ internal object LockIslands {
     }
 
     /** The picture the row's focus template shows now, drawn once into a bitmap of its own. */
-    private fun rowIcon(entry: Any): Drawable? {
+    private fun rowIcon(entry: Any, diagnostic: Boolean = false): Drawable? {
         val row = Xp.getObjectField(entry, "row") as? View ?: return null
         val view = focusIconView(row) ?: anyRowPicture(row) ?: return null
         val d = view.drawable ?: return null
+        if (diagnostic) {
+            NavigationIconRenderer.report("row=${runCatching { view.resources.getResourceEntryName(view.id) }.getOrDefault("unknown")} " +
+                "tint=${view.imageTintList} filter=${view.colorFilter?.javaClass?.simpleName} " +
+                "drawableFilter=${d.colorFilter?.javaClass?.simpleName}")
+        }
         val side = maxOf(view.width, d.intrinsicWidth, 1).coerceAtMost(512)
         val bitmap = android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888)
         val old = android.graphics.Rect(d.bounds)

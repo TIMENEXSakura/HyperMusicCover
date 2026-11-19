@@ -1,30 +1,13 @@
 package com.os4.musiccover.lyrics;
 
 import org.junit.Test;
-import java.util.Arrays;
 import static org.junit.Assert.*;
 
 public class LyricTransitionTest {
-    @Test public void resizingPreservesVisibleTopAndSpringDisplacement() {
-        float[] oldHeight = {80}, height = {160}, scale = {0.97f};
-        float[] scroll = {20}, aim = {40}, next = {60};
-        float top = LyricTransition.scaledTop(100 - scroll[0], oldHeight[0], scale[0]);
-        float displacement = scroll[0] - aim[0];
-        LyricTransition.resize(oldHeight, height, 0.5f, scale, scroll, aim, next);
-        assertEquals(top, LyricTransition.scaledTop(100 - scroll[0], height[0], scale[0]), 0.001f);
-        assertEquals(displacement, scroll[0] - aim[0], 0.001f);
-        assertEquals(20, next[0] - aim[0], 0.001f);
-        assertEquals(80 * 0.97f, height[0] * scale[0], 0.001f);
-    }
-
-    @Test public void scalingKeepsTextCenterAtEveryFontSize() {
-        for (float font : new float[]{18, 25, 36}) {
-            for (float scale : new float[]{0.90f, 0.97f, 1f, 1.025f, 1.4f}) {
-                float height = 90 * font / 25;
-                float top = LyricTransition.scaledTop(150, height, scale);
-                assertEquals(150 + height / 2, top + height * scale / 2, 0.001f);
-            }
-        }
+    @Test public void unlimitedVoiceCountDoesNotSlowAnimationWithoutBound() {
+        float four = LyricTransition.motionWeight(4, 10000f, 500f);
+        assertEquals(four, LyricTransition.motionWeight(1000, 10000f, 500f), 0f);
+        assertTrue(LyricTransition.motionWeight(1, 100f, 500f) < four);
     }
 
     @Test public void centeringRetargetKeepsPositionAndVelocityDisplacementContinuous() {
@@ -39,80 +22,14 @@ public class LyricTransitionTest {
         assertEquals(20, next[1] - aim[1], 0);
     }
 
-    private LyricFocus focusAt(int position, float[] base, float[] heights) {
-        LyricFocus focus = new LyricFocus();
-        focus.update(Arrays.asList(
-                new LyricLine("held", null, 0, 1000, false, null, null, null),
-                new LyricLine("short", null, 0, 100, false, null, null, null),
-                new LyricLine("new", null, 50, 1000, false, null, null, null)), position, 4, 2);
-        focus.layout(base, heights, 20);
-        return focus;
-    }
-
-    @Test public void compactAndExpandPreserveScreenPositionsAndSpringDisplacement() {
-        for (float font : new float[]{18, 25, 36}) {
-            float height = 100 * font / 25;
-            float[] base = {0, height + 20, 2 * (height + 20)};
-            float[] heights = {height, height, height};
-            LyricTransition transition = new LyricTransition();
-            transition.reset(base);
-            float[] scroll = {30, 40, 50}, aim = {60, 60, 60}, next = {70, 70, 70};
-            float oldY = base[2] - scroll[2];
-            float displacement = scroll[2] - aim[2];
-            float pending = next[2] - aim[2];
-            transition.rebase(focusAt(150, base, heights), base, scroll, aim, next);
-            assertEquals(oldY, transition.position(2) - scroll[2], 0.0001f);
-            assertEquals(displacement, scroll[2] - aim[2], 0.0001f);
-            assertEquals(pending, next[2] - aim[2], 0.0001f);
-            transition.rebase(focusAt(75, base, heights), base, scroll, aim, next);
-            assertEquals(oldY, transition.position(2) - scroll[2], 0.0001f);
-        }
-    }
-
-    @Test public void fadeCanReverseWithoutJumpAndEventuallyStops() {
-        float[] base = {0, 120, 240}, heights = {100, 100, 100};
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        LyricFocus compact = focusAt(150, base, heights);
-        transition.update(compact, base, -1, 0.6f, 0.5f, 0.016f, false);
-        assertTrue(transition.alpha(1) > 0 && transition.alpha(1) < 1);
-        assertTrue(transition.fit > 0.5f && transition.fit < 1);
-        float previousAlpha = transition.alpha(1);
-        LyricFocus expanded = focusAt(75, base, heights);
-        transition.update(expanded, base, -1, 0.6f, 1, 0, false);
-        assertEquals(previousAlpha, transition.alpha(1), 0);
-        for (int frame = 0; frame < 200; frame++) {
-            transition.update(expanded, base, -1, 0.6f, 1, 0.016f, false);
-        }
-        assertEquals(1, transition.alpha(1), 0);
-        assertEquals(1, transition.fit, 0);
-        assertFalse(transition.moving);
-    }
-
-    @Test public void departingOverlapRemainsVisibleDuringFade() {
-        float[] base = {0, 120, 240}, heights = {100, 100, 100};
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        LyricFocus compact = focusAt(150, base, heights);
-        for (int frame = 0; frame < 15; frame++) {
-            transition.update(compact, base, -1, 0.6f, 1, 0.016f, false);
-        }
-        assertTrue(transition.alpha(1) > 0.15f && transition.alpha(1) < 0.9f);
-        for (int frame = 0; frame < 200; frame++) {
-            transition.update(compact, base, -1, 0.6f, 1, 0.016f, false);
-        }
-        assertEquals(0, transition.alpha(1), 0);
-        assertFalse(transition.moving);
-    }
-
-    @Test public void stillModeSettlesImmediately() {
-        float[] base = {0, 120, 240}, heights = {100, 100, 100};
-        LyricTransition transition = new LyricTransition();
-        transition.reset(base);
-        transition.update(focusAt(150, base, heights), base, -1, 0.6f, 0.5f, 0, true);
-        assertEquals(0, transition.alpha(1), 0);
-        assertEquals(0.5f, transition.fit, 0);
-        assertFalse(transition.moving);
+    @Test public void relayoutPreservesEveryRowsScreenPoseAndRunningSpring() {
+        float[] oldBase = {0, 100, 200}, measured = {0, 140, 320};
+        float[] scroll = {30, 40, 50}, aim = {60, 60, 60}, pending = {70, 70, 70};
+        LyricTransition.rebase(oldBase, measured, scroll, aim, pending);
+        assertArrayEquals(new float[]{30, 80, 170}, scroll, 0f);
+        assertArrayEquals(new float[]{60, 100, 180}, aim, 0f);
+        assertArrayEquals(new float[]{70, 110, 190}, pending, 0f);
+        assertEquals(150f, measured[2] - scroll[2], 0f);
     }
 
     @Test public void uninitializedSeekTimestampCannotOverflowIntoRecentSeek() {

@@ -3,11 +3,9 @@ package com.os4.musiccover.ui.screen.features
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -47,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.os4.musiccover.R
 import com.os4.musiccover.app.ModuleBridge
+import com.os4.musiccover.lyrics.LocalLyricFormat
 import com.os4.musiccover.lyrics.LyricSourcePolicy
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.BasicComponent
@@ -57,9 +56,9 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.icon.extended.Sort
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -72,88 +71,85 @@ internal fun LyricSourceSettings(
 ) {
     val context = LocalContext.current
     val currentModule by rememberUpdatedState(module)
-    var formatsOpen by remember { mutableStateOf(false) }
+    var sourcesOpen by remember { mutableStateOf(false) }
     fun update(next: ModuleBridge.State) {
         onChange(next)
         ModuleBridge.setLyricSourcePolicy(context, next)
     }
+    BasicComponent(
+        title = stringResource(R.string.lyrics_source_lyricon),
+        summary = lyriconStatusLabel(module.lyriconState),
+    )
     SwitchPreference(
         title = stringResource(R.string.lyrics_network),
         summary = stringResource(R.string.lyrics_network_summary),
         checked = module.lyricNetwork,
         enabled = enabled,
-        onCheckedChange = { update(currentModule.copy(lyricNetwork = it)) },
+        onCheckedChange = { update(currentModule.copy(lyricNetwork = it, lyricsOnline = it)) },
     )
-    SwitchPreference(
+    BasicComponent(
         title = stringResource(R.string.lyrics_priority),
         summary = stringResource(R.string.lyrics_priority_summary),
-        checked = module.lyricSourceCustom,
         enabled = enabled,
-        onCheckedChange = { update(currentModule.copy(lyricSourceCustom = it)) },
+        onClick = { sourcesOpen = true },
+        endActions = {
+            IconButton(
+                modifier = Modifier.size(48.dp),
+                enabled = enabled,
+                onClick = { sourcesOpen = true },
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Sort,
+                    contentDescription = stringResource(R.string.lyrics_priority),
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        },
     )
-    if (module.lyricSourceCustom) {
-        PriorityRows(
-            order = module.lyricSourceOrder,
-            enabled = enabled,
-            label = { sourceLabel(it) },
-            dimmed = { !module.lyricNetwork && LyricSourcePolicy.network(it) },
-            onCommit = { update(currentModule.copy(lyricSourceOrder = it)) },
-            trailing = { source ->
-                if (source == "local") {
-                    IconButton(
-                        modifier = Modifier.size(48.dp),
-                        enabled = enabled,
-                        onClick = { formatsOpen = true },
-                    ) {
-                        Icon(
-                            imageVector = MiuixIcons.Settings,
-                            contentDescription = stringResource(R.string.lyrics_format_settings),
-                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                }
-            },
-        )
-        TextButton(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            text = stringResource(R.string.lyrics_priority_reset),
-            enabled = enabled,
-            onClick = { update(currentModule.copy(lyricSourceOrder = LyricSourcePolicy.DEFAULT_SOURCES)) },
-        )
-    }
-    WindowDialog(
-        show = formatsOpen,
+    WindowDropdownPreference(
         title = stringResource(R.string.lyrics_format_priority),
         summary = stringResource(R.string.lyrics_format_summary),
-        onDismissRequest = { formatsOpen = false },
+        items = listOf(stringResource(R.string.lyrics_format_ttml), stringResource(R.string.lyrics_format_lrc)),
+        selectedIndex = if (module.lyricLocalFormat == LocalLyricFormat.LRC) 1 else 0,
+        enabled = enabled,
+        onSelectedIndexChange = {
+            update(currentModule.copy(lyricLocalFormat = if (it == 1) LocalLyricFormat.LRC else LocalLyricFormat.TTML))
+        },
+    )
+    WindowDialog(
+        show = sourcesOpen,
+        title = stringResource(R.string.lyrics_priority),
+        summary = stringResource(R.string.lyrics_priority_summary),
+        onDismissRequest = { sourcesOpen = false },
     ) {
         Column {
             PriorityRows(
-                order = module.lyricFormatOrder,
+                order = if (module.lyricSourceCustom) module.lyricSourceOrder
+                    else LyricSourcePolicy.DEFAULT_SOURCES,
                 enabled = enabled,
-                label = { it.uppercase() },
-                onCommit = { update(currentModule.copy(lyricFormatOrder = it)) },
+                label = { sourceLabel(it) },
+                dimmed = { !module.lyricNetwork && LyricSourcePolicy.network(it) },
+                onCommit = { update(currentModule.copy(lyricSourceCustom = true, lyricSourceOrder = it)) },
             )
-            Row(
+            TextButton(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                TextButton(
-                    modifier = Modifier.weight(1f),
-                    text = stringResource(R.string.lyrics_priority_reset),
-                    enabled = enabled,
-                    onClick = { update(currentModule.copy(lyricFormatOrder = LyricSourcePolicy.DEFAULT_FORMATS)) },
-                )
-                TextButton(
-                    modifier = Modifier.weight(1f),
-                    text = stringResource(R.string.lyrics_priority_done),
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
-                    onClick = { formatsOpen = false },
-                )
-            }
+                text = stringResource(R.string.lyrics_priority_reset),
+                enabled = enabled,
+                onClick = {
+                    update(currentModule.copy(lyricSourceCustom = false,
+                        lyricSourceOrder = LyricSourcePolicy.DEFAULT_SOURCES))
+                },
+            )
+            TextButton(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                text = stringResource(R.string.lyrics_priority_done),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+                onClick = { sourcesOpen = false },
+            )
         }
     }
+
 }
 
 @Composable
@@ -161,6 +157,7 @@ private fun sourceLabel(source: String): String = stringResource(when (source) {
     "metadata" -> R.string.lyrics_priority_metadata
     "local" -> R.string.lyrics_priority_local
     "lyricon" -> R.string.lyrics_source_lyricon
+    "superlyric" -> R.string.lyrics_source_superlyric
     "amll" -> R.string.lyrics_source_amll
     "ttmlhub" -> R.string.lyrics_source_ttmlhub
     "qq" -> R.string.lyrics_source_qq
@@ -177,7 +174,6 @@ private fun PriorityRows(
     label: @Composable (String) -> String,
     onCommit: (String) -> Unit,
     dimmed: (String) -> Boolean = { false },
-    trailing: @Composable (String) -> Unit = {},
 ) {
     var items by remember { mutableStateOf(order.split(',')) }
     val commit by rememberUpdatedState(onCommit)
@@ -265,7 +261,6 @@ private fun PriorityRows(
                         )
                     },
                     endActions = {
-                        trailing(source)
                         Box(
                             Modifier.size(48.dp).onGloballyPositioned { handle = it }.semantics {
                                 contentDescription = "$name: $dragDescription"
@@ -324,3 +319,13 @@ private fun PriorityRows(
         }
     }
 }
+
+@Composable
+internal fun lyriconStatusLabel(state: String): String = stringResource(when (state) {
+    "active" -> R.string.lyricon_active
+    "connected" -> R.string.lyricon_connected
+    "disconnected" -> R.string.lyricon_disconnected
+    "no service" -> R.string.lyricon_unavailable
+    "failed" -> R.string.lyricon_failed
+    else -> R.string.lyricon_waiting
+})

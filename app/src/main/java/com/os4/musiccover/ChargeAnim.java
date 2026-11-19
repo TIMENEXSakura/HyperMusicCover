@@ -1,5 +1,7 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.fingerprint.Fingerprint;
+
 import android.view.ViewGroup;
 import android.view.View;
 
@@ -10,7 +12,7 @@ import android.view.View;
  * Carved out of Main as it was (2026-10-14, after Fingerprint): every member moved whole with its
  * comments, references across the line prefixed with Main. or ChargeAnim., nothing else changed.
  */
-final class ChargeAnim {
+public final class ChargeAnim {
     private ChargeAnim() {}
 
     /**
@@ -30,7 +32,7 @@ final class ChargeAnim {
      * the very gesture that dismisses it, so by the time a held-back tap fires there is nothing
      * left on screen to ask, and the tap would be read as one on the cover. See chargeAnimUp.
      */
-    static volatile boolean sGestureOnCharge;
+    public static volatile boolean sGestureOnCharge;
 
     /**
      * Whether the charging animation is on the lock screen.
@@ -149,12 +151,12 @@ final class ChargeAnim {
                     CLS_CHARGE_PKG + "container.MiuiChargeAnimationView", cl);
             // After the call, not before: the point of the snapshot is what the tree looks like
             // with the animation in it, and addChargeView is what puts it there.
-            Xp.hookAll(chargeAnim, "addChargeView", chain -> {
+            Xp.hookAll("sysui.charge.add_view", chargeAnim, "addChargeView", chain -> {
                 Object result = chain.proceed();
                 noteChargeAnim(true, chain.getThisObject());
                 return result;
             });
-            Xp.hookAll(chargeAnim, "removeChargeView", chain -> {
+            Xp.hookAll("sysui.charge.remove_view", chargeAnim, "removeChargeView", chain -> {
                 Object result = chain.proceed();
                 noteChargeAnim(false, chain.getThisObject());
                 return result;

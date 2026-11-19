@@ -8,14 +8,19 @@
 package com.os4.musiccover.ui.screen.home
 
 import com.os4.musiccover.ui.util.nextCard
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import android.annotation.SuppressLint
 import android.content.Intent
-import android.os.Build
-import android.provider.Settings
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,7 +34,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircleOutline
 import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +45,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -49,9 +54,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.os4.musiccover.BuildConfig
-import com.os4.musiccover.app.DonateActivity
+import com.os4.musiccover.app.CoverActivity
+import com.os4.musiccover.app.FpQuickActivity
 import com.os4.musiccover.app.LsposedService
+import com.os4.musiccover.app.MiniPlayerActivity
+import com.os4.musiccover.app.ShadeActivity
+import com.os4.musiccover.app.TransitActivity
 import com.os4.musiccover.app.ModuleBridge
+import com.os4.musiccover.app.SettingsStore
 import com.os4.musiccover.R
 import com.os4.musiccover.ui.component.DropdownItem
 import com.os4.musiccover.ui.component.MenuPopupDefaults
@@ -60,9 +70,6 @@ import com.os4.musiccover.ui.util.isInDarkTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -76,8 +83,27 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
-import top.yukonga.miuix.kmp.window.WindowDialog
+import top.yukonga.miuix.kmp.utils.TiltFeedback
+import top.yukonga.miuix.kmp.utils.pressable
+import com.os4.musiccover.ui.util.AppDialog
+import com.os4.musiccover.ui.util.AppDialogButton
+import com.os4.musiccover.ui.util.AppDialogButtonRole
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
+import androidx.compose.foundation.layout.size
+import com.os4.musiccover.ui.util.LocalCardGlass
+import com.os4.musiccover.ui.util.LocalOs4Ui
+import top.yukonga.miuix.kmp.basic.DropdownEntry as MiuixDropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem as MiuixDropdownItem
+import top.yukonga.miuix.kmp.glass.GlassIconButton
+import top.yukonga.miuix.kmp.glass.GlassPopupAnchor
+import top.yukonga.miuix.kmp.glass.GlassIconDropdownMenu
+import top.yukonga.miuix.kmp.glass.glassPopupAnchor
+import top.yukonga.miuix.kmp.glass.glassPanel
+import top.yukonga.miuix.kmp.glass.glassPopupAnchorContent
+import top.yukonga.miuix.kmp.glass.rememberGlassPopupAnchor
+import top.yukonga.miuix.kmp.material.GlassEdgeStrokes
+import top.yukonga.miuix.kmp.material.GlassShape
+import top.yukonga.miuix.kmp.material.GlassShadows
 
 @SuppressLint("LocalContext")
 @Composable
@@ -92,24 +118,6 @@ fun HomePageView(
     val scrollBehavior = MiuixScrollBehavior()
     val title = stringResource(R.string.tab_home)
 
-    // These used to run on every re-composition, and two of them are not reads of this process:
-    // `Settings.Global` is a ContentProvider call into system_server and `getPackageInfo` was a
-    // PackageManager call into it as well. None of the answers can change while the app is up, so
-    // each is asked for once.
-    val unknown = stringResource(R.string.home_unknown)
-    val deviceModel = remember(unknown) { Build.MODEL.ifEmpty { unknown } }
-    val deviceName = remember(context, deviceModel) {
-        Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
-            ?: deviceModel
-    }
-    val systemVersion = remember {
-        "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})"
-    }
-    val loadingText = stringResource(R.string.home_loading)
-    var hyperOSVersion by remember { mutableStateOf(loadingText) }
-    LaunchedEffect(Unit) {
-        hyperOSVersion = withContext(Dispatchers.IO) { SystemVersion.hyperOs(loadingText) }
-    }
     // BuildConfig rather than the installed package's metadata: it is the same string for this
     // build and it costs nothing, where the package manager had to be asked every time.
     val moduleVersion = "v" + BuildConfig.VERSION_NAME
@@ -126,8 +134,16 @@ fun HomePageView(
 
     // Not cleared while a query is in flight: there is an answer on screen either way, and
     // blanking the second line to say so would be the flicker this page already refuses to show.
+    //
+    // Asked until answered, like every other page: an update kills this app and the system
+    // starts it again at once, and its first question lands while SystemUI's module is between
+    // two generations - no receiver for most of a second - so a single shot read "not active"
+    // until the card was tapped.
+    //
+    // Checked from the first answer, though: a module that is not installed answers nothing
+    // every time, and waiting out the retries kept the hint off the card for fifteen seconds.
     suspend fun refresh() {
-        state = ModuleBridge.query(context)
+        state = ModuleBridge.queryAlive(context) { checked = true }
         checked = true
     }
 
@@ -158,19 +174,41 @@ fun HomePageView(
     // the old one goes on running until its process restarts. Asked with the status, and again
     // once LSPosed's service binds, which can be after the page is up.
     val service by LsposedService.service.collectAsState()
-    var stale by remember { mutableStateOf(0) }
+    // Held whole rather than as a count: the restart acts on the set the card counted.
+    var stale by remember { mutableStateOf(LsposedService.StaleSet.NONE) }
     // A restart blanks the screen and stops whatever the scoped apps were doing, so it asks.
     // Asked from the status card, which is the whole width of the page and where a scroll starts.
     var confirmRestart by remember { mutableStateOf(false) }
-    LaunchedEffect(current, resumeKey, service) {
-        if (current) stale = withContext(Dispatchers.IO) { LsposedService.staleCount() }
+    var showMissing by remember { mutableStateOf(false) }
+    // A new installation whose host still belongs to the one that is gone (stage 5.5): the
+    // lock screen is still showing the old settings and cover until SystemUI is restarted.
+    val installPending by SettingsStore.installPending.collectAsState()
+    var confirmInstallRestart by remember { mutableStateOf(false) }
+    LaunchedEffect(current, resumeKey, service, state.inert) {
+        if (current) stale = withContext(Dispatchers.IO) {
+            // The other processes' inert answer first: LSPosed lists them as up to date.
+            LsposedService.refreshInert(context)
+            LsposedService.staleSet(state.inert)
+        }
     }
 
+    // The OS4 restart menu needs a full-size box to lay itself out in (see
+    // RestartMenuGlassTrigger); the bar's actions slot is only as big as an icon.
+    var restartMenuOpen by remember { mutableStateOf(false) }
+    val restartAnchor = rememberGlassPopupAnchor()
+
+    Box(Modifier.fillMaxSize()) {
     PageScaffold(
         title = title,
         isBlurEnabled = isBlurEnabled,
         extraBottomPadding = extraBottomPadding,
-        actions = { RestartMenu() },
+        actions = {
+            if (LocalOs4Ui.current) {
+                RestartMenuGlassTrigger(restartAnchor) { restartMenuOpen = true }
+            } else {
+                RestartMenu()
+            }
+        },
     ) {
         item(key = "status") {
             Box(
@@ -180,11 +218,17 @@ fun HomePageView(
             ) {
                 val darkTheme = isInDarkTheme()
                 val dynamicColor = MiuixTheme.isDynamicColor
-                val ok = state.alive
+                // An inert SystemUI is not a missing module: it is one more process to restart.
+                val ok = state.alive || state.inert
                 // Processes left on the build before this one. An answer about the module rather
                 // than about this app, so it can be true while the module is not answering at
                 // all - and then the card says the more urgent of the two things.
-                val staleHere = ok && stale > 0
+                //
+                // An inert SystemUI is one of those whatever the count says: the count needs
+                // LSPosed's service and arrives after the answer, and green in the meantime - or
+                // for good, without the service - would call a module that does nothing active.
+                val staleHere = ok && (stale.count > 0 || state.inert)
+                val staleShown = if (state.inert) maxOf(stale.count, 1) else stale.count
                 // The card is one card with three things to say, and two of them are the same
                 // news: the module is not answering, or it is answering in some processes as the
                 // version before. Both are red, both wear the cross, and only the words and what
@@ -210,6 +254,21 @@ fun HomePageView(
                     if (dynamicColor) MiuixTheme.colorScheme.primary.copy(alpha = 0.8f)
                     else Color(0xFF36D167)
                 }
+                // The status card keeps its own status colour and press feedback; it only takes
+                // the card panels' rim and shadow so it does not look flat beside them. The
+                // fallback is the empty modifier: the card's own fill is what shows through.
+                val statusShape = remember { GlassShape(CardDefaults.CornerRadius) }
+                val statusFrame = if (LocalOs4Ui.current && LocalCardGlass.current) {
+                    Modifier.glassPanel(
+                        backdrop = null,
+                        shape = statusShape,
+                        stroke = GlassEdgeStrokes.forTheme(isInDarkTheme()),
+                        shadow = GlassShadows.Regular,
+                        fallback = Modifier,
+                    )
+                } else {
+                    Modifier
+                }
                 val titleText = when {
                     !ok -> stringResource(R.string.home_status_inactive)
                     staleHere -> stringResource(R.string.home_stale_title)
@@ -225,7 +284,7 @@ fun HomePageView(
                 // nothing the previous answer had not already said.
                 val lineTwo = when {
                     checked && !ok -> stringResource(R.string.home_status_inactive_hint)
-                    staleHere -> stringResource(R.string.home_stale_summary, stale)
+                    staleHere -> stringResource(R.string.home_stale_summary, staleShown)
                     else -> moduleVersion
                 }
                 // The card's bottom-left corner names the app, not the layout: there is
@@ -250,25 +309,13 @@ fun HomePageView(
                 // The height comes from Row(IntrinsicSize.Min): the boxes inside all
                 // fillMaxSize and so contribute none of their own, and without this the
                 // card collapses to the height of the text.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.defaultColors(color = statusColor),
-                        // A card naming processes to restart restarts them, and asks first: a
-                        // restart blanks the screen and stops whatever the scoped apps were
-                        // doing. Every other answer this card gives is a report, and tapping a
-                        // report asks the module again.
-                        onClick = {
-                            if (staleHere) confirmRestart = true else scope.launch { refresh() }
-                        },
-                        showIndication = true,
-                        pressFeedbackType = PressFeedbackType.Tilt
-                    ) {
+                // A card naming processes to restart restarts them, and asks first: a restart
+                // blanks the screen and stops whatever the scoped apps were doing. Every other
+                // answer this card gives is a report, and tapping a report asks the module again.
+                val onStatusClick: () -> Unit = {
+                    if (staleHere) confirmRestart = true else scope.launch { refresh() }
+                }
+                val statusContent: @Composable ColumnScope.() -> Unit = {
                         Box {
                             Box(
                                 modifier = Modifier
@@ -318,72 +365,186 @@ fun HomePageView(
                                 }
                             }
                         }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Deliberately still a Card: this one's colour is the status (problem,
+                    // working, fine) and its press feedback is part of it, so it is not a
+                    // settings panel. It only takes the panels' rim and shadow (statusFrame),
+                    // not their glass, so the status colour stays the card's own.
+                    if (LocalOs4Ui.current) {
+                        // The tilt is applied around the framed card rather than by Card itself:
+                        // Card applies its press feedback to its own content, which sits inside
+                        // the glass frame, so the rim and the shadow used to stay still while the
+                        // card tilted under them.
+                        val interaction = remember { MutableInteractionSource() }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pressable(
+                                    interactionSource = interaction,
+                                    indication = TiltFeedback(),
+                                    delay = null,
+                                )
+                                // The press overlay is hung on the card below instead of here.
+                                // This box is the glass frame's outline and nothing clips it,
+                                // and miuix's indication paints a plain rectangle - it showed
+                                // square corners over the page outside the card's rounded ones.
+                                .combinedClickable(
+                                    interactionSource = interaction,
+                                    indication = null,
+                                    onClick = onStatusClick,
+                                ),
+                        ) {
+                            Card(
+                                // Clipped to the shape the frame is drawn with, so the overlay
+                                // follows the card's corners. statusFrame draws the shadow and
+                                // the rim above this clip, so neither is cut by it.
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(statusFrame)
+                                    .clip(statusShape)
+                                    .indication(interaction, LocalIndication.current),
+                                colors = CardDefaults.defaultColors(color = statusColor),
+                                pressFeedbackType = PressFeedbackType.None,
+                                showIndication = false,
+                                content = statusContent,
+                            )
+                        }
+                    } else {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.defaultColors(color = statusColor),
+                            onClick = onStatusClick,
+                            showIndication = true,
+                            pressFeedbackType = PressFeedbackType.Tilt,
+                            content = statusContent,
+                        )
                     }
                 }
 
             }
         }
 
-        // No heading over this one. The four rows say what they are - a heading reading
-        // "device information" over a list of device facts only repeated them - and the gap it
-        // used to hold is now the card's own, so the card sits exactly where it always did.
-        // The module's own version was a fifth row and is gone: the status card above already
-        // carries it, and the same number twice on one page is one of them to read.
-        item(key = "device") {
-            Card(modifier = Modifier.nextCard()) {
-                Column {
-                    BasicComponent(
-                        title = stringResource(R.string.home_device_name),
-                        summary = deviceName,
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.home_device_model),
-                        summary = deviceModel,
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.home_hyperos_version),
-                        summary = hyperOSVersion,
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.home_android_version),
-                        summary = systemVersion,
+        // A new installation whose host has not acted on its id yet: its files and settings are
+        // still the old installation's until SystemUI restarts (stage 5.5).
+        if (installPending) {
+            item(key = "install") {
+                AppCard(modifier = Modifier.nextCard()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.home_install_restart),
+                        summary = stringResource(R.string.home_install_restart_summary),
+                        onClick = { confirmInstallRestart = true },
                     )
                 }
             }
         }
 
-        // Last on the page, under the device list. Asking comes after everything the page was
-        // opened for, never before it. It is a row rather than a button because everything else
-        // the user can tap in this app is a row, and a lone button here would read as a demand.
-        //
-        // No top padding of its own: the device card above already carries 12dp underneath it.
-        item(key = "donate") {
-            Card(modifier = Modifier.nextCard()) {
-                ArrowPreference(
-                    title = stringResource(R.string.donate_title),
-                    summary = stringResource(R.string.donate_home_summary),
-                    startAction = {
-                        Icon(
-                            modifier = Modifier
-                                .padding(end = 12.dp)
-                                .size(28.dp),
-                            imageVector = Icons.Rounded.Favorite,
-                            // Fixed rather than themed: the heart is the whole signal here, and
-                            // in the dynamic-colour scheme it would otherwise take whatever
-                            // colour the wallpaper happened to give it.
-                            tint = Color(0xFFF2545B),
-                            contentDescription = null,
-                        )
-                    },
-                    onClick = {
-                        context.startActivity(Intent(context, DonateActivity::class.java))
-                    },
-                )
+        // Only when the module answered and something did not go in: a build of SystemUI that
+        // lacks what a feature hooks costs that feature alone now (FeatureHost), and this is
+        // where it shows rather than as a module that quietly does less.
+        val missing = if (state.alive) state.featuresMissing else emptyList()
+        if (missing.isNotEmpty()) {
+            item(key = "features_missing") {
+                AppCard(modifier = Modifier.nextCard()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.home_features_missing, missing.size),
+                        summary = stringResource(R.string.home_features_missing_summary),
+                        startAction = {
+                            Icon(
+                                modifier = Modifier
+                                    .padding(end = 12.dp)
+                                    .size(28.dp),
+                                imageVector = Icons.Rounded.ErrorOutline,
+                                tint = Color(0xFFDC3545),
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = { showMissing = true },
+                    )
+                }
+            }
+        }
+
+        // The five feature screens used to have a tab of their own. They stand where the device
+        // facts used to, and not as five cards: the first three are all about what the lock
+        // screen shows and read as one subject, so they share a card. 高德's trip switch always
+        // sat apart since it got one (2026-10-07), and 指纹快捷功能 is the newest (2026-10-21).
+        item(key = "features") {
+            Column {
+                AppCard(modifier = Modifier.nextCard()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.features_mini_title),
+                        summary = stringResource(R.string.features_mini_summary),
+                        onClick = {
+                            context.startActivity(Intent(context, MiniPlayerActivity::class.java))
+                        },
+                    )
+                    ArrowPreference(
+                        title = stringResource(R.string.features_cover_title),
+                        summary = stringResource(R.string.features_cover_summary),
+                        onClick = {
+                            context.startActivity(Intent(context, CoverActivity::class.java))
+                        },
+                    )
+                    ArrowPreference(
+                        title = stringResource(R.string.features_shade_title),
+                        summary = stringResource(R.string.features_shade_summary),
+                        onClick = {
+                            context.startActivity(Intent(context, ShadeActivity::class.java))
+                        },
+                    )
+                }
+                AppCard(modifier = Modifier.nextCard()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.features_transit_title),
+                        summary = stringResource(R.string.features_transit_summary),
+                        onClick = {
+                            context.startActivity(Intent(context, TransitActivity::class.java))
+                        },
+                    )
+                }
+                AppCard(modifier = Modifier.nextCard()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.features_fpquick_title),
+                        summary = stringResource(R.string.features_fpquick_summary),
+                        onClick = {
+                            context.startActivity(Intent(context, FpQuickActivity::class.java))
+                        },
+                    )
+                }
             }
         }
     }
 
-    WindowDialog(
+    if (LocalOs4Ui.current) {
+        RestartMenuGlass(
+            show = restartMenuOpen,
+            anchor = restartAnchor,
+            onDismiss = { restartMenuOpen = false },
+        )
+    }
+    }
+
+    AppDialog(
+        show = showMissing,
+        title = stringResource(R.string.home_features_missing_dialog),
+        summary = state.featuresMissing.map { featureName(it) }.joinToString("\n"),
+        onDismissRequest = { showMissing = false },
+    ) {
+        val dismiss = LocalDismissState.current
+        AppDialogButton(
+            modifier = Modifier.fillMaxWidth(),
+            text = stringResource(R.string.home_features_missing_ok),
+            onClick = { dismiss?.invoke() },
+        )
+    }
+
+    AppDialog(
         show = confirmRestart,
         title = stringResource(R.string.restart_stale),
         summary = stringResource(R.string.restart_confirm_summary),
@@ -391,54 +552,70 @@ fun HomePageView(
     ) {
         val dismiss = LocalDismissState.current
         Row(horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(
+            AppDialogButton(
                 modifier = Modifier.weight(1f),
                 text = stringResource(R.string.update_cancel),
                 onClick = { dismiss?.invoke() },
             )
             Spacer(Modifier.width(20.dp))
-            TextButton(
+            AppDialogButton(
                 modifier = Modifier.weight(1f),
                 text = stringResource(R.string.restart_menu),
                 onClick = {
                     confirmRestart = false
                     scope.launch {
-                        val restarted = withContext(Dispatchers.IO) { ModuleBridge.restartStale() }
+                        val taken = stale
+                        val restarted = withContext(Dispatchers.IO) {
+                            ModuleBridge.restartStale(taken)
+                        }
                         // Cleared rather than asked again on a success: re-reading the moment
                         // the kills return races the processes' own death and would put the card
                         // back up for a restart that has just worked. A refusal is the opposite
                         // case - something is still on the old build, and the page should go on
                         // saying so.
-                        stale = if (restarted) 0
-                        else withContext(Dispatchers.IO) { LsposedService.staleCount() }
+                        stale = if (restarted) LsposedService.StaleSet.NONE
+                        else withContext(Dispatchers.IO) { LsposedService.staleSet(state.inert) }
+                        // The inert answer belonged to the SystemUI that was just killed; held
+                        // on to, it kept the card red over a module that had come back. Asked
+                        // again - queryAlive keeps polling through the restart - for the new one's.
+                        if (restarted && state.inert) {
+                            state = state.copy(inert = false)
+                            refresh()
+                        }
                     }
                 },
-                colors = ButtonDefaults.textButtonColorsPrimary(),
+                role = AppDialogButtonRole.Primary,
             )
         }
     }
-}
 
-private object SystemVersion {
-    /** ro.* properties are the only place the HyperOS version is written down. */
-    private fun prop(key: String): String = try {
-        @Suppress("PrivateApi")
-        val cls = Class.forName("android.os.SystemProperties")
-        val get = cls.getMethod("get", String::class.java, String::class.java)
-        (get.invoke(null, key, "") as? String).orEmpty()
-    } catch (_: Throwable) {
-        ""
-    }
-
-    /**
-     * The incremental alone: it already starts with the release name (OS4.0.0.35.XPBCNXM), so
-     * printing the name in front of it just stutters - "OS4.0 · OS4.0.0.35.XPBCNXM".
-     */
-    fun hyperOs(fallback: String): String {
-        val incremental = prop("ro.mi.os.version.incremental").ifEmpty { Build.DISPLAY }
-        if (incremental.isNotEmpty()) return incremental
-        val name = prop("ro.mi.os.version.name").ifEmpty { prop("ro.miui.ui.version.name") }
-        return name.ifEmpty { fallback }
+    AppDialog(
+        show = confirmInstallRestart,
+        title = stringResource(R.string.home_install_restart),
+        summary = stringResource(R.string.home_install_restart_confirm),
+        onDismissRequest = { confirmInstallRestart = false },
+    ) {
+        val dismiss = LocalDismissState.current
+        Row(horizontalArrangement = Arrangement.SpaceBetween) {
+            AppDialogButton(
+                modifier = Modifier.weight(1f),
+                text = stringResource(R.string.update_cancel),
+                onClick = { dismiss?.invoke() },
+            )
+            Spacer(Modifier.width(20.dp))
+            AppDialogButton(
+                modifier = Modifier.weight(1f),
+                text = stringResource(R.string.restart_menu),
+                onClick = {
+                    confirmInstallRestart = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) { ModuleBridge.restartSystemUi() }
+                        refresh()
+                    }
+                },
+                role = AppDialogButtonRole.Primary,
+            )
+        }
     }
 }
 
@@ -462,6 +639,14 @@ private fun RestartMenu() {
         stringResource(R.string.restart_systemui) to ModuleBridge::restartSystemUi,
         stringResource(R.string.restart_wallpaper) to ModuleBridge::restartWallpaper,
     )
+
+    // No result is reported by either menu. A Toast is not a channel this app has - they are
+    // dropped whenever notifications are off, which is this app's default - and the restart is
+    // its own feedback: the screen blinks and the lock screen comes back.
+    fun run(action: () -> Unit) {
+        showMenu = false
+        scope.launch { withContext(Dispatchers.IO) { action() } }
+    }
 
     Box {
         // holdDownState keeps the button looking pressed while its menu is open, which is
@@ -488,17 +673,119 @@ private fun RestartMenu() {
                         text = entry.first,
                         optionSize = entries.size,
                         index = index,
-                        onSelectedIndexChange = {
-                            showMenu = false
-                            // No result is reported. A Toast is not a channel this app has - they
-                            // are dropped whenever notifications are off, which is this app's
-                            // default - and the restart is its own feedback: the screen blinks and
-                            // the lock screen comes back.
-                            scope.launch { withContext(Dispatchers.IO) { entry.second() } }
-                        },
+                        onSelectedIndexChange = { run(entry.second) },
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * The OS4 trigger: a glass button the menu can grow out of.
+ *
+ * The menu itself is not composed here. `GlassIconDropdownMenu` lays out at the size of the
+ * Box it is placed in - a full-screen dismiss layer - and this button sits in the top bar's
+ * actions row, a box the size of one icon. Composing the two together made the menu open into
+ * that icon-sized box, which is why the button hid itself and nothing appeared. The page-level
+ * [HomePageView] owns both the anchor and the open state and puts the menu in its own
+ * full-size Box.
+ */
+@Composable
+private fun RestartMenuGlassTrigger(anchor: GlassPopupAnchor, onOpen: () -> Unit) {
+    GlassIconButton(
+        onClick = onOpen,
+        modifier = Modifier.glassPopupAnchor(anchor, cornerRadius = 22.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Refresh,
+            contentDescription = stringResource(R.string.restart_menu),
+            tint = MiuixTheme.colorScheme.onBackground,
+            modifier = Modifier
+                .size(24.dp)
+                .glassPopupAnchorContent(anchor),
+        )
+    }
+}
+
+/** The OS4 menu, in the page's full-size box, anchored to the bar button. */
+@Composable
+private fun BoxScope.RestartMenuGlass(
+    show: Boolean,
+    anchor: GlassPopupAnchor,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val entries = listOf(
+        stringResource(R.string.restart_scope) to { ModuleBridge.restartScope(context) },
+        stringResource(R.string.restart_systemui) to ModuleBridge::restartSystemUi,
+        stringResource(R.string.restart_wallpaper) to ModuleBridge::restartWallpaper,
+    )
+    GlassIconDropdownMenu(
+        show = show,
+        onDismissRequest = onDismiss,
+        anchor = anchor,
+        anchorContent = {
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = null,
+                tint = MiuixTheme.colorScheme.onBackground,
+            )
+        },
+        // Null on purpose: the menu opens over the page it is recorded in, and sampling that
+        // would blur a picture of the menu into itself.
+        backdrop = null,
+        entries = listOf(
+            MiuixDropdownEntry(
+                entries.map { entry ->
+                    MiuixDropdownItem(
+                        text = entry.first,
+                        onClick = {
+                            onDismiss()
+                            scope.launch { withContext(Dispatchers.IO) { entry.second() } }
+                        },
+                    )
+                },
+            ),
+        ),
+    )
+}
+
+/** A feature id from the module (`feature:xxx`) as the user reads it; the id itself if unknown. */
+@Composable
+private fun featureName(id: String): String {
+    val res = when (id.removePrefix("feature:")) {
+        "tweaks" -> R.string.feature_tweaks
+        "pass_blur_scale" -> R.string.feature_pass_blur_scale
+        "mini_player" -> R.string.feature_mini_player
+        "palette_throttle" -> R.string.feature_palette_throttle
+        "date_status" -> R.string.feature_date_status
+        "amap_focus" -> R.string.feature_amap_focus
+        "ride_code_exit" -> R.string.feature_ride_code_exit
+        "pickup_code" -> R.string.feature_pickup_code
+        "notif_presence" -> R.string.feature_notif_presence
+        "unlock_swipe" -> R.string.feature_unlock_swipe
+        "cover_palette" -> R.string.feature_cover_palette
+        "clock_container" -> R.string.feature_clock_container
+        "sleep_wake" -> R.string.feature_sleep_wake
+        "transport_controls" -> R.string.feature_transport_controls
+        "aod_handover" -> R.string.feature_aod_handover
+        "depth" -> R.string.feature_depth
+        "aod_shrink" -> R.string.feature_aod_shrink
+        "wallpaper_black" -> R.string.feature_wallpaper_black
+        "fingerprint" -> R.string.feature_fingerprint
+        "fingerprint_quick" -> R.string.feature_fingerprint_quick
+        "keyguard_wallpaper_manager" -> R.string.feature_keyguard_wallpaper_manager
+        "media_card" -> R.string.feature_media_card
+        "lock_taps" -> R.string.feature_lock_taps
+        "charge_anim" -> R.string.feature_charge_anim
+        "shade_layer" -> R.string.feature_shade_layer
+        "notif_state_change" -> R.string.feature_notif_state_change
+        "time_view" -> R.string.feature_time_view
+        "clock_interactor" -> R.string.feature_clock_interactor
+        "plugin" -> R.string.feature_plugin
+        else -> return id
+    }
+    return stringResource(res)
 }

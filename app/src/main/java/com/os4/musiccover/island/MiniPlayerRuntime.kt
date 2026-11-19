@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 btm_m
 package com.os4.musiccover.island
-import com.os4.musiccover.AlbumArt
-import com.os4.musiccover.CardTouch
-import com.os4.musiccover.MediaCard
-import com.os4.musiccover.ClockCollapse
-import com.os4.musiccover.ClockRoom
-import com.os4.musiccover.ClockRoomPolicy
-import com.os4.musiccover.CoverMorphMotion
+import com.os4.musiccover.cover.AlbumArt
+import com.os4.musiccover.card.CardTouch
+import com.os4.musiccover.card.MediaCard
+import com.os4.musiccover.clock.ClockCollapse
+import com.os4.musiccover.clock.ClockRoom
+import com.os4.musiccover.clock.ClockRoomPolicy
+import com.os4.musiccover.cover.CoverMorphMotion
 import com.os4.musiccover.Main
 import com.os4.musiccover.lyrics.TrackName
+import com.os4.musiccover.lyrics.LockLyrics
+import com.os4.musiccover.Gen
 import com.os4.musiccover.Xp
 import com.os4.musiccover.immersive.ImmersiveHost
 import android.content.Context
@@ -44,13 +46,12 @@ import org.json.JSONObject
 
 /** Owns one mini player for each live keyguard shortcut host. */
 object MiniPlayerRuntime {
-    private data class Held(val left: View, val right: View, val controller: MiniPlayerController)
+    private data class Held(val left: View, val right: View, val controller: MiniPlayerController,
+                            val listener: View.OnAttachStateChangeListener? = null)
 
     /** One thread for scaling artwork, so a track change never decodes on the main thread. */
     internal val artWorker: java.util.concurrent.ExecutorService =
-        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-            Thread(r, "MCMiniArt").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }
-        }
+        Gen.executor("MCMiniArt", Thread.MIN_PRIORITY, true)
     private val controllers = WeakHashMap<ViewGroup, Held>()
     private var materialFailed = false
     private val selectionLock = Any()
@@ -84,11 +85,15 @@ object MiniPlayerRuntime {
             .also { navKeepOnSaved = it }
 
     /**
-     * Whether the bottom's lasting lines stand after the date (DateStatus): with the islands on,
-     * which is all that is left of it - the placement itself is fixed now (MiniPlayerConfig).
+     * Whether the bottom's lasting lines stand after the date (DateStatus): with the islands on
+     * and the setting on, which is how it has been since 2026-10-09; off puts them back at the
+     * bottom (MiniPlayerConfig.STATUS_AT_DATE).
      */
-    @JvmStatic fun statusAtDate(context: Context): Boolean =
-        JSONObject(configJson(context)).optBoolean(MiniPlayerConfig.ENABLED)
+    @JvmStatic fun statusAtDate(context: Context): Boolean {
+        val config = JSONObject(configJson(context))
+        return config.optBoolean(MiniPlayerConfig.ENABLED) &&
+            config.optBoolean(MiniPlayerConfig.STATUS_AT_DATE, true)
+    }
 
     @JvmStatic fun applyConfig(context: Context, raw: String?) {
         val saved = MiniPlayerConfig.apply(prefs(context), raw)
@@ -123,9 +128,122 @@ object MiniPlayerRuntime {
     }
 
     /**
+     * refresh, on the next turn of the main loop and folded into one with any other asked for by
+     * then. For the session's own callbacks: each controller listens to that session too and
+     * schedules its own refresh off the same callback, so a refresh run here at once was a second
+     * one - and run before the controller's callback had landed, against the state it was about to
+     * replace. Not for a transition that has to land in this frame (cover mode in and out, the card
+     * coming and going): those keep refresh.
+     */
+    @JvmStatic fun refreshSoon() {
+        synchronized(controllers) { controllers.values.map { it.controller } }
+            .forEach { runCatching { it.scheduleRefresh() } }
+    }
+
+    /**
      * Each hook on its own: a build that renamed one class costs the feature that needed it,
      * not the rest of the mini player.
      */
+    /**
+     * Retirement: every controller's own teardown - its frames, rows, discs, host views, session
+     * listeners and LockIslands registration - and the attach listeners that would otherwise
+     * outlive them. The hooks are the ledger's, and stay.
+     */
+    @JvmStatic
+    fun retire() {
+        installTask?.let { Gen.removeCallbacks(it) }
+        installTask = null
+        val all = synchronized(controllers) {
+            val held = controllers.entries.map { it.key to it.value }
+            controllers.clear()
+            held
+        }
+        for ((host, h) in all) {
+            runCatching { Gen.unattachState(host, h.listener) }
+            runCatching { h.controller.destroy() }
+        }
+        // The OEM's full-AOD controller is a singleton and holds the proxy directly. Left
+        // there, it is a host reference into this class loader - and `added` was a local, so
+        // the next generation could never add its own listener to that controller.
+        // The proxy and the reflected methods stay: they are install-time, a dry run does not
+        // install again, and only this generation's own statics hold them.
+        val c = aodController?.get()
+        val l = aodListener
+        val remove = aodRemove
+        // For a dry run's reattach, which has no handover to read the controller from.
+        lastAodController = c?.let(::WeakReference)
+        aodController = null
+        aodListenerAdded = false
+        if (c != null && l != null) {
+            runCatching {
+                if (remove != null) {
+                    remove.invoke(c, l)
+                } else {
+                    @Suppress("UNCHECKED_CAST")
+                    val list = Xp.getObjectField(c, "mListeners") as MutableList<Any?>
+                    list.remove(l)
+                }
+            }.onFailure { Xp.log("MCMini: full-AOD listener not removed: $it") }
+        }
+        aodDimFrames = 0
+        IslandMaterial.retire()
+        aodDimDepth = -1f
+        aodDimFlat = false
+        // The AOD dressing belongs to the views that just went; left here it would hand the
+        // next run a listener per orphaned view.
+        aodDimHandler.removeCallbacks(aodDimSettle)
+        aodDimArgs = null
+        for ((view, listener) in pendingAodRedress.toMap()) {
+            runCatching { Gen.unattachState(view, listener) }
+        }
+        pendingAodRedress.clear()
+        dressedViews.clear()
+        notificationDressedViews.clear()
+        // Rows the transient-removal hook is holding for a morph: with the controllers gone the
+        // morph will not land, and the map must not keep telling the stack to keep them. One the
+        // stack already tried to take away is waiting on us for it, so it is let go now.
+        for (row in heldTransients.filterValues { it }.keys.toList()) {
+            runCatching { releaseTransient(row) }
+        }
+        heldTransients.clear()
+        passTransient = false
+    }
+
+    /**
+     * Retirement's other half: a dry run does not rebuild the keyguard, so the shortcut hook
+     * that normally builds a controller never fires again. The row it hung off is still there;
+     * build on it the same way a config change does.
+     */
+    @JvmStatic
+    fun reattach() {
+        adoptAod(lastAodController?.get())
+        lastRoot?.get()?.let { root ->
+            if (root.isAttachedToWindow) scheduleInstall(root, lastShortcutController?.get())
+        }
+    }
+
+    /**
+     * What a hot reload hands over: the shortcut row the last controller hung off and the OEM
+     * controller it was built from. Both are host objects. Without them the new generation has
+     * nothing to reattach to - a hot reload does not rebuild the keyguard, so the shortcut hook
+     * that normally supplies this pair will not fire again. The full-AOD controller goes along
+     * for the same reason (see [adoptAod]).
+     */
+    @JvmStatic
+    fun save(): Array<Any?> =
+        arrayOf(lastRoot?.get(), lastShortcutController?.get(), aodController?.get())
+
+    /** The new generation's half; see [save]. Main thread, like the attach path. */
+    @JvmStatic
+    fun adopt(root: View?, shortcutController: Any?, aod: Any?) {
+        adoptAod(aod)
+        if (root == null || !root.isAttachedToWindow) {
+            Xp.log("MCMini: no shortcut row to adopt ($root)")
+            return
+        }
+        scheduleInstall(root, shortcutController)
+    }
+
     @JvmStatic fun install(classLoader: ClassLoader) {
         loader = classLoader
         if (hooksInstalled) return
@@ -135,7 +253,7 @@ object MiniPlayerRuntime {
                 "com.android.systemui.statusbar.notification.mediacontrol.MiuiMediaHeaderView",
                 classLoader,
             )
-            Xp.hookAll(cls, "setVisibility") { chain ->
+            Xp.hookAll("sysui.mini.header_visibility", cls, "setVisibility") { chain ->
                 val args = chain.args.toTypedArray()
                 if (args.size == 1 && args[0] == View.VISIBLE && keepNativeHeaderInvisible()) {
                     args[0] = View.INVISIBLE
@@ -145,7 +263,7 @@ object MiniPlayerRuntime {
         }.onFailure { Xp.w("MCMini: native header visibility hook unavailable: $it") }
         runCatching {
             val cls = Xp.findClass("com.android.keyguard.shortcut.MiuiShortcutController", classLoader)
-            Xp.hookAll(cls, "addShortcutViews") { chain ->
+            Xp.hookAll("sysui.mini.shortcut_views", cls, "addShortcutViews") { chain ->
                 val result = chain.proceed()
                 (chain.args.firstOrNull() as? View)?.let { scheduleInstall(it, chain.thisObject) }
                 result
@@ -155,7 +273,7 @@ object MiniPlayerRuntime {
         // between rows too, where the card swipe never sees it: the rows are the list's again.
         runCatching {
             val cls = Xp.findClass("com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout", classLoader)
-            Xp.hookAll(cls, "onScrollTouch") { chain ->
+            Xp.hookAll("sysui.mini.scroll_touch", cls, "onScrollTouch") { chain ->
                 val result = chain.proceed()
                 val event = chain.args.firstOrNull() as? MotionEvent
                 val stack = chain.thisObject as? View
@@ -172,7 +290,7 @@ object MiniPlayerRuntime {
         for (name in listOf("com.android.systemui.statusbar.notification.row.ExpandableView",
                 "com.android.systemui.statusbar.notification.row.ExpandableNotificationRow")) {
             runCatching {
-                Xp.hookAll(Xp.findClass(name, classLoader), "removeFromTransientContainer") { chain ->
+                Xp.hookAll("sysui.mini.remove_transient", Xp.findClass(name, classLoader), "removeFromTransientContainer") { chain ->
                     val v = chain.thisObject as? View
                     if (v != null && !passTransient && heldTransients.containsKey(v) && !reAdding()) {
                         heldTransients[v] = true
@@ -191,7 +309,7 @@ object MiniPlayerRuntime {
             val cls = Xp.findClass(
                 "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayoutControllerInjectorImpl",
                 classLoader)
-            Xp.hookAll(cls, "updateStackingBottomForMiui") { chain ->
+            Xp.hookAll("sysui.mini.stack_bottom", cls, "updateStackingBottomForMiui") { chain ->
                 val args = chain.args.toTypedArray()
                 val bottom = args.getOrNull(0) as? Float
                 if (bottom == null) chain.proceed() else {
@@ -209,7 +327,7 @@ object MiniPlayerRuntime {
             }
         }.onFailure { Xp.w("MCMini: stacking bottom hook unavailable, cards may meet a lifted row: $it") }
         MiniPlayerScene.install(classLoader)
-        installCardMaterialHooks(classLoader)
+        runCatching { installMaterial(classLoader) }.onFailure { Xp.w("MCMini: island material unavailable: $it") }
         runCatching { installAodDim(classLoader) }
             .onFailure { Xp.w("MCMini: full-AOD dim unavailable: $it") }
         LockIslands.install(classLoader)
@@ -382,369 +500,94 @@ object MiniPlayerRuntime {
     @Volatile internal var materialGeneration = 0
         private set
 
-    /**
-     * The pill's material key: the effect, then the generation after a '#'. The pill builds a
-     * new layer only when the effect before the '#' changes (MiniPlayerMaterialState).
-     */
-    internal val materialStyleKey: String get() = "$cardEffect#$materialGeneration"
-    /** The last recipe's values, for telling a new one from the same one again. */
-    private var materialSignature: Any? = null
-    private var materialRepeats = 0
-
-    /** Effects run on the main thread only; this counts how deep inside one another they are. */
-    private var effectDepth = 0
-
-    /** One material call the card got, to be made again on the pill with the pill put in. */
-    private class Recorded(val method: Method, val args: Array<Any?>, val viewAt: Int)
-
-    /** The card's material as it was last dressed: its background, then every call in order. */
-    @Volatile private var cardRecipe: List<Recorded>? = null
-    @Volatile private var cardBackground: android.graphics.drawable.Drawable.ConstantState? = null
-    private var notificationBlend: IntArray? = null
-    private var notificationGlass: FloatArray? = null
-    private var notificationBlendMethod: Method? = null
-    private var notificationGlassMethod: Method? = null
-    private var notificationBackground: android.graphics.drawable.Drawable.ConstantState? = null
-    private var notificationSignature: Any? = null
-    private var notificationSource: WeakReference<View>? = null
-    private var notificationFocusCheck: Method? = null
-    private var recording: ArrayList<Recorded>? = null
-    private var recordTarget: View? = null
-    private var recordDepth = 0
+    // ---- what dressed the islands again, counted (op mini dresscount=)
 
     /**
-     * The card's material, copied call for call. NotificationViewEffectHelper has eight media
-     * card effects - plain, blur, blur on the keyguard, glass, glass on the keyguard, glass on a
-     * light wallpaper, glass in the full-screen AOD - and the keyguard ones run the plain blur
-     * inside themselves. Copying three of them by hand, the first version saw that inner blur
-     * as the card's material and dressed the pill in the shade's dark one. So nothing is
-     * copied by hand any more: while an effect dresses the lock screen's card, every material
-     * call made on its media_bg is recorded, and the pill gets the same calls, in order.
+     * Why each generation was bumped, by cause, and every dressing per view: for #135, discs
+     * flickering on the soft glass and not on the frost. Counted since the process started -
+     * the uptime is printed with them, so two reads give a rate - and never logged.
      */
-    private fun installCardMaterialHooks(classLoader: ClassLoader) {
-        notificationFocusCheck = runCatching {
-            Xp.findClass("com.android.systemui.statusbar.notification.utils.FocusUtils", classLoader)
-                .getDeclaredMethod("isFocusNotification", android.app.Notification::class.java)
-                .apply { isAccessible = true }
-        }.getOrNull()
-        val effects = runCatching {
-            val helper = Xp.findClass(
-                "com.android.systemui.statusbar.notification.style.vieweffect.NotificationViewEffectHelper",
-                classLoader)
-            val field = helper.declaredFields.first { it.name == "mediaViewEffectsMap" }
-            field.isAccessible = true
-            (field.get(null) as Map<*, *>).values.filterNotNull().map { it.javaClass }.distinct()
-        }.getOrElse {
-            Xp.w("MCMini: effect map unavailable, naming the effects instead: $it")
-            listOf("MediaViewNormalEffect", "MediaViewBlurEffect", "MediaViewBlurOnKeyguardEffect",
-                "MediaViewGlassEffect", "MediaViewGlassOnKeyguardEffect",
-                "MediaViewGlassOnKeyguardLightWallPaperEffect", "MediaViewGlassFullAodEffect")
-                .mapNotNull { name -> runCatching { Xp.findClass(
-                    "com.android.systemui.statusbar.notification.style.vieweffect.$name", classLoader)
-                }.getOrNull() }
-        }
-        effects.forEach { cls ->
-            runCatching {
-                Xp.hookAll(cls, "apply") { chain ->
-                    val target = chain.args.firstOrNull() as? View
-                    val card = Main.miniPlayerMediaHeader()
-                    // The pill and the islands live on the lock screen, so they wear the lock
-                    // screen's effect. The OEM dresses the card in the plain one too - often the
-                    // plain effect first and the keyguard one 50ms later, sometimes the plain one
-                    // alone - and recorded last, the plain frost's dark recipe went onto the pill
-                    // while its words took the keyguard card's near black: dark on dark after a
-                    // wallpaper change (#87, the reporter's log ended on MediaViewBlurEffect).
-                    // The plain one is still taken until a keyguard one has been seen at all.
-                    val keyguardKind = isKeyguardEffect(cls.simpleName)
-                    val mine = effectDepth == 0 && target != null && (card == null || target === card) &&
-                        (keyguardKind || !isKeyguardEffect(cardEffect))
-                    if (mine) {
-                        recordTarget = Main.miniPlayerMediaBg(target)
-                        recording = ArrayList()
-                    }
-                    effectDepth++
-                    val result = try {
-                        chain.proceed()
-                    } finally {
-                        effectDepth--
-                    }
-                    val recorded = recording
-                    if (mine && recorded.isNullOrEmpty()) {
-                        // An effect that made no material call on a card background - with no
-                        // media card on the lock screen, one on another media view: kept, it
-                        // replaced the card's recipe with nothing, and the pill, dressed again
-                        // from it, went clear while the discs kept their glass (2026-09-25).
-                        recording = null
-                        recordTarget = null
-                        if (emptyEffect != cls.simpleName) {
-                            emptyEffect = cls.simpleName
-                            Xp.log("MCMini: ${cls.simpleName} recorded no material calls; recipe kept")
-                        }
-                    } else if (mine) {
-                        val bg = recordTarget
-                        recording = null
-                        recordTarget = null
-                        val signature = materialSignature(cls.name, recorded!!, bg?.background)
-                        if (signature != materialSignature) {
-                            materialSignature = signature
-                            cardRecipe = recorded
-                            cardBackground = bg?.background?.constantState
-                            runCatching { keepRecipe(target!!.context, recorded, bg?.background) }
-                                .onFailure { Xp.log("MCMini: recipe not kept: $it") }
-                            if (cardEffect != cls.simpleName) Xp.log("MCMini: card material -> ${cls.simpleName}")
-                            cardEffect = cls.simpleName
-                            materialGeneration++
-                            refresh()
-                        } else materialRepeats++
-                    }
-                    result
-                }
-            }.onFailure { Xp.w("MCMini: ${cls.simpleName} hook unavailable: $it") }
-        }
-        // What the effects call on the card's background: record the outermost of them.
-        listOf(
-            "com.android.systemui.statusbar.notification.utils.NotificationUtil" to
-                setOf("applyElementViewBlend"),
-            "com.miui.systemui.util.MiGlassCompat" to setOf("setMiGlassBlurRadius",
-                "setMiGlassCompat", "setMiGlassSdfMaxSizeCompat", "setMiViewMaterialTypeCompat"),
-            "com.miui.systemui.util.MiBlurCompat" to setOf("addMiBackgroundBlendColorCompat",
-                "clearMiBackgroundBlendColorCompat", "setBlurOutlineEnable", "setGlassOutlineEnable",
-                "setMiBackgroundBlendColors", "setMiBackgroundBlendColors\$default",
-                "setMiBackgroundBlendColorsNew\$default", "setMiBackgroundBlurModeCompat",
-                "setMiBackgroundBlurRadiusCompat", "setMiBackgroundBlurScaleRatioCompat",
-                "setMiSelfBlurTypeCompat", "setMiViewBlurModeCompat", "setPassWindowBlurEnabledCompat"),
-        ).forEach { (className, names) ->
-            runCatching {
-                val cls = Xp.findClass(className, classLoader)
-                cls.declaredMethods.filter {
-                    it.name in names && java.lang.reflect.Modifier.isStatic(it.modifiers)
-                        && it.parameterTypes.any { p -> View::class.java.isAssignableFrom(p) }
-                }.forEach { m ->
-                    m.isAccessible = true
-                    Xp.api().hook(m).intercept { chain ->
-                        val list = recording
-                        val bg = recordTarget
-                        if (list == null || bg == null || recordDepth > 0) {
-                            val result = chain.proceed()
-                            if (list == null && recordDepth == 0) runCatching {
-                                recordNotificationMaterial(m, chain.args.toTypedArray())
-                            }
-                            return@intercept result
-                        }
-                        val args = chain.args.toTypedArray()
-                        val at = args.indexOfFirst { it === bg }
-                        if (at < 0) return@intercept chain.proceed()
-                        recordDepth++
-                        try {
-                            chain.proceed()
-                        } finally {
-                            recordDepth--
-                            // Copied: the OEM hands the same array to the next dressing, changed.
-                            list.add(Recorded(m, Array(args.size) { i -> copyArray(args[i]) }, at))
-                        }
-                    }
-                }
-            }.onFailure { Xp.w("MCMini: material recorder on $className unavailable: $it") }
+    private val bumpCounts = IntArray(BUMP_NAMES.size)
+    @Volatile private var lastBump = -1
+    private var dressTotal = 0
+    private val dressCounts = java.util.WeakHashMap<View, IntArray>()
+    private val dressRing = ArrayDeque<String>()
+
+    private fun bumpGeneration(cause: Int) {
+        materialGeneration++
+        synchronized(bumpCounts) { bumpCounts[cause]++ }
+        lastBump = cause
+    }
+
+    /** One dressing of [view]: counted against the view it lies in (a disc, the pill), with what last bumped the generation. */
+    private fun countDressing(view: View) {
+        val owner = view.parent as? View ?: view
+        val entry = "${android.os.SystemClock.uptimeMillis() % 1000000} " +
+            "${owner.javaClass.simpleName}@${Integer.toHexString(System.identityHashCode(owner))} " +
+            "gen=$materialGeneration by=${BUMP_NAMES.getOrNull(lastBump) ?: "none"}"
+        synchronized(dressRing) {
+            dressTotal++
+            dressCounts.getOrPut(owner) { IntArray(1) }[0]++
+            dressRing.addLast(entry)
+            while (dressRing.size > 20) dressRing.removeFirst()
         }
     }
 
-    private fun copyArray(value: Any?): Any? = when (value) {
-        is IntArray -> value.copyOf()
-        is FloatArray -> value.copyOf()
-        else -> value
-    }
-
-    /** Only ordinary rows supply the glass; expanded focus cards have their own darker material. */
-    private fun recordNotificationMaterial(method: Method, args: Array<Any?>) {
-        if (!Main.keyguardLocked() || MiniPlayerScene.aodActive) return
-        if (method.name != "applyElementViewBlend" && method.name != "setMiGlassCompat") return
-        val element = args.firstOrNull { it is View } as? View ?: return
-        if (element is MaterialElement) return
-        var ancestor: View? = element
-        var row: View? = null
-        while (ancestor != null) {
-            if (ancestor.javaClass.name.contains("ExpandableNotificationRow")) {
-                row = ancestor
-                break
-            }
-            ancestor = ancestor.parent as? View
+    private fun describeDressCount(): String {
+        val bumps = synchronized(bumpCounts) {
+            BUMP_NAMES.indices.joinToString(",") { "${BUMP_NAMES[it]}=${bumpCounts[it]}" }
         }
-        val source = row ?: return
-        val ordinary = runCatching {
-            val entry = Xp.callMethod(source, "getEntry")
-            val notification = (Xp.getObjectField(entry, "mSbn") as?
-                android.service.notification.StatusBarNotification)?.notification ?: return@runCatching false
-            // A media row or a focus/super-island row must never replace the ordinary palette.
-            // If classification is unavailable, keep the last ordinary look or the keyguard
-            // fallback rather than sampling an unknown card.
-            !notification.extras.containsKey(android.app.Notification.EXTRA_MEDIA_SESSION) &&
-                notificationFocusCheck?.invoke(null, notification) == false
-        }.getOrDefault(false)
-        if (!ordinary) return
-        val previousSource = notificationSource?.get()
-        if (previousSource != null && previousSource !== source && previousSource.isAttachedToWindow) return
-        notificationSource = WeakReference(source)
-        when (method.name) {
-            "applyElementViewBlend" -> {
-                // An ordinary row blends two layers (NotificationRowBlurEffect: the int overload,
-                // four values), the media card three. Only six were taken, so the row's look was
-                // never recorded and the islands wore the fallback - the media card's modes over
-                // the focus list's darker colours, a 60% black layer the torch and camera do not
-                // have (#73, 2026-10-14). The int overload passes on to the array one, which is
-                // the one recorded: taken from the outer call, the method was the eight-argument
-                // overload, which the replay's five arguments do not fit.
-                val colors = args.firstOrNull { it is IntArray } as? IntArray ?: return
-                if (colors.isEmpty() || colors.size % 2 != 0) return
-                notificationBlendMethod = method
-                notificationBlend = colors.copyOf()
-            }
-            "setMiGlassCompat" -> {
-                notificationGlassMethod = method
-                notificationGlass =
-                    (args.firstOrNull { it is FloatArray } as? FloatArray)?.copyOf()
-            }
-        }
-        notificationBackground = element.background?.constantState ?: notificationBackground
-        val blend = notificationBlend ?: return
-        val glass = notificationGlass ?: return
-        val signature = listOf(blend.toList(), glass.toList())
-        if (signature != notificationSignature) {
-            notificationSignature = signature
-            materialGeneration++
-            refresh()
+        return synchronized(dressRing) {
+            "dresscount=[t=${android.os.SystemClock.uptimeMillis()} total=$dressTotal bumps={$bumps} views={" +
+                dressCounts.entries.joinToString(",") { (v, n) ->
+                    "${v.javaClass.simpleName}@${Integer.toHexString(System.identityHashCode(v))}" +
+                        "${if (v.isAttachedToWindow) "" else "(detached)"}=${n[0]}"
+                } + "} last={" + dressRing.joinToString(" ; ") + "}]"
         }
     }
-
-    /** A recipe's values: the effect, the background, and every call with its arguments. */
-    private fun materialSignature(effect: String, calls: List<Recorded>,
-                                  bg: android.graphics.drawable.Drawable?): Any {
-        val background: Any? = when (bg) {
-            null -> null
-            is GradientDrawable -> listOf(bg.javaClass.name, bg.color?.defaultColor, bg.color?.isStateful,
-                bg.cornerRadius, MiniPlayerMaterialState.snapshot(bg.cornerRadii), bg.shape,
-                bg.gradientType, bg.orientation, MiniPlayerMaterialState.snapshot(bg.colors))
-            is android.graphics.drawable.ColorDrawable -> listOf(bg.javaClass.name, bg.color)
-            else -> bg.constantState ?: bg
-        }
-        return listOf(effect, background, calls.map { call ->
-            listOf(call.method, call.viewAt, call.args.mapIndexed { i, arg ->
-                if (i == call.viewAt || arg is Context) null else MiniPlayerMaterialState.snapshot(arg)
-            })
-        })
-    }
-
-    // ---- the card's recipe, kept
 
     /**
-     * The recipe is recorded only when the lock screen dresses a media card, and it lived in
-     * memory: after SystemUI restarted with no music, there was no card to record from and the
-     * row of notification islands was a flat grey fill until music played (2026-09-25). It is
-     * kept in SystemUI's own preferences now, call by call - class, method, parameter types and
-     * the plain values - and read back the first time a pill is dressed without one.
+     * The pill's material key: the islands' material key (IslandMaterial), then the generation
+     * after a '#'. The pill builds a new layer only when the part before the '#' changes
+     * (MiniPlayerMaterialState): another effect, not new values of the same one.
      */
-    private const val RECIPE_KEY = "card_recipe_v1"
-    private var recipeLoaded = false
+    internal val materialStyleKey: String get() = "${islandKey ?: "none"}#$materialGeneration"
 
-    private fun keepRecipe(context: Context, list: List<Recorded>, bg: android.graphics.drawable.Drawable?) {
-        val calls = org.json.JSONArray()
-        for (r in list) {
-            val args = org.json.JSONArray()
-            r.args.forEachIndexed { i, a ->
-                args.put(when {
-                    i == r.viewAt -> JSONObject().put("t", "view")
-                    a == null -> JSONObject().put("t", "null")
-                    a is Int -> JSONObject().put("t", "i").put("x", a)
-                    a is Long -> JSONObject().put("t", "l").put("x", a)
-                    a is Float -> JSONObject().put("t", "f").put("x", a.toDouble())
-                    a is Double -> JSONObject().put("t", "d").put("x", a)
-                    a is Boolean -> JSONObject().put("t", "b").put("x", a)
-                    a is String -> JSONObject().put("t", "s").put("x", a)
-                    a is IntArray -> JSONObject().put("t", "ia").put("x", org.json.JSONArray(a.toList()))
-                    a is FloatArray -> JSONObject().put("t", "fa")
-                        .put("x", org.json.JSONArray(a.map { it.toDouble() }))
-                    a is Context -> JSONObject().put("t", "ctx")
-                    // Anything else cannot be written down: the recipe is not kept at all.
-                    else -> error("argument ${a.javaClass.name} of ${r.method.name}")
-                })
-            }
-            calls.put(JSONObject()
-                .put("c", r.method.declaringClass.name)
-                .put("m", r.method.name)
-                .put("p", org.json.JSONArray(r.method.parameterTypes.map { it.name }))
-                .put("v", r.viewAt)
-                .put("a", args))
+    /** The islands' material key as last read; a new one is a dressing of every island. */
+    @Volatile private var islandKey: String? = null
+
+    /**
+     * The generation, after reading the islands' material key: a new key bumps it and asks for
+     * a refresh, so the pill and the small island are dressed with the discs. Main thread; read
+     * on every disc frame, and IslandMaterial holds the state for about a frame.
+     */
+    internal fun islandGeneration(): Int {
+        // The AOD's dim has the views (onAodDim puts its frames on them, settleAodDim gives
+        // them back): a new key is taken once it is through, not in the middle of its run.
+        if (aodDimArgs != null && islandKey != null) return materialGeneration
+        val k = IslandMaterial.islandKey(Main.sAppCtx)
+        if (k != null && k != islandKey) {
+            val was = islandKey
+            islandKey = k
+            matNote("island key $was -> $k")
+            bumpGeneration(BUMP_KEY)
+            refreshSoon()
         }
-        val kept = JSONObject().put("calls", calls)
-        when (bg) {
-            is GradientDrawable -> kept.put("bg", JSONObject()
-                .put("t", "gradient")
-                .put("color", bg.color?.defaultColor ?: 0)
-                .put("radius", bg.cornerRadius.toDouble()))
-            is android.graphics.drawable.ColorDrawable -> kept.put("bg", JSONObject()
-                .put("t", "color").put("color", bg.color))
-        }
-        val text = kept.toString()
-        val p = prefs(context)
-        if (p.getString(RECIPE_KEY, null) != text) p.edit().putString(RECIPE_KEY, text).apply()
+        return materialGeneration
     }
 
-    /** The recipe kept from an earlier dressing, when none has been recorded since SystemUI started. */
-    private fun loadRecipe(context: Context, classLoader: ClassLoader) {
-        if (recipeLoaded || cardRecipe != null) return
-        recipeLoaded = true
-        runCatching {
-            val text = prefs(context).getString(RECIPE_KEY, null) ?: return
-            val kept = JSONObject(text)
-            val calls = kept.getJSONArray("calls")
-            val list = ArrayList<Recorded>()
-            fun type(name: String): Class<*> = when (name) {
-                "int" -> Int::class.javaPrimitiveType!!
-                "long" -> Long::class.javaPrimitiveType!!
-                "float" -> Float::class.javaPrimitiveType!!
-                "double" -> Double::class.javaPrimitiveType!!
-                "boolean" -> Boolean::class.javaPrimitiveType!!
-                else -> Class.forName(name, false, classLoader)
+    /** A recipe arriving for what the islands wear now dresses them again; any other is only kept. */
+    private fun installMaterial(classLoader: ClassLoader) {
+        IslandMaterial.install(classLoader) { key ->
+            if (IslandMaterial.wouldWear(key)) {
+                bumpGeneration(BUMP_RECIPE)
+                refreshSoon()
             }
-            for (i in 0 until calls.length()) {
-                val c = calls.getJSONObject(i)
-                val params = c.getJSONArray("p")
-                val types = Array(params.length()) { type(params.getString(it)) }
-                val method = Class.forName(c.getString("c"), false, classLoader)
-                    .getDeclaredMethod(c.getString("m"), *types).apply { isAccessible = true }
-                val a = c.getJSONArray("a")
-                val args = Array<Any?>(a.length()) { j ->
-                    val o = a.getJSONObject(j)
-                    when (o.getString("t")) {
-                        "view", "null" -> null
-                        "i" -> o.getInt("x")
-                        "l" -> o.getLong("x")
-                        "f" -> o.getDouble("x").toFloat()
-                        "d" -> o.getDouble("x")
-                        "b" -> o.getBoolean("x")
-                        "s" -> o.getString("x")
-                        "ia" -> o.getJSONArray("x").let { x -> IntArray(x.length()) { x.getInt(it) } }
-                        "fa" -> o.getJSONArray("x").let { x -> FloatArray(x.length()) { x.getDouble(it).toFloat() } }
-                        "ctx" -> context
-                        else -> error("argument type ${o.getString("t")}")
-                    }
-                }
-                list.add(Recorded(method, args, c.getInt("v")))
-            }
-            kept.optJSONObject("bg")?.let { bg ->
-                cardBackground = when (bg.getString("t")) {
-                    "gradient" -> GradientDrawable().apply {
-                        setColor(bg.getInt("color"))
-                        cornerRadius = bg.getDouble("radius").toFloat()
-                    }.constantState
-                    "color" -> android.graphics.drawable.ColorDrawable(bg.getInt("color")).constantState
-                    else -> null
-                }
-            }
-            cardRecipe = list
-            cardEffect = "kept"
-            Xp.log("MCMini: card recipe read back from preferences (${list.size} calls)")
-        }.onFailure { Xp.log("MCMini: kept recipe unusable: $it") }
+        }
     }
+
+    /** For IslandMaterial: a line in the material log. */
+    internal fun matNoteFor(what: String) = matNote(what)
 
     // ---- the full-screen AOD's dim, as the card takes it
 
@@ -764,15 +607,24 @@ object MiniPlayerRuntime {
         java.util.Collections.newSetFromMap(java.util.WeakHashMap())
     private val notificationDressedViews: MutableSet<ImageView> =
         java.util.Collections.newSetFromMap(java.util.WeakHashMap())
+    // Views may never return. Neither this weak-key registry nor its listeners may retain them.
+    // Gen's weak attach registration still removes live listeners when this generation retires.
+    private val pendingAodRedress = WeakHashMap<ImageView, View.OnAttachStateChangeListener>()
 
     /** The last frame's arguments while the AOD's colours are on the views; null otherwise. */
     private var aodDimArgs: Array<Any?>? = null
 
     /**
-     * The last frame as the views take it: the card's own blend and glass eased toward the AOD's
-     * by the frame's depth ([dimDepth]). Null to put the frame's own values on as they come.
+     * How far the AOD's colours are on the views, 0 the lock screen's plate and 1 the AOD's dark
+     * one; a frame whose depth could not be read counts as all the way.
      */
-    private var aodDimLook: Pair<IntArray, FloatArray?>? = null
+    internal val aodDimFraction: Float get() = when {
+        aodDimArgs == null -> 0f
+        aodDimDepth < 0f -> 1f
+        else -> aodDimDepth.coerceIn(0f, 1f)
+    }
+
+
     private var aodDimDepth = -1f
 
     /**
@@ -781,11 +633,18 @@ object MiniPlayerRuntime {
      */
     private var aodDimFlat = false
     private var aodController: WeakReference<Any>? = null
+    /** The proxy the OEM's full-AOD controller holds, and the way back out of it. */
+    private var aodListener: Any? = null
+    private var aodListenerAdded = false
+    private var aodAdd: Method? = null
+    private var aodRemove: Method? = null
+    /** The controller retire() took our listener off, for a dry run's reattach. */
+    private var lastAodController: WeakReference<Any>? = null
     private var aodDimFrames = 0
     private var blendMethod: Method? = null
     private var glassMethod: Method? = null
     private var blurOpenedMethod: Method? = null
-    private val aodDimHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private val aodDimHandler by lazy { Gen.handler() }
     private val aodDimSettle = Runnable { settleAodDim() }
 
     private fun installAodDim(classLoader: ClassLoader) {
@@ -804,29 +663,42 @@ object MiniPlayerRuntime {
                 .getDeclaredMethod("isBackgroundBlurOpened", Context::class.java).apply { isAccessible = true }
         }.getOrNull()
         val add = controller.getDeclaredMethod("addCallback", listener).apply { isAccessible = true }
+        aodAdd = add
+        // Optional: HyperOS 3's controller (17 Pro Max, 2026-10-27) has addCallback and no way
+        // back, and requiring one threw here and took the whole AOD dim down with it. Without
+        // it, retire() takes the proxy out of the controller's mListeners itself.
+        aodRemove = (runCatching { controller.getDeclaredMethod("removeCallback", listener) }.getOrNull()
+            ?: controller.declaredMethods.firstOrNull {
+                it.name == "removeCallback" && it.parameterTypes.size == 1
+            })?.apply { isAccessible = true }
         val ours = java.lang.reflect.Proxy.newProxyInstance(classLoader, arrayOf(listener)) { self, m, args ->
             when (m.name) {
-                "updateFullAodAnimState" -> { runCatching { onAodDim(args!!) }; null }
-                "completeFullAodAnim" -> { dimNote("complete"); runCatching { settleAodDim() }; null }
-                "onFullAodChange" -> { dimNote("change dark=${args?.getOrNull(0)} glass=${args?.getOrNull(1)}"); null }
                 "hashCode" -> System.identityHashCode(self)
                 "equals" -> self === args?.firstOrNull()
                 "toString" -> "MusicCover full-AOD dim"
-                else -> null
+                // Without removeCallback, retire() takes this out of mListeners by field name, and
+                // a build that named it differently keeps it; a retired generation answers nothing.
+                else -> if (!Gen.live()) null else when (m.name) {
+                    "updateFullAodAnimState" -> { runCatching { onAodDim(args!!) }; null }
+                    "completeFullAodAnim" -> { dimNote("complete"); runCatching { settleAodDim() }; null }
+                    "onFullAodChange" -> { dimNote("change dark=${args?.getOrNull(0)} glass=${args?.getOrNull(1)}"); null }
+                    else -> null
+                }
             }
         }
+        aodListener = ours
         // The controller is SystemUI's own singleton; the first listener it takes brings us in.
-        var added = false
-        Xp.hookAll(controller, "addCallback") { chain ->
+        Xp.hookAll("sysui.mini.session_callback", controller, "addCallback") { chain ->
             val result = chain.proceed()
             val firstController = aodController?.get() == null
             aodController = WeakReference(chain.thisObject)
             if (firstController) {
-                materialGeneration++
+                bumpGeneration(BUMP_AOD_ATTACH)
                 refresh()
             }
-            if (!added) {
-                added = true
+            if (!aodListenerAdded) {
+                aodListenerAdded = true
+                aodListener = ours
                 runCatching { add.invoke(chain.thisObject, ours) }
                     .onFailure { Xp.log("MCMini: full-AOD listener not added: $it") }
             }
@@ -834,15 +706,37 @@ object MiniPlayerRuntime {
         }
     }
 
+    /**
+     * The full-AOD controller a previous generation (or a dry run's retire) had our listener on.
+     * It is SystemUI's singleton and its callbacks are added once, early: the addCallback hook
+     * that normally brings us in will not fire again, so the listener is added here.
+     */
+    private fun adoptAod(controller: Any?) {
+        if (controller == null || aodListenerAdded) return
+        val add = aodAdd ?: return
+        val ours = aodListener ?: return
+        aodController = WeakReference(controller)
+        aodListenerAdded = true
+        runCatching { add.invoke(controller, ours) }
+            .onSuccess {
+                bumpGeneration(BUMP_AOD_ADOPT)
+                refresh()
+                Xp.log("MCMini: full-AOD listener adopted")
+            }
+            .onFailure {
+                aodListenerAdded = false
+                Xp.log("MCMini: full-AOD listener not adopted: $it")
+            }
+    }
+
     private fun onAodDim(args: Array<Any?>) {
         aodDimArgs = args
         aodDimFrames++
         val depth = runCatching { dimDepth(args) }.getOrNull()
         aodDimDepth = depth ?: -1f
-        aodDimLook = depth?.let { d -> runCatching { dimLook(d) }.getOrNull() }
         run { for (view in dressedViews.toList()) dimView(view, args) }
         dimNote("frame ${Integer.toHexString(args[4] as Int)} ta=${"%.2f".format(args[13] as Float)} " +
-            "d=${depth?.let { "%.2f".format(it) } ?: "?"}${if (aodDimLook == null) " raw" else ""}")
+            "d=${depth?.let { "%.2f".format(it) } ?: "?"}")
         // The run ends in completeFullAodAnim; should it be cut short, the last frame settles it.
         aodDimHandler.removeCallbacks(aodDimSettle)
         aodDimHandler.postDelayed(aodDimSettle, AOD_DIM_SETTLE_MS)
@@ -853,12 +747,18 @@ object MiniPlayerRuntime {
         if (!view.isAttachedToWindow) return
         val ctx = view.context
         val blurOpened = blurOpenedMethod?.let { runCatching { it.invoke(null, ctx) as Boolean }.getOrNull() } ?: true
+        if (dimNoted.add(view)) {
+            matNoteLimited("dim") {
+                "${matTag(view)} first frame: ${if (!blurOpened) "flat fill" else "OEM frame"}" +
+                    " glass=${args[12]} notif=${view in notificationDressedViews}"
+            }
+        }
         runCatching {
             if (blurOpened) {
-                val look = if (view in notificationDressedViews) null else aodDimLook
-                val colours = look?.first ?: IntArray(6) { args[4 + it] as Int }
+                // The OEM's own frame, as its rows take it: the islands wear a row's material.
+                val colours = IntArray(6) { args[4 + it] as Int }
                 blendMethod?.invoke(null, ctx, view, false, colours, false)
-                val params = if (look != null) look.second ?: args[10] as? FloatArray else args[10] as? FloatArray
+                val params = args[10] as? FloatArray
                 if (args[12] == true && params != null) glassMethod?.invoke(null, view, params)
             } else {
                 val id = ctx.resources.getIdentifier("notification_media_fullaod_item_bg", "drawable",
@@ -899,37 +799,8 @@ object MiniPlayerRuntime {
         return (num / den).toFloat().coerceIn(0f, 1f)
     }
 
-    /**
-     * The card's recorded blend and glass eased toward the AOD's by [depth]. The AOD's colours
-     * are the controller's focus list's AOD side (mFocusNotifiColorList: origin, target pairs;
-     * the target is the AOD's on the way in, the origin on the way out), the ones the card's
-     * listener puts on; the blend modes stay the card's.
-     */
-    private fun dimLook(depth: Float): Pair<IntArray, FloatArray?>? {
-        val recipe = cardRecipe ?: return null
-        val blend = recipe.firstOrNull { it.method.name == "applyElementViewBlend" }
-            ?.args?.firstOrNull { it is IntArray } as? IntArray ?: return null
-        if (blend.size != 6) return null
-        val c = aodController?.get() ?: return null
-        val list = Xp.getObjectField(c, "mFocusNotifiColorList") as? IntArray ?: return null
-        if (list.size != 6) return null
-        val into = c.javaClass.getField("mEnableFullAod").getBoolean(null)
-        val evaluator = android.animation.ArgbEvaluator()
-        val colours = blend.copyOf()
-        for (j in 0 until 3) {
-            val aod = list[2 * j + if (into) 1 else 0]
-            colours[2 * j] = evaluator.evaluate(depth, blend[2 * j], aod) as Int
-        }
-        val cardGlass = recipe.lastOrNull { it.method.name == "setMiGlassCompat" }
-            ?.args?.firstOrNull { it is FloatArray } as? FloatArray
-        val aodGlass = Xp.getObjectField(c, "mGlassParamsFullAod") as? FloatArray
-        val glass = if (cardGlass != null && aodGlass != null && cardGlass.size == aodGlass.size)
-            FloatArray(cardGlass.size) { cardGlass[it] + (aodGlass[it] - cardGlass[it]) * depth }
-        else null
-        return colours to glass
-    }
 
-    /** Out of the AOD for good: every view back to the card's recipe. In the AOD, left as it is. */
+    /** Out of the AOD for good: every view back to its recipe. In the AOD, left as it is. */
     private fun settleAodDim() {
         aodDimHandler.removeCallbacks(aodDimSettle)
         if (aodDimArgs == null || MiniPlayerScene.aodActive) {
@@ -940,31 +811,42 @@ object MiniPlayerRuntime {
         // Eased all the way back to the card's own material: already dressed as it, and a
         // dressing again only risks a change on a pill that should not change.
         // The views out of their window missed the frames: those are dressed when they return.
-        val home = aodDimLook != null && aodDimDepth in 0f..0.01f && !aodDimFlat
-        aodDimLook = null
+        val home = aodDimDepth in 0f..0.01f && !aodDimFlat
         aodDimFlat = false
         val cl = loader ?: return
         var later = 0
+        dimNoted.clear()
         for (view in dressedViews.toList()) {
+            matNoteLimited("settle") {
+                "${matTag(view)} notif=${view in notificationDressedViews} " +
+                    "attached=${view.isAttachedToWindow} -> ${if (!view.isAttachedToWindow) "on attach"
+                        else if (home) "left as the last dim frame" else "redressed"}"
+            }
             if (view.isAttachedToWindow) {
                 if (!home) material(view, cl, view in notificationDressedViews)
             } else {
                 // Out of its window now, dimmed while it was in: dressed again when it comes
                 // back, or it came back dark on a lit screen with nothing left to undo it.
                 later++
-                view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                if (pendingAodRedress.containsKey(view)) continue
+                val listener = object : View.OnAttachStateChangeListener {
                     override fun onViewAttachedToWindow(v: View) {
-                        v.removeOnAttachStateChangeListener(this)
-                        if (aodDimArgs == null) {
-                            material(view, cl, view in notificationDressedViews)
+                        Gen.unattachState(v, this)
+                        val image = v as? ImageView ?: return
+                        pendingAodRedress.remove(image)
+                        // Use the callback's view: capturing `view` here defeats the weak key.
+                        if (Gen.live() && aodDimArgs == null) {
+                            material(image, cl, image in notificationDressedViews)
                             dimNote("redressed on attach")
                         }
                     }
                     override fun onViewDetachedFromWindow(v: View) {}
-                })
+                }
+                pendingAodRedress[view] = listener
+                Gen.weakAttachState(view, listener)
             }
         }
-        dimNote("settle: ${if (home) "at the card's own look" else "redressed"}, $later out of window")
+        dimNote("settle: ${if (home) "at the lock screen's own look" else "redressed"}, $later out of window")
     }
 
     /**
@@ -980,7 +862,24 @@ object MiniPlayerRuntime {
 
     /** For `op mini`. */
     private fun describeAodDim(): String = "aodDim=${if (aodDimArgs != null) "on" else "off"}/$aodDimFrames" +
+        " pendingRedress=${pendingAodRedress.size}" +
+        " ${describeAodListeners()}" +
         " dimlog=[${synchronized(dimLog) { dimLog.joinToString(" ; ") }}]"
+
+    /**
+     * The controller's listener list: how long, how many of them are a MusicCover proxy (any
+     * generation's - they all print the same), and whether this generation's is one. After a hot
+     * reload the proxies should still be exactly one, and it ours.
+     */
+    private fun describeAodListeners(): String {
+        val c = aodController?.get() ?: return "aodListeners=(no controller)"
+        return runCatching {
+            val list = (Xp.getObjectField(c, "mListeners") as List<*>).toList()
+            val proxies = list.count { it != null && it.toString() == "MusicCover full-AOD dim" }
+            val oursIn = list.any { it === aodListener }
+            "aodListeners=${list.size} proxies=$proxies ours=$oursIn"
+        }.getOrElse { "aodListeners=? $it" }
+    }
 
     /**
      * The dim's events for `op mini`, uptime ms: the listener's frames (the blend's first colour,
@@ -1005,23 +904,26 @@ object MiniPlayerRuntime {
         }
     }
 
-    /** Which effect dressed the card last, for the log and `op mini`. */
-    @Volatile private var cardEffect = "none"
 
-    private fun isKeyguardEffect(name: String) = "OnKeyguard" in name || "FullAod" in name
-
-    /** The last effect whose empty recording was thrown away, for `op mini`. */
-    @Volatile private var emptyEffect = "none"
+    /** The pending retries of scheduleInstall, so a retirement can take them back. */
+    private var installTask: Runnable? = null
 
     /** The shortcut row has just been built: the pill goes between its two buttons. */
     private fun scheduleInstall(root: View, shortcutController: Any?) {
         lastRoot = WeakReference(root)
         lastShortcutController = shortcutController?.let(::WeakReference)
-        fun doInstall() = runCatching { attach(root, shortcutController) }
-            .onFailure { Xp.w("MCMini: attach failed: $it") }
-        doInstall()
-        root.post { doInstall() }
-        root.postDelayed({ doInstall() }, 250L)
+        // Through Gen, not root.post: a retry left on the OEM view's handler runs after the
+        // sweep and builds a controller into a generation that has let go. Removing the old
+        // task first also keeps two dry runs from queueing four attaches between them.
+        installTask?.let { Gen.removeCallbacks(it) }
+        val task = Runnable {
+            runCatching { attach(root, shortcutController) }
+                .onFailure { Xp.w("MCMini: attach failed: $it") }
+        }
+        installTask = task
+        task.run()
+        Gen.post(task)
+        Gen.postDelayed(task, 250L)
     }
 
     private fun attach(root: View, shortcutController: Any?) {
@@ -1031,6 +933,7 @@ object MiniPlayerRuntime {
         val old = synchronized(controllers) { controllers[host] }
         if (!config.getBoolean(MiniPlayerConfig.ENABLED)) {
             old?.controller?.destroy()
+            old?.listener?.let { Gen.unattachState(host, it) }
             synchronized(controllers) { controllers.remove(host) }
             return
         }
@@ -1041,19 +944,26 @@ object MiniPlayerRuntime {
             return
         }
         old?.controller?.destroy()
+        // The row can be rebuilt under the same root (the keyguard keeps its window), and the
+        // old listener only leaves on detach - which then never comes. Take it back here, or
+        // every rebuild leaves one behind and pins the views it holds.
+        old?.listener?.let { Gen.unattachState(host, it) }
         val controller = MiniPlayerController(host, left, right, prefs(root.context),
             loader ?: root.context.classLoader)
-        synchronized(controllers) { controllers[host] = Held(left, right, controller) }
-        host.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+        val listener = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) = Unit
             override fun onViewDetachedFromWindow(v: View) {
                 synchronized(controllers) {
                     if (controllers[host]?.controller === controller) controllers.remove(host)
                 }
                 controller.destroy()
-                host.removeOnAttachStateChangeListener(this)
+                Gen.unattachState(host, this)
             }
-        })
+        }
+        synchronized(controllers) {
+            controllers[host] = Held(left, right, controller, listener)
+        }
+        Gen.attachState(host, listener)
     }
 
     private fun resolveShortcuts(controller: Any?): Pair<View, View>? = runCatching {
@@ -1119,6 +1029,13 @@ object MiniPlayerRuntime {
      */
     @Volatile private var restoreScene = false
 
+    @JvmStatic fun cancelSceneFeedback() { live().forEach { it.cancelSceneFeedback() } }
+
+    /** A coalesced main-thread notification from the actual lyric lookup/settle path. */
+    @JvmStatic fun lyricAvailabilityChanged() {
+        live().forEach { runCatching { it.onLyricAvailabilityChanged() } }
+    }
+
     @JvmStatic fun rememberScene() { restoreScene = true }
 
     @JvmStatic fun forgetRestoreScene() { restoreScene = false }
@@ -1134,11 +1051,17 @@ object MiniPlayerRuntime {
      */
     @JvmStatic fun routeTouch(ev: MotionEvent): Boolean { android.os.Trace.beginSection("MC t.route"); try {
         val action = ev.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) failedRoute = false
+        else if (failedRoute) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) failedRoute = false
+            return true
+        }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) releasePress()
         if (action == MotionEvent.ACTION_DOWN) {
             routedX = ev.rawX
             routedY = ev.rawY
             routedDrag = false
+            routedAxis = MiniPlayerGestureAxis.UNDECIDED
             routedSwiped = false
             routedMorph = false
             routedSpread = false
@@ -1161,6 +1084,9 @@ object MiniPlayerRuntime {
                     routedTracker = VelocityTracker.obtain()
                     routedDrag = true
                     routedMorph = true
+                    // A genuine vertical morph is already underway; keep following it even if
+                    // the finger that catches it now moves sideways or turns back.
+                    routedAxis = MiniPlayerGestureAxis.VERTICAL
                 } else routed = null
             }
             if (routed == null) {
@@ -1180,6 +1106,7 @@ object MiniPlayerRuntime {
             val pill = routed?.get()
             val pillOwner = pill?.let { p -> live().firstOrNull { it.pill() === p } }
             routedSmall = pillOwner?.smallIslandAt(ev.rawX, ev.rawY) == true
+            routedControl = !routedSmall && pill?.controlAt(ev.rawX, ev.rawY) == true
             if (routedSmall && pillOwner != null && !routedMorph) {
                 // Taken where it is, the pill's nudge left alone.
                 pill?.springNudgeBack(0f, 0f)
@@ -1214,6 +1141,7 @@ object MiniPlayerRuntime {
             if (action == MotionEvent.ACTION_MOVE && kotlin.math.hypot(dx, dy) > slop) {
                 // From here the gesture moves the pill; it hears no more of it itself.
                 routedDrag = true
+                routedAxis = routedAxis.resolve(dx, dy, slop.toFloat())
                 if (!routedSmall) dispatchTo(target, ev, MotionEvent.ACTION_CANCEL)
                 // Sideways on a row of islands, the pull is the islands'; alone, it is a skip.
                 routedOwner = live().firstOrNull { it.pill() === target }
@@ -1237,7 +1165,7 @@ object MiniPlayerRuntime {
             } else {
                 // An exchange running: a tap turns it round or cuts it short, and nothing else.
                 val exchanging = live().firstOrNull { it.pill() === target }?.takeIf { it.exchangeRunning() }
-                if (exchanging != null) {
+                if (exchanging != null && !routedControl) {
                     if (action == MotionEvent.ACTION_UP) exchanging.tapDuringExchange(routedSmall)
                     if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                         // A press the pill heard before the exchange began is let go.
@@ -1259,16 +1187,15 @@ object MiniPlayerRuntime {
         val nx = pillNudgeX(dx, d)
         when (action) {
             MotionEvent.ACTION_MOVE -> {
-                if (!routedMorph && !routedIsland && !routedStack && !routedNote && !routedSpread &&
+                if (!routedMorph && routedAxis == MiniPlayerGestureAxis.VERTICAL &&
+                    !routedIsland && !routedStack && !routedNote && !routedSpread &&
                     -dy > DRAG_THRESHOLD_DP * d) {
                     // Pulled far enough up to mean it: the music - the pill, or the small island -
                     // starts turning into the card under the finger, the nudge handed over as it is.
                     val stacked = routedOwner ?: live().firstOrNull { it.pill() === target }
-                    if (stacked?.beginStackSpread(routedY) == true) {
+                    if (stacked?.beginStackSpread(routedY, routedSmall) == true) {
                         routedSpread = true
                         routedOwner = stacked
-                        target.clearNudge()
-                        stacked.springSmallNudgeBack(0f, 0f)
                         noteTouch("pull up: stacked row to cards")
                     } else {
                     val owner = live().firstOrNull { it.canDrag(fromNative = false, small = routedSmall) }
@@ -1293,7 +1220,8 @@ object MiniPlayerRuntime {
                     }
                 }
                 if (routedMorph) dragMove(ev, nx)
-                else if (routedSpread) routedOwner?.spreadFingerMove(ev.rawY)
+                else if (routedSpread) routedOwner?.spreadFingerMove(ev.rawY, routedBaseX + nx,
+                    routedBaseY + pillNudgeY(dy, d))
                 else if (routedNote) routedOwner?.noteDragMove(ev.rawY, nx)
                 else if (routedIsland) routedOwner?.islandDrag(dx)
                 else if (routedStack) target.setNudge(routedBaseX + nx, routedBaseY + pillNudgeY(dy, d))
@@ -1332,7 +1260,7 @@ object MiniPlayerRuntime {
                     // A short drag is only ever a nudge: it springs back and does nothing.
                     // Sideways far enough (or flung) skips; up far enough goes back into the
                     // cover or the lyrics the pill came out of.
-                    val sideways = kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                    val sideways = routedAxis == MiniPlayerGestureAxis.HORIZONTAL
                     val swipe = kotlin.math.max(48f * d, target.width * 0.15f)
                     val fling = 1200f * d
                     if (!cancelled && sideways
@@ -1355,6 +1283,7 @@ object MiniPlayerRuntime {
     private var routedBaseX = 0f
     private var routedBaseY = 0f
     private var routedDrag = false
+    private var routedAxis = MiniPlayerGestureAxis.UNDECIDED
     private var routedMorph = false
     private var routedSpread = false
     private var routedStack = false
@@ -1365,6 +1294,7 @@ object MiniPlayerRuntime {
 
     /** The gesture began on the small island, not the pill. */
     private var routedSmall = false
+    private var routedControl = false
 
     /** A sideways pull on a row of islands, and the row it pulls on. */
     private var routedIsland = false
@@ -1394,7 +1324,24 @@ object MiniPlayerRuntime {
     internal const val PRESS_PILL = -1
     internal const val PRESS_SMALL = -2
 
+    private var failedRoute = false
+
+    /** An exception in our click handler must not open the system panel under our capsule. */
+    @JvmStatic fun cancelOwnedTouch(): Boolean {
+        val target = routed?.get()
+        failedRoute = target != null
+        if (target != null) {
+            val now = android.os.SystemClock.uptimeMillis()
+            val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+            try { runCatching { target.dispatchTouchEvent(cancel) } } finally { cancel.recycle() }
+        }
+        runCatching { releasePress() }
+        runCatching { endRoute() }
+        return failedRoute
+    }
+
     private fun endRoute() {
+        routedAxis = MiniPlayerGestureAxis.UNDECIDED
         routedOwner?.stopAnticipating()
         routedIsland = false
         routedNote = false
@@ -1713,30 +1660,13 @@ object MiniPlayerRuntime {
     /** The keyguard's notification stack, for NumStateProbe. */
     @JvmStatic fun stackForProbe(): ViewGroup? = live().firstNotNullOfOrNull { it.stackForProbe() }
 
-    /** For `op mini`: what the islands are dressed in - the card's recipe and the notification's look. */
-    private fun describeMaterial(): String {
-        fun arg(v: Any?): String = when (v) {
-            is IntArray -> v.joinToString(",", "[", "]") { Integer.toHexString(it) }
-            is FloatArray -> v.joinToString(",", "[", "]") { "%.3f".format(it) }
-            is View -> "V"
-            null -> "null"
-            else -> v.toString().take(24)
-        }
-        val recipe = cardRecipe?.joinToString(" ; ") { c -> c.method.name + c.args.joinToString(",", "(", ")") { arg(it) } }
-        val bg = { d: android.graphics.drawable.Drawable.ConstantState? ->
-            d?.newDrawable()?.let { (it as? GradientDrawable)?.color?.defaultColor?.let(Integer::toHexString) ?: it.javaClass.simpleName }
-        }
-        return "nlook=${arg(notificationBlend)}/${arg(notificationGlass)} nsrc=${notificationSource?.get() != null} " +
-            "fallback=${notificationLook()?.let { arg(it.first) + "/" + arg(it.second) }} " +
-            "cardBg=${bg(cardBackground)} notifBg=${bg(notificationBackground)} recipe={$recipe}"
-    }
 
     /** For `op mini`: the pill, the card, and the torch button's chain as they are right now. */
     @JvmStatic fun describe(): String {
         val sb = StringBuilder("gone: " + synchronized(goneLog) { goneLog.joinToString(" ; ") } +
-            " || material=$cardEffect gen=$materialGeneration same=$materialRepeats calls=${cardRecipe?.size} empty=$emptyEffect " +
-            "${describeMaterial()} " +
-            "aod=${MiniPlayerScene.aodActive} ${describeAodDim()} || ${LockIslands.describe()} || touches: " +
+            " || material=$islandKey gen=$materialGeneration " +
+            "${IslandMaterial.describe()} " +
+            "aod=${MiniPlayerScene.aodActive} ${describeAodDim()} ${describeMatLog()} ${describeDressCount()} || ${LockIslands.describe()} || touches: " +
             synchronized(touchLog) { touchLog.joinToString(" ; ") })
         synchronized(controllers) { controllers.values.toList() }.forEach { held ->
             sb.append(" || ").append(held.controller.describe())
@@ -1769,9 +1699,15 @@ object MiniPlayerRuntime {
     @JvmStatic fun musicIslandCentreOnScreen(): FloatArray? =
         live().firstNotNullOfOrNull { it.musicIslandCentreOnScreen() }
 
-    /** Where the music's island will rest once back from its card, for the lyrics to go into. */
-    @JvmStatic fun musicIslandHomeOnScreen(): FloatArray? =
-        live().firstNotNullOfOrNull { it.musicIslandHomeOnScreen() }
+    /** The highest visible capsule/card surface; NaN preserves the lyric card fallback. */
+    @JvmStatic fun lyricObstacleTopOnScreen(): Float = synchronized(controllers) {
+        var top = Float.NaN
+        controllers.values.forEach { held ->
+            val candidate = held.controller.lyricObstacleTopOnScreen()
+            if (candidate.isFinite()) top = if (top.isFinite()) minOf(top, candidate) else candidate
+        }
+        top
+    }
 
     /** A notification's row in the stack, for ImmersiveHost: the open page's turn arrow is in it. */
     @JvmStatic fun rowOf(key: String): View? = live().firstNotNullOfOrNull { it.rowOf(key) }
@@ -1789,6 +1725,18 @@ object MiniPlayerRuntime {
         live().any { it.beginTransition(toNative = false, scene = true) }
 
     @JvmStatic fun transitionActive(): Boolean = live().any { it.transitionActive() }
+    @JvmStatic fun lyricBandUnstable(): Boolean = live().any { it.lyricBandUnstable() }
+    @JvmStatic fun lyricMusicSceneTransition(): Boolean = live().any { it.lyricMusicSceneTransition() }
+    @JvmStatic fun lyricMusicMorphProgress(): Float = synchronized(controllers) {
+        controllers.values.firstNotNullOfOrNull { held ->
+            held.controller.lyricMusicMorphProgress().takeIf { it.isFinite() }
+        } ?: Float.NaN
+    }
+    @JvmStatic fun lyricMusicMorphMiniTop(): Float = synchronized(controllers) {
+        controllers.values.firstNotNullOfOrNull { held ->
+            held.controller.lyricMusicMorphMiniTop().takeIf { it.isFinite() }
+        } ?: Float.NaN
+    }
 
     /** A released notification's row under a point on screen: a swipe down there collapses it. */
     @JvmStatic fun releasedRowAt(x: Float, y: Float): String? =
@@ -1851,6 +1799,13 @@ object MiniPlayerRuntime {
         return true
     } finally { android.os.Trace.endSection() } }
 
+    /** A spread's visible progress (0 islands, 1 list) while one moves, else NaN: for the clock. */
+    @JvmStatic fun spreadClockProgress(): Float =
+        live().firstNotNullOfOrNull { it.spreadClockProgress() } ?: Float.NaN
+
+    /** A spread stands open as the lock screen's list. */
+    @JvmStatic fun spreadListShown(): Boolean = live().any { it.spreadListShown() }
+
     /**
      * The top of visible stack content, MAX_VALUE with no visible rows, or NaN when unavailable.
      * The clock is given this rather than the stack's
@@ -1861,6 +1816,10 @@ object MiniPlayerRuntime {
      */
     @JvmStatic fun stackContentTop(): Float =
         live().map { it.stackContentTop() }.filterNot(Float::isNaN).minOrNull() ?: Float.NaN
+
+    /** [stackContentTop]'s rows where they are drawn this frame: see the controller's. */
+    @JvmStatic fun stackDrawnTop(): Float =
+        live().map { it.stackDrawnTop() }.filterNot(Float::isNaN).minOrNull() ?: Float.NaN
 
     /** Which row the last stackContentTop came from, and how many hidden rows it passed over, for `op mini`. */
     @JvmStatic fun stackContentSource(): String = live().firstOrNull()?.contentTopFrom ?: "-"
@@ -1902,12 +1861,14 @@ object MiniPlayerRuntime {
 
     /** The card chosen with the card already up: nothing to morph, nothing to refresh yet. */
     internal fun noteNative(token: Any, why: String) {
+        Main.handCapsuleSceneToNative()
         val changed = synchronized(selectionLock) { sessionSelection.requestNative(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> native ($why)")
     }
 
     /** The choice is made first; the morph then runs toward it, or turns round if one runs. */
     internal fun selectNative(token: Any) {
+        Main.handCapsuleSceneToNative()
         val changed = synchronized(selectionLock) { sessionSelection.requestNative(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> native")
         live().forEach { it.beginTransition(toNative = true, scene = false) }
@@ -1915,18 +1876,21 @@ object MiniPlayerRuntime {
     }
 
     internal fun selectMini(token: Any) {
+        Main.foldCapsuleControls()
         val changed = synchronized(selectionLock) { sessionSelection.requestMini(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> mini")
         live().forEach { it.beginTransition(toNative = false, scene = false) }
         refresh()
     }
 
-    internal fun chooseNative(token: Any) {
+    internal fun chooseNative(token: Any, commitScene: Boolean = true) {
+        if (commitScene) Main.handCapsuleSceneToNative()
         val changed = synchronized(selectionLock) { sessionSelection.requestNative(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> native (pulled)")
     }
 
     internal fun chooseMini(token: Any) {
+        Main.foldCapsuleControls()
         val changed = synchronized(selectionLock) { sessionSelection.requestMini(token) }
         if (changed) Xp.log("MCMini: dynamic choice -> mini (out of the scene)")
     }
@@ -1947,30 +1911,46 @@ object MiniPlayerRuntime {
         if (changed) Xp.log("MCMini: media session ended ($reason)")
     }
 
-    /** Prefer a real notification row's material; use its keyguard palette until one is drawn. */
-    private fun notificationLook(): Pair<IntArray, FloatArray>? {
-        val recordedBlend = notificationBlend
-        val recordedGlass = notificationGlass
-        if (recordedBlend != null && recordedGlass != null)
-            return recordedBlend.copyOf() to recordedGlass.copyOf()
-        val controller = aodController?.get() ?: return null
-        val focus = runCatching { Xp.getObjectField(controller, "mFocusNotifiColorList") as? IntArray }
-            .getOrNull()?.takeIf { it.size == 6 } ?: return null
-        val glass = runCatching { Xp.getObjectField(controller, "mGlassParamsOnKeyguard") as? FloatArray }
-            .getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
-        // The odd positions are blend modes. Keep the media recipe's modes and replace its
-        // three colours with the notification card's own keyguard colours.
-        val blend = cardRecipe?.firstOrNull { it.method.name == "applyElementViewBlend" }
-            ?.args?.firstOrNull { it is IntArray } as? IntArray ?: return null
-        if (blend.size != 6) return null
-        return blend.copyOf().also { values ->
-            for (i in 0..2) values[2 * i] = focus[2 * i]
-        } to glass.copyOf()
+    /**
+     * A notification pill's blur container set as the rows' own is (#122): the stack's container
+     * (SharedNotificationContainer, the first view above the rows blurring the window) blurs at
+     * 120 with forceSDFT; applyContainerViewBlur left the pill's at its default 300 without it.
+     * The same blend and glass over that drew darker and greener at the card's size and lighter
+     * smaller - the pill's container is only the pill, and a radius of 300 in it reached past
+     * its edges - and the morph's hand-over to the row switched between the two in a frame.
+     * Matched, the two are close but still not the same glass: the stack's container is the
+     * whole screen and the pill's only the pill, which no setting changes - so a morph crosses
+     * them over where the row is at rest (MiniCardMorph.CROSS_MS) rather than switching.
+     * Read from the live container rather than written in, as the OEM's own value may change.
+     */
+    private fun matchRowContainer(container: View) {
+        val row = IslandMaterial.lastRow?.get() ?: return
+        var v: View? = row.parent as? View
+        var source: View? = null
+        while (v != null) {
+            val radius = runCatching { View::class.java.getMethod("getMiBackgroundBlurRadius").invoke(v) as Int }
+                .getOrDefault(0)
+            if (radius > 0) {
+                source = v
+                break
+            }
+            v = v.parent as? View
+        }
+        val from = source ?: return
+        runCatching {
+            val radius = View::class.java.getMethod("getMiBackgroundBlurRadius").invoke(from) as Int
+            View::class.java.getMethod("setMiBackgroundBlurRadius", Int::class.javaPrimitiveType).invoke(container, radius)
+        }.onFailure { Xp.log("MCMini: container blur radius not matched: $it") }
+        runCatching {
+            val sdft = View::class.java.getMethod("getForceSDFT").invoke(from) as Boolean
+            View::class.java.getMethod("setForceSDFT", Boolean::class.javaPrimitiveType).invoke(container, sdft)
+        }.onFailure { Xp.log("MCMini: container SDFT not matched: $it") }
     }
 
     /**
-     * The pill's material: the card's recorded calls replayed on the pill's layer, with the
-     * pill itself made the blur container they expect above them.
+     * The pill's material: the recipe of the effect a lock screen row wears now
+     * (IslandMaterial.replay) on the pill's layer, with the pill itself made the blur container
+     * those calls expect above them.
      *
      * HyperOS notification material has two layers. The card's background is only an element:
      * it tints and shapes a blur that an ancestor container provides, and that container is
@@ -1981,6 +1961,8 @@ object MiniPlayerRuntime {
     internal fun material(view: ImageView, classLoader: ClassLoader,
                           notificationStyle: Boolean = false) {
         val ctx = view.context
+        val missed = ArrayList<String>(0)
+        countDressing(view)
         if (notificationStyle) notificationDressedViews.add(view)
         else notificationDressedViews.remove(view)
         runCatching {
@@ -2004,47 +1986,107 @@ object MiniPlayerRuntime {
                     Class.forName("miuix.core.util.MiuiBlurUtils", false, classLoader)
                         .getMethod("setMiBlurWinType", View::class.java).invoke(null, container)
                 }
+                if (notificationStyle) matchRowContainer(container)
             } }
-            if (cardRecipe == null) loadRecipe(ctx, classLoader)
-            val recipe = cardRecipe
-            if (recipe == null && (!notificationStyle || notificationLook() == null))
-                error("no card or notification material has been recorded yet")
-            view.setImageDrawable(null)
-            view.background = cardBackground?.newDrawable(res)?.mutate()
-            if (recipe != null) run {
-                recipe.forEach { call ->
-                    val args = call.args.copyOf()
-                    args[call.viewAt] = view
-                    call.method.invoke(null, *args)
-                }
-            }
-            if (notificationStyle) notificationLook()?.let { (colors, glass) ->
-                runCatching { run {
-                    notificationBackground?.newDrawable(res)?.mutate()?.let { view.background = it }
-                    val blend = notificationBlendMethod ?: blendMethod ?: recipe?.firstOrNull {
-                        it.method.name == "applyElementViewBlend"
-                    }?.method
-                    val setGlass = notificationGlassMethod ?: glassMethod ?: recipe?.lastOrNull {
-                        it.method.name == "setMiGlassCompat"
-                    }?.method
-                    blend?.invoke(null, ctx, view, false, colors, false)
-                    setGlass?.invoke(null, view, glass)
-                } }.onFailure { Xp.log("MCMini: notification glass unavailable: $it") }
-            }
+            val worn = IslandMaterial.replay(view, classLoader)
             dressedViews.add(view)
+            noteDressing(view, worn, missed)
             // Dressed in the AOD - a small island coming up there: dimmed as the rest are.
             aodDimArgs?.let { run { dimView(view, it) } }
         }.onFailure { error ->
             val cause = (error as? java.lang.reflect.InvocationTargetException)?.targetException ?: error
             if (!materialFailed) {
                 materialFailed = true
-                Xp.w("MCMini: card material unavailable, plain fill instead: $cause")
+                Xp.w("MCMini: island material unavailable, plain fill instead: $cause")
             }
             view.background = null
             view.setImageDrawable(GradientDrawable().apply { setColor(0x9E1F2324.toInt()) })
+            matNoteLimited("dress") { "${matTag(view)} FAILED, plain fill: $cause" }
         }
     }
+
+    // ---------------------------------------------------------------- the material log
+
+    /**
+     * What dressed the pill and the islands, and what changed under them: the islands' key as
+     * it changes, each effect's recipe as it is recorded or asked for, each dressing whose
+     * outcome differs from that view's last, and what the AOD's dim did to each view and how it
+     * was let go. Logged
+     * and kept for `op mini` (matlog=); all but the rare ones at most a line a second of each
+     * kind (matNoteLimited).
+     */
+    private val matLog = ArrayDeque<String>()
+
+    /** Each dressed view's last outcome, so a refresh dressing it the same way says nothing. */
+    private val lastDressing = java.util.WeakHashMap<View, String>()
+
+    /** Views the current dim run has logged its first frame on. */
+    private val dimNoted = java.util.Collections.newSetFromMap(java.util.WeakHashMap<View, Boolean>())
+
+    private fun matNote(what: String) {
+        Xp.log("MCMini: mat $what")
+        synchronized(matLog) {
+            matLog.addLast("${android.os.SystemClock.uptimeMillis() % 1000000} $what")
+            while (matLog.size > 60) matLog.removeFirst()
+        }
+    }
+
+    /** Per kind of line: when it was last logged, and how many since went unlogged. */
+    private val matQuiet = HashMap<String, LongArray>()
+
+    /**
+     * One line a second of each [kind], with the count of the ones it stands for. A row's look
+     * changes on every frame of a wake, a rebind takes its type to 0 and back every second or
+     * two, and the dim and its settle come once for every dressed view on every doze.
+     */
+    private fun matNoteLimited(kind: String, what: () -> String) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val quiet = synchronized(matQuiet) {
+            val slot = matQuiet.getOrPut(kind) { longArrayOf(Long.MIN_VALUE / 2, 0L) }
+            if (now - slot[0] < 1000L) {
+                slot[1]++
+                return
+            }
+            slot[0] = now
+            slot[1].also { slot[1] = 0L }
+        }
+        matNote("$kind ${what()}" + if (quiet > 0) " (+$quiet unlogged)" else "")
+    }
+
+    private fun describeMatLog(): String = "matlog=[" + synchronized(matLog) { matLog.joinToString(" ; ") } + "]"
+
+    private fun matTag(v: View): String =
+        "${v.javaClass.simpleName}@${Integer.toHexString(System.identityHashCode(v))}/${v.width}x${v.height}"
+
+    private fun matArg(v: Any?): String = when (v) {
+        is IntArray -> v.joinToString(",", "[", "]") { Integer.toHexString(it) }
+        // The glass's 42 floats: its shape [34] and liquid factor [36] are what tell glass apart.
+        is FloatArray -> if (v.size > 36) "[n=${v.size} shape=${v[34]} liquid=${v[36]}]"
+            else v.joinToString(",", "[", "]") { "%.2f".format(it) }
+        is View -> "V"
+        is Context -> "ctx"
+        null -> "null"
+        else -> v.toString().take(24)
+    }
+
+    private fun matCall(name: String, args: Array<Any?>): String =
+        name + args.joinToString(",", "(", ")") { matArg(it) }
+
+    private fun noteDressing(view: ImageView, worn: String, missed: List<String>) {
+        val outcome = "wore=$worn" +
+            (if (missed.isEmpty()) "" else " missed=$missed") +
+            (if (aodDimArgs != null) " dimNext" else "")
+        val changed = synchronized(lastDressing) { lastDressing.put(view, outcome) != outcome }
+        if (changed) matNoteLimited("dress") { "${matTag(view)} $outcome" }
+    }
 }
+
+/** What bumped MiniPlayerRuntime.materialGeneration; indices into BUMP_NAMES. */
+private const val BUMP_KEY = 0
+private const val BUMP_RECIPE = 1
+private const val BUMP_AOD_ATTACH = 2
+private const val BUMP_AOD_ADOPT = 3
+private val BUMP_NAMES = arrayOf("key", "recipe", "aodAttach", "aodAdopt")
 
 /** The full-screen AOD's colour run quiet this long: over, whether or not it said so. */
 private const val AOD_DIM_SETTLE_MS = 600L

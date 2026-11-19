@@ -1,5 +1,7 @@
 package com.os4.musiccover.pickup
+import com.os4.musiccover.Gen
 import com.os4.musiccover.Main
+import com.os4.musiccover.Settings
 import com.os4.musiccover.Xp
 import android.app.ActivityManager
 import android.content.ComponentName
@@ -91,21 +93,8 @@ internal object PickupCodeIsland {
         "必胜客", "德克士", "老乡鸡", "袁记",
     )
 
-    /** The settings switch, kept with Main's state. On unless turned off. */
-    @Volatile @JvmField var sOn = true
 
-    /**
-     * Whether the card is attached to the notification.
-     *
-     * **On, and it is the point of the card now**: this is HyperOS's own pickup card, taken from
-     * 小爱同学's layout (`PickupCard`), so there is no longer a second card style to prefer - the
-     * reason it was off was that the old one was ColorOS's and the system's own template read
-     * better beside the system's island. Turned off, the template is back and the code is read
-     * from the param alone (probe: `op pickup --ez card false`).
-     */
-    @Volatile @JvmField var sCard = true
-
-    val bg: Handler by lazy { Handler(HandlerThread("mc-pickup").apply { start() }.looper) }
+    val bg: Handler by lazy { Handler(Gen.handlerThread("mc-pickup").looper) }
 
     // All below on [bg].
     private var lastTop: ComponentName? = null
@@ -145,7 +134,7 @@ internal object PickupCodeIsland {
 
     fun install(cl: ClassLoader) {
         runCatching {
-            Xp.hookAll(Xp.findClass(TOP_OBSERVER, cl), "updateTopActivity") { chain ->
+            Xp.hookAll("sysui.pickup.top_activity", Xp.findClass(TOP_OBSERVER, cl), "updateTopActivity") { chain ->
                 val out = chain.proceed()
                 runCatching {
                     val state = Xp.getObjectField(chain.thisObject, "mState")
@@ -182,8 +171,16 @@ internal object PickupCodeIsland {
         PickupIsland.install()
     }
 
+    /** The settings table's effect for 取餐码, registered at install (stage 5.1). */
+    fun bindSettings() {
+        Settings.PICKUP.apply(Settings.Bool.Apply { _, on ->
+            setOn(on)
+            true
+        })
+    }
+
     fun setOn(on: Boolean) {
-        sOn = on
+        Settings.PICKUP.set(on)
         bg.post {
             if (!on) {
                 stop()
@@ -288,7 +285,7 @@ internal object PickupCodeIsland {
     // it into its own else branch, which is how the oem= segment went missing from this line while
     // the recognizer behind it was answering all along.
     fun describe(): String = buildString {
-        append("on=$sOn task=$taskId brand=$brand reads=$reads shown=${PickupIsland.showing(taskId)}")
+        append("on=${Settings.PICKUP.on()} task=$taskId brand=$brand reads=$reads shown=${PickupIsland.showing(taskId)}")
         program?.let { append(" appId=${it.appId}") }
         program?.name?.takeIf { it.isNotEmpty() }?.let { append(" name=$it") }
         append(" up=${Main.appContext()?.let { PickupIsland.up(it) }}")
@@ -339,7 +336,7 @@ internal object PickupCodeIsland {
         // No context is read as "not a mini program" rather than as a reason to stop looking: the
         // top must still be handed on, or a task being kept is never let go.
         val ctx = Main.appContext()
-        val pkg = if (sOn && ctx != null && top != null) miniHost(ctx, top) else null
+        val pkg = if (Settings.PICKUP.on() && ctx != null && top != null) miniHost(ctx, top) else null
         if (ctx == null || top == null || pkg == null) {
             // Its app coming to the front leaves a parked task where it is: it comes back only when
             // the app opens it (PickupPark.watch), not on 微信 being opened at all.

@@ -1,8 +1,12 @@
 package com.os4.musiccover.immersive;
-import com.os4.musiccover.CoverCompose;
+
+import com.os4.musiccover.clock.ClockCollapse;
+import com.os4.musiccover.cover.CoverCardLayer;
+import com.os4.musiccover.cover.CoverCompose;
 import com.os4.musiccover.island.LockIslands;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.PageSpring;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import android.content.Context;
 import android.content.res.Resources;
@@ -51,9 +55,11 @@ import java.util.Locale;
  * and run through CoverCompose.blur, made on a thread of its own when the page is made and kept
  * while the wallpaper's id stays the same.
  *
- * The disc stands still at a fixed share of the height, between the small clock and the rows at
- * the bottom. It followed the countdown's row at first, and the row's own animations made it
- * jump a few pixels at a time (2026-09-30).
+ * The disc sits centred between the small clock and the rows under it, as the square cover sits
+ * between the clock and the media card, and follows them in the frames they move in - read in the
+ * window's pre-draw, not on the countdown's own once-a-second redraw (#131). It followed the
+ * countdown's row on its own redraws at first, and jumped a few pixels at a time (2026-09-30);
+ * see CountdownView.placeFor.
  *
  * The countdown is the clock app's focus notification (protocol 1, scene "timer", business
  * "countdown"), whose timerInfo is all there is to draw from: timerType below 0 counts down to
@@ -73,7 +79,7 @@ public final class CountdownScene implements ImmersiveScene {
 
     private static final String TAG = "MCImmersive: " + ID + ": ";
 
-    private final Handler mMain = new Handler(Looper.getMainLooper());
+    private final Handler mMain = Gen.handler();
 
     /** The countdown's notification, and its latest timer; null with none on the lock screen. */
     private String mKey;
@@ -196,6 +202,11 @@ public final class CountdownScene implements ImmersiveScene {
 
     @Override
     public void release() {
+        // Every release, the dry run's included: a teardown can drop the ground's completion
+        // post (refused while quiescing, or cleared by the sweep), and the gate would then stay
+        // shut for the rest of the process. The reset bumps sSeq, so a blur still in flight
+        // when the user closes the page lands on nothing instead of opening the gate twice.
+        Ground.reset();
         CountdownView v = mView;
         if (v == null) return;
         mView = null;
@@ -286,7 +297,7 @@ public final class CountdownScene implements ImmersiveScene {
                 : Main.sAppCtx.getSystemService(SensorManager.class);
         if (sm == null) return;
         if (!on) {
-            sm.unregisterListener(mProximity);
+            Gen.unsensorListener(sm, mProximity);
             mProximity = null;
             mCovered = false;
             return;
@@ -307,7 +318,7 @@ public final class CountdownScene implements ImmersiveScene {
             public void onAccuracyChanged(Sensor sensor, int accuracy) {
             }
         };
-        sm.registerListener(mProximity, s, SensorManager.SENSOR_DELAY_NORMAL, mMain);
+        Gen.sensorListener(sm, mProximity, s, SensorManager.SENSOR_DELAY_NORMAL, mMain);
     }
 
     // ---------------------------------------------------------------- the page
@@ -582,7 +593,7 @@ public final class CountdownScene implements ImmersiveScene {
         @Override
         protected void onSizeChanged(int w, int h, int ow, int oh) {
             super.onSizeChanged(w, h, ow, oh);
-            place();
+            mSnap = true;
         }
 
         /** Whether a finger here, in screen coordinates, is on the pill. */
@@ -603,22 +614,143 @@ public final class CountdownScene implements ImmersiveScene {
 
         // ------------------------------------------------------------ where the disc goes
 
-        /** The app's disc, smaller only where the screen is narrower than it and a margin. */
-        private void place() {
+        /**
+         * The disc's smallest, when the clock and the rows leave no room for the app's own, and the
+         * gap kept to each of them.
+         */
+        private static final float MIN_R_DP = 120f;
+        private static final float GAP_DP = 16f;
+        /**
+         * A goal that moves further than this share of the radius in one frame - a row let out or
+         * taken into its island, a list opening - is eased to rather than carried.
+         */
+        private static final float CARRY_MAX = 0.25f;
+
+        /** Where the disc belongs (the goal) and where it is drawn (mCy, mR). */
+        private float mGoalCy = Float.NaN;
+        private float mGoalR = Float.NaN;
+        private boolean mEasing;
+        private long mEaseAt;
+        /** Out of sight since it was last placed: the next frame it shows in takes its place. */
+        private boolean mSnap = true;
+
+        private final android.view.ViewTreeObserver.OnPreDrawListener mGeometry = () -> {
+            follow();
+            return true;
+        };
+
+        /**
+         * Centred between the clock and the rows, as the square cover sits between the clock and
+         * the media card (CoverCardLayer.placeNow): the app's own size where there is room, smaller
+         * where there is not, to MIN_R_DP. With no rows under it, the floor is the bottom of the
+         * app's own place at CENTRE; with no clock read, the top of it.
+         *
+         * Both as drawn this frame, not where they are headed (issue #131). The first version kept
+         * still at CENTRE and moved only when the rows at rest would cover it, read once a second
+         * on the countdown's own redraw: the rows' targets jump when one goes into its island or
+         * comes out, it stepped after them a second late, and either side of the edge it switched
+         * between its two places - back and forth between the clock and the rows.
+         */
+        private float[] placeFor(int w, int h) {
+            float rMax = Math.min(152f * mDp, (w - 2f * 24f * mDp) / 2f);
+            float rMin = Math.min(MIN_R_DP * mDp, rMax);
+            float cy0 = h * CENTRE;
+            float gap = GAP_DP * mDp;
+            View frame = getParent() instanceof View ? (View) getParent() : this;
+            frame.getLocationOnScreen(mAt);
+            float origin = mAt[1] + (frame == this ? 0f : getTop());
+            float top = cy0 - rMax;
+            float bottom = cy0 + rMax;
+            try {
+                // Into the frame's unzoomed pixels: a swipe zooms the clock's side, not this one.
+                float clock = com.os4.musiccover.clock.ClockCollapse.contentBottomFor(frame);
+                if (!Float.isNaN(clock) && clock - origin + gap < cy0) top = clock - origin + gap;
+            } catch (Throwable ignored) {
+            }
+            try {
+                float rows = com.os4.musiccover.island.MiniPlayerRuntime.stackDrawnTop();
+                if (!Float.isNaN(rows) && rows < Float.MAX_VALUE / 2f) {
+                    bottom = Math.min(bottom, rows - origin - gap);
+                }
+            } catch (Throwable ignored) {
+            }
+            float r = Math.max(rMin, Math.min(rMax, (bottom - top) / 2f));
+            return new float[] {(top + bottom) / 2f, r};
+        }
+
+        /**
+         * Every frame of the window, before it is drawn - the clock's and the rows' frames among
+         * them - so the disc moves in the frame they do (CoverCardLayer.watchGeometry/carry). A
+         * small move is carried at once; a jump is eased in onDraw.
+         */
+        private void follow() {
             int w = getWidth();
             int h = getHeight();
             if (w <= 0 || h <= 0) return;
-            mR = Math.min(152f * mDp, (w - 2f * 24f * mDp) / 2f);
+            // Nothing read while out of sight: the window draws on with the page hidden.
+            if (!isShown() || getAlpha() <= 0f) {
+                mSnap = true;
+                return;
+            }
+            // The doze lays the stack out its own way; the disc keeps the lit screen's place.
+            if (mDozing && !mSnap && !Float.isNaN(mCy)) return;
+            float[] p = placeFor(w, h);
             mCx = w / 2f;
-            mCy = h * CENTRE;
+            if (mSnap || Float.isNaN(mCy)) {
+                mSnap = false;
+                mEasing = false;
+                mCy = mGoalCy = p[0];
+                mR = mGoalR = p[1];
+                invalidate();
+                return;
+            }
+            float dCy = p[0] - mGoalCy;
+            float dR = p[1] - mGoalR;
+            if (Math.abs(dCy) < 0.5f && Math.abs(dR) < 0.5f) return;
+            mGoalCy = p[0];
+            mGoalR = p[1];
+            if (!mEasing && Math.abs(dCy) + Math.abs(dR) < mR * CARRY_MAX) {
+                mCy += dCy;
+                mR += dR;
+            } else if (!mEasing) {
+                mEasing = true;
+                mEaseAt = 0L;
+            }
+            invalidate();
+        }
+
+        /** One frame of an eased move towards the goal, at the page's response. */
+        private void ease() {
+            if (!mEasing) return;
+            long now = SystemClock.uptimeMillis();
+            float dt = mEaseAt == 0L ? 1f / 60f : Math.min(0.05f, (now - mEaseAt) / 1000f);
+            mEaseAt = now;
+            float k = Math.min(1f, dt * 3f / SCALE_RESPONSE);
+            mCy += (mGoalCy - mCy) * k;
+            mR += (mGoalR - mR) * k;
+            if (Math.abs(mGoalCy - mCy) < 0.5f && Math.abs(mGoalR - mR) < 0.5f) {
+                mCy = mGoalCy;
+                mR = mGoalR;
+                mEasing = false;
+                return;
+            }
+            postInvalidateOnAnimation();
+        }
+
+        @Override
+        protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            mSnap = true;
+            Gen.preDraw(this, mGeometry);
         }
 
         // ------------------------------------------------------------ drawing
 
         @Override
         protected void onDraw(Canvas canvas) {
-            if (Float.isNaN(mCy)) place();
+            if (Float.isNaN(mCy)) follow();
             if (Float.isNaN(mCy)) return;
+            ease();
             LockIslands.Timer t = mTimer;
             long now = System.currentTimeMillis();
             long total = t == null ? 0L : t.getTotalMs();
@@ -756,6 +888,8 @@ public final class CountdownScene implements ImmersiveScene {
 
         @Override
         protected void onDetachedFromWindow() {
+            Gen.unpreDraw(this, mGeometry);
+            mEasing = false;
             removeCallbacks(mRedraw);
             removeCallbacks(mDozeTick);
             super.onDetachedFromWindow();
@@ -919,8 +1053,23 @@ public final class CountdownScene implements ImmersiveScene {
         private static int sId = Integer.MIN_VALUE;
         private static boolean sBusy;
         private static java.lang.ref.WeakReference<GroundSurface> sWaiting;
+        /** Which wallpaper the waiting view asked for; the reply carries its own id. */
+        private static int sWaitingId = Integer.MIN_VALUE;
+        /** Bumped by [reset] so a completion that is already on its way is dropped. */
+        private static int sSeq;
 
         private Ground() {
+        }
+
+        /**
+         * Retirement: the build's own Gen.post is what clears sBusy, and during a teardown that
+         * post is refused (quiescing) or swept - leaving the flag set for the rest of the
+         * process. Nothing is held any more, so the gate opens with the page gone.
+         */
+        static void reset() {
+            sSeq++;
+            sBusy = false;
+            sWaiting = null;
         }
 
         /** Main thread. Hands the view the picture now, or when it is made. */
@@ -940,11 +1089,12 @@ public final class CountdownScene implements ImmersiveScene {
                 return;
             }
             sWaiting = new java.lang.ref.WeakReference<>(view);
+            sWaitingId = id;
             if (sBusy) return;
             sBusy = true;
             final int wantId = id;
-            final Handler main = new Handler(Looper.getMainLooper());
-            new Thread(() -> {
+            final int seq = ++sSeq;
+            Gen.thread("mc-countdown-ground", () -> {
                 long t0 = SystemClock.uptimeMillis();
                 android.graphics.Bitmap made = null;
                 try {
@@ -959,7 +1109,10 @@ public final class CountdownScene implements ImmersiveScene {
                 }
                 final android.graphics.Bitmap done = made;
                 final long ms = SystemClock.uptimeMillis() - t0;
-                main.post(() -> {
+                Gen.post(() -> {
+                    // A reset (a retirement took the page down) superseded this one; the gate
+                    // belongs to whoever is waiting now.
+                    if (seq != sSeq) return;
                     sBusy = false;
                     sBitmap = done;
                     sId = wantId;
@@ -968,9 +1121,16 @@ public final class CountdownScene implements ImmersiveScene {
                             + " in " + ms + "ms");
                     GroundSurface v = sWaiting == null ? null : sWaiting.get();
                     sWaiting = null;
-                    if (v != null && done != null) v.setBitmap(done);
+                    if (v == null || done == null) return;
+                    if (sWaitingId == wantId) {
+                        v.setBitmap(done);
+                        return;
+                    }
+                    // The page is waiting for another wallpaper than the one just made: this
+                    // picture would be the wrong one on it, so ask again for what it wants.
+                    request(v.getContext(), v);
                 });
-            }, "mc-countdown-ground").start();
+            });
         }
 
         /** The lock slot's picture, else the home slot's, decoded at a quarter: it is to be blurred. */

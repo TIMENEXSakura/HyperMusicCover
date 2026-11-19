@@ -1,6 +1,7 @@
 package com.os4.musiccover.ui.screen.features
 
 import com.os4.musiccover.ui.util.nextCard
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.firstCard
 import com.os4.musiccover.ui.util.FoldUnder
 import androidx.compose.foundation.layout.Column
@@ -23,7 +24,7 @@ import com.os4.musiccover.ui.util.PageScaffold
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
+import com.os4.musiccover.ui.util.AppDropdownPreference
 
 /**
  * The notification shade's settings: the album cover as a moving background behind the shade.
@@ -84,7 +85,7 @@ internal fun ShadePageView(
     ) {
         item(key = "master") {
             Column {
-                Card(modifier = Modifier.firstCard()) {
+                AppCard(modifier = Modifier.firstCard()) {
                     SwitchPreference(
                         title = stringResource(R.string.shade_enabled),
                         // Said here rather than left to a greyed-out page: a switch that cannot
@@ -106,13 +107,13 @@ internal fun ShadePageView(
                 FoldUnder(master, settled = module.alive) {
                     Column {
                         SmallTitle(text = stringResource(R.string.shade_section_behaviour))
-                        Card(modifier = Modifier.nextCard()) {
+                        AppCard(modifier = Modifier.nextCard()) {
                             // Index is the module's mode: 0 hands the shade back, 1 keeps the last cover.
                             val modes = listOf(
                                 stringResource(R.string.shade_mode_restore),
                                 stringResource(R.string.shade_mode_keep),
                             )
-                            WindowDropdownPreference(
+                            AppDropdownPreference(
                                 title = stringResource(R.string.shade_mode),
                                 items = modes,
                                 selectedIndex = (module.shade["mode"] ?: 0).coerceIn(0, modes.lastIndex),

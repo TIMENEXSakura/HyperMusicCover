@@ -1,4 +1,5 @@
 package com.os4.musiccover.lyrics;
+import com.os4.musiccover.hotreload.HotReload;
 import com.os4.musiccover.Xp;
 import android.media.MediaMetadata;
 import android.os.Bundle;
@@ -6,6 +7,8 @@ import android.os.Bundle;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import io.github.libxposed.api.XposedInterface;
 
@@ -55,7 +58,7 @@ public final class AppleLyrics {
      * previous build - and a change that only shows up as a line NOT being logged looks
      * identical to not having loaded at all. It cost a round trip once.
      */
-    private static final String BUILD = "ref-1";
+    private static final String BUILD = "native-voices-3";
 
     /** The player's package, and the only process this class ever runs in. */
     public static final String PKG = "com.apple.android.music";
@@ -92,15 +95,29 @@ public final class AppleLyrics {
 
     /** The session Apple Music is publishing through, so a late lyric can be pushed into it. */
     private static volatile Object sSession;
-    /** The store id of whatever was last set on that session, and its title. */
-    private static volatile String sPlayingId;
-    private static volatile String sPlayingTitle;
-    /** The id the last built lyric belongs to, and the payload built from it. */
-    private static volatile String sHeldId;
-    private static volatile String sHeldPayload;
-    /** Set while we are re-publishing, so our own setMetadata does not re-enter the hook. */
-    private static volatile boolean sPublishing;
+    private static final AppleLyricStore LYRICS = new AppleLyricStore();
+    // Serializes real metadata changes with republishing. Session commands only read LYRICS.
+    private static final Object PUBLISH_LOCK = new Object();
+    private static boolean sPublishing;
     private static volatile Requester sRequester;
+
+    // ---------------------------------------------------------------- hot reload (Step 0)
+
+    /*
+     * The new generation starts with every static empty, so the lyric this process is already
+     * holding has to be handed over explicitly: the metadata already on the session refers to
+     * it, and the lock screen will ask for exactly that reference. Without it the lyric page
+     * stays empty until the next track, which is indistinguishable from a broken adoption.
+     */
+
+    public static Object[] saveState() {
+        return LYRICS.save();
+    }
+
+    public static void adoptState(String heldId, String heldPayload, String playingId,
+                                  String playingTitle, String duet, String replacedPlain) {
+        LYRICS.adopt(heldId, heldPayload, playingId, playingTitle, duet, replacedPlain);
+    }
 
     // ---------------------------------------------------------------- hook 1: the session
 
@@ -117,46 +134,40 @@ public final class AppleLyrics {
     private static void hookSetMetadata() throws Throwable {
         Method m = android.media.session.MediaSession.class
                 .getDeclaredMethod("setMetadata", MediaMetadata.class);
-        Xp.hook(m, (XposedInterface.Hooker) chain -> {
-            try {
-                if (!sPublishing) {
-                    onMetadata(chain.getThisObject(), chain.getArgs());
+        Xp.hook("apple.lyrics.set_metadata", m, (XposedInterface.Hooker) chain -> {
+            String request = null;
+            Object result;
+            synchronized (PUBLISH_LOCK) {
+                try {
+                    if (!sPublishing) request = onMetadata(chain.getThisObject(), chain.getArgs());
+                } catch (Throwable t) {
+                    note("onMetadata failed: " + t);
                 }
-            } catch (Throwable t) {
-                note("onMetadata failed: " + t);
+                result = chain.proceed();
             }
-            return chain.proceed();
+            Requester requester = sRequester;
+            if (request != null && requester != null) requester.request(request);
+            return result;
         });
     }
 
-    private static void onMetadata(Object session, List<Object> args) {
-        if (session != null) {
-            sSession = session;
+    private static String onMetadata(Object session, List<Object> args) {
+        Object first = args.isEmpty() ? null : args.get(0);
+        if (!(first instanceof MediaMetadata)) {
+            if (first == null && session == sSession) {
+                sSession = null;
+                LYRICS.clear();
+            }
+            return null;
         }
-        Object a0 = args.isEmpty() ? null : args.get(0);
-        if (!(a0 instanceof MediaMetadata)) {
-            return;
-        }
-        MediaMetadata md = (MediaMetadata) a0;
-        String id = md.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
-        if (id == null || id.isEmpty()) {
-            return;
-        }
-        sPlayingId = id;
-        sPlayingTitle = md.getString(MediaMetadata.METADATA_KEY_TITLE);
-        if (id.equals(sHeldId) && sHeldPayload != null) {
-            // Already built, from a previous play of this track. Attach it on the way past,
-            // which is cheaper and earlier than publishing it again afterwards.
-            inject(md, id, sHeldPayload);
-            return;
-        }
-        // Not built yet. Apple only builds a lyric when its own lyric page asks for one, so
-        // left alone this would never fire for a track the person does not open that page for -
-        // which is every track, when the phone is locked.
-        Requester r = sRequester;
-        if (r != null) {
-            r.request(id);
-        }
+        MediaMetadata md = (MediaMetadata) first;
+        String id = clean(md.getString(MediaMetadata.METADATA_KEY_MEDIA_ID));
+        if (id == null) return null;
+        sSession = session;
+        AppleLyricStore.Snapshot lyric = LYRICS.playing(id, md.getString(MediaMetadata.METADATA_KEY_TITLE));
+        if (lyric == null) return id;
+        inject(md, lyric);
+        return null;
     }
 
     // ---------------------------------------------------------------- hook 2: the lyric
@@ -170,7 +181,8 @@ public final class AppleLyrics {
      */
     private static void hookLyricBuild(ClassLoader cl) throws Throwable {
         Class<?> vm = cl.loadClass("com.apple.android.music.player.viewmodel.PlayerLyricsViewModel");
-        List<XposedInterface.HookHandle> handles = Xp.hookAll(vm, "buildTimeRangeToLyricsMap",
+        List<XposedInterface.HookHandle> handles = Xp.hookAll("apple.lyrics.build",
+                vm, "buildTimeRangeToLyricsMap",
                 (XposedInterface.Hooker) chain -> {
                     Object result = chain.proceed();
                     try {
@@ -192,7 +204,9 @@ public final class AppleLyrics {
 
     /** A built song: read it, turn it into a payload, and get it onto the session. */
     private static void onSong(Object song) {
-        String id = str(call(song, "getAdamId"));
+        String id = clean(str(call(song, "getAdamId")));
+        if (id == null) return;
+        AppleLyricStore.Capture capture = LYRICS.begin(id);
         List<Line> lines = readLines(song);
         List<String> voices = readVoices(song, lines);
         note("agents: " + describeAgents(song) + " -> voices=" + voices);
@@ -200,19 +214,36 @@ public final class AppleLyrics {
             note("song " + id + " built with no lines");
             return;
         }
-        String payload = payload(id, lines, voices);
-        sHeldId = id;
-        sHeldPayload = payload;
+        // Apple's unsynced lyric is lines with no time on them, every begin 0. Published, it
+        // stamped each line [00:00.000], the reader took that over the timed lyric the network
+        // had found, paired the lines off as translations of each other, and the lock screen
+        // sat on the last one for the whole song (2026-11-04). Not a lyric this can play.
+        if (untimed(lines)) {
+            note("song " + id + ": " + lines.size() + " lines with no timing, not published");
+            return;
+        }
+        String payload = payload(id, lines, voices, capture.title);
+        boolean duet = hasSecondLead(lines, voices);
+        synchronized (PUBLISH_LOCK) {
+            AppleLyricStore.Snapshot selected = LYRICS.offer(capture, payload, duet);
+            if (selected != null) republish(selected);
+        }
         note("song " + id + ": " + lines.size() + " lines, "
                 + (lines.get(0).words.isEmpty() ? "line-timed" : "word-timed")
                 + (voices.size() >= 2 ? ", duet(" + voices.size() + ")" : "")
                 + ", bg=" + bgLines(lines)
                 + ", first=" + lines.get(0).describe());
-        // The track this belongs to is the one playing, so the session is holding a metadata
-        // without it. Publishing again is what the lock screen's re-read is there to catch.
-        if (id != null && id.equals(sPlayingId)) {
-            republish(payload);
+    }
+
+    static boolean hasSecondLead(List<Line> lines, List<String> voices) {
+        if (voices.size() < 2) return false;
+        String second = voices.get(1);
+        for (Line l : lines) {
+            if (l.text.isEmpty()) continue;
+            if (second.equals(l.agent)) return true;
+            if (l.agent == null) for (Word w : l.words) if (second.equals(w.agent)) return true;
         }
+        return false;
     }
 
     // ---------------------------------------------------------------- reading Apple's objects
@@ -229,85 +260,169 @@ public final class AppleLyrics {
      * whose names survive the player's obfuscation, which is why this route is worth building on
      * at all - there is no mapping file to chase when Apple Music updates.
      */
-    private static List<Line> readLines(Object song) {
+    static List<Line> readLines(Object song) {
         List<Line> out = new ArrayList<>();
         for (Object section : vector(call(song, "getSections"))) {
-            for (Object native_ : vector(call(section, "getLines"))) {
+            for (Object row : vector(call(section, "getLines"))) {
                 Line l = new Line();
-                l.begin = num(call(native_, "getBegin"));
-                l.end = num(call(native_, "getEnd"));
-                l.agent = str(call(native_, "getAgent"));
-                l.text = html(str(call(native_, "getHtmlLineText")));
-                l.translation = html(str(call(native_, "getHtmlTranslationLineText")));
-                for (Object w : vector(call(native_, "getWords"))) {
-                    Word word = new Word();
-                    word.begin = num(call(w, "getBegin"));
-                    word.end = num(call(w, "getEnd"));
-                    word.text = html(str(call(w, "getHtmlLineText")));
-                    if (word.text != null && !word.text.isEmpty()) {
-                        l.words.add(word);
+                readWords(call(row, "getWords"), l.words);
+                readWords(call(row, "getBackgroundWords", false), l.bg);
+                String rowAgent = clean(str(call(row, "getAgent")));
+                l.confirmedAgent = consistentLeadAgent(rowAgent, l.words);
+                l.agent = rowAgent != null ? rowAgent : sharedAgent(l.words);
+                l.bgAgent = sharedAgent(l.bg);
+                l.begin = num(call(row, "getBegin"));
+                l.end = num(call(row, "getEnd"));
+                // Some rows carry the times only on their words, especially background-only rows.
+                if (l.end <= l.begin) {
+                    long first = Long.MAX_VALUE;
+                    long last = l.end;
+                    for (List<Word> track : java.util.Arrays.asList(l.words, l.bg)) {
+                        for (Word w : track) {
+                            if (w.begin >= 0) first = Math.min(first, w.begin);
+                            last = Math.max(last, w.end);
+                        }
                     }
+                    if (l.begin == 0 && first != Long.MAX_VALUE) l.begin = first;
+                    l.end = Math.max(l.begin, last);
                 }
-                // The background vocal, which takes an argument - Apple's getter is
-                // getBackgroundWords(boolean), and asked without one it is simply not found.
-                for (Object w : vector(call(native_, "getBackgroundWords", false))) {
-                    Word word = new Word();
-                    word.begin = num(call(w, "getBegin"));
-                    word.end = num(call(w, "getEnd"));
-                    word.text = html(str(call(w, "getHtmlLineText")));
-                    if (word.text != null && !word.text.isEmpty()) {
-                        l.bg.add(word);
-                    }
-                }
-                respace(l.text, l.words);
-                Object bgText = call(native_, "getHtmlBackgroundVocalsLineText");
-                if (bgText == null) {
-                    bgText = call(native_, "getHtmlBackgroundVocalsLineText", false);
-                }
-                respace(html(str(bgText)), l.bg);
-                if (l.text != null && !l.text.isEmpty()) {
-                    out.add(l);
-                }
+                l.text = reconcile(html(str(call(row, "getHtmlLineText"))), l.words, l.end);
+                if (rowAgent == null && l.words.isEmpty()) l.confirmedAgent = null;
+                String bgText = clean(html(str(call(row, "getHtmlBackgroundVocalsLineText"))));
+                if (bgText == null) bgText = html(str(call(row, "getHtmlBackgroundVocalsLineText", false)));
+                l.bgText = reconcile(bgText, l.bg, l.end);
+                if (l.text.isEmpty() && l.bgAgent == null) l.bgAgent = l.agent;
+                l.translation = clean(html(str(call(row, "getHtmlTranslationLineText"))));
+                if (!l.text.isEmpty() || !l.bgText.isEmpty()) out.add(l);
             }
         }
         return out;
     }
 
-    /**
-     * The spaces between the words, put back from the line they were cut out of.
-     *
-     * A word arrives as bare text - "Fifty,", "fifty", "under", "ground" - and a line's words
-     * joined that way read "Fifty,fiftyfeetupunderground" (issue #29). Whether a space follows a
-     * word cannot be told from the word itself - "under" and "ground" are one word sung in two -
-     * so it is read off the line's own text, which does have them: each word is found in the line
-     * from where the last one ended, and whatever lies between is hung on the end of the word
-     * before, where every word-timed format here keeps it. A line the words cannot be found in
-     * is left as it came; from the first word that is not found on, nothing is guessed.
-     */
-    private static void respace(String line, List<Word> words) {
-        if (line == null || line.isEmpty() || words.size() < 2) {
-            return;
-        }
-        int at = 0;
-        Word prev = null;
-        for (Word w : words) {
-            int i = line.indexOf(w.text, at);
-            if (i < 0) {
-                return;
+    private static void readWords(Object vec, List<Word> out) {
+        for (Object item : vector(vec)) {
+            String text = html(str(call(item, "getHtmlLineText")));
+            if (text == null || text.isEmpty()) continue;
+            Word w = new Word();
+            Object begin = call(item, "getBegin");
+            w.begin = begin instanceof Number ? num(begin) : -1;
+            w.end = num(call(item, "getEnd"));
+            if (w.begin >= 0 && w.end <= w.begin) {
+                long duration = num(call(item, "getDuration"));
+                if (duration > 0 && duration <= Long.MAX_VALUE - w.begin) w.end = w.begin + duration;
             }
-            if (prev != null && i > at) {
-                prev.text += line.substring(at, i);
-            }
-            at = i + w.text.length();
-            prev = w;
+            w.text = text;
+            w.agent = clean(str(call(item, "getAgent")));
+            out.add(w);
         }
     }
 
-    /** How many lines carry a background vocal, for the account in the log. */
+    private static String clean(String s) {
+        if (s == null) return null;
+        String trimmed = s.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** Only a consistent word credit can stand in for a missing row or background credit. */
+    /** A row credit covers uncredited words. Without one every sung word must agree. */
+    private static String consistentLeadAgent(String rowAgent, List<Word> words) {
+        String lead = rowAgent;
+        for (Word w : words) {
+            if (clean(w.text) == null) continue;
+            String singer = w.agent != null ? w.agent : rowAgent;
+            if (singer == null || (lead != null && !lead.equals(singer))) return null;
+            lead = singer;
+        }
+        return lead;
+    }
+
+    private static String sharedAgent(List<Word> words) {
+        String agent = null;
+        for (Word w : words) {
+            if (w.agent == null) continue;
+            if (agent != null && !agent.equals(w.agent)) return null;
+            agent = w.agent;
+        }
+        return agent;
+    }
+
+    /** The complete row is authoritative. Word timing survives only if it covers that text. */
+    private static String reconcile(String row, List<Word> words, long rowEnd) {
+        String text = clean(row);
+        if (text == null) {
+            StringBuilder joined = new StringBuilder();
+            for (Word w : words) joined.append(w.text);
+            text = joined.toString().trim();
+        }
+        // The row owns spacing and punctuation between the sung words. The original pieces
+        // may also carry spaces, which are needed above when there is no full row string.
+        words.removeIf(w -> clean(w.text) == null);
+        int at = 0;
+        Word previous = null;
+        for (int k = 0; k < words.size(); k++) {
+            Word w = words.get(k);
+            String token = w.text.trim();
+            int pos = text.indexOf(token, at);
+            if (w.begin < 0 || (previous != null && w.begin < previous.begin
+                    && (w.agent == null || previous.agent == null || w.agent.equals(previous.agent)))
+                    || pos < 0 || !separator(text, at, pos)) {
+                words.clear();
+                return text;
+            }
+            if (w.end <= w.begin) {
+                long next = k + 1 < words.size() ? words.get(k + 1).begin : rowEnd;
+                if (next <= w.begin) {
+                    words.clear();
+                    return text;
+                }
+                w.end = next;
+            }
+            if (previous == null) w.text = text.substring(0, pos) + token;
+            else {
+                previous.text += text.substring(at, pos);
+                w.text = token;
+            }
+            at = pos + token.length();
+            previous = w;
+        }
+        if (previous != null) {
+            if (separator(text, at, text.length())) previous.text += text.substring(at);
+            else words.clear();
+        }
+        return text;
+    }
+
+    private static boolean separator(String text, int from, int until) {
+        for (int i = from; i < until;) {
+            int cp = text.codePointAt(i);
+            int type = Character.getType(cp);
+            if (!Character.isWhitespace(cp) && !Character.isSpaceChar(cp)
+                    && type != Character.CONNECTOR_PUNCTUATION && type != Character.DASH_PUNCTUATION
+                    && type != Character.START_PUNCTUATION && type != Character.END_PUNCTUATION
+                    && type != Character.INITIAL_QUOTE_PUNCTUATION && type != Character.FINAL_QUOTE_PUNCTUATION
+                    && type != Character.OTHER_PUNCTUATION) return false;
+            i += Character.charCount(cp);
+        }
+        return true;
+    }
+
+    /**
+     * Every line at the same moment and no word timed: Apple's unsynced lyric. A getter this
+     * build does not have reads as 0 too (see num), which is the same lyric to a lock screen.
+     */
+    private static boolean untimed(List<Line> lines) {
+        if (lines.size() < 2) return false;
+        long first = lines.get(0).begin;
+        for (Line l : lines) {
+            if (l.begin != first || !l.words.isEmpty() || !l.bg.isEmpty()) return false;
+        }
+        return true;
+    }
+
     private static int bgLines(List<Line> lines) {
         int n = 0;
         for (Line l : lines) {
-            if (!l.bg.isEmpty()) {
+            if (!l.bgText.isEmpty()) {
                 n++;
             }
         }
@@ -332,62 +447,54 @@ public final class AppleLyrics {
      * third voice would have to share one of them - so anything past the second is left on the
      * default side rather than being given a side at random.
      */
-    private static List<String> readVoices(Object song, List<Line> lines) {
-        List<String> out = new ArrayList<>();
-        List<Object> agents = vector(call(song, "getAgents"));
-        for (Object a : agents) {
-            if (!person(call(a, "getType"))) {
-                continue;
-            }
-            String id = str(call(a, "getId"));
-            if (id != null && !id.isEmpty()) {
-                out.add(id);
-                break;
-            }
-        }
-        for (Object a : agents) {
-            Object type = call(a, "getType");
-            if (group(type)) {
-                continue;
-            }
-            String id = str(call(a, "getId"));
-            if (id == null || id.isEmpty() || out.contains(id) || !sings(id, lines)) {
-                continue;
-            }
-            if (out.isEmpty()) {
-                out.add(id);
-            } else {
-                out.add(id);
-                break;
+    static List<String> readVoices(Object song, List<Line> lines) {
+        List<String> voices = new ArrayList<>(2);
+        Set<String> declared = new LinkedHashSet<>();
+        Set<String> groups = new LinkedHashSet<>();
+        for (Object a : vector(call(song, "getAgents"))) {
+            String id = clean(str(call(a, "getId")));
+            if (id == null) continue;
+            Object type = agentType(a);
+            if (group(type)) groups.add(id);
+            else {
+                declared.add(id);
+                if (voices.isEmpty() && person(type)) voices.add(id);
             }
         }
-        return out;
-    }
-
-    /** Whether any line is credited to this agent. */
-    private static boolean sings(String id, List<Line> lines) {
+        Set<String> leads = new LinkedHashSet<>(), backs = new LinkedHashSet<>();
         for (Line l : lines) {
-            if (id.equals(l.agent)) {
-                return true;
+            if (!l.text.isEmpty()) {
+                if (l.agent != null) leads.add(l.agent);
+                else for (Word w : l.words) if (w.agent != null) leads.add(w.agent);
+            }
+            if (!l.bgText.isEmpty() && l.bgAgent != null) backs.add(l.bgAgent);
+        }
+        // Without declarations, explicit v1/v2 retain their author-defined identities
+        // even when the second vocalist sings the opening verse.
+        if (voices.isEmpty() && !groups.contains("v1") && (leads.contains("v1") || leads.contains("v2"))) {
+            voices.add("v1");
+        }
+        for (Set<String> credits : java.util.Arrays.asList(leads, backs)) {
+            Set<String> candidates = new LinkedHashSet<>(declared);
+            candidates.addAll(credits);
+            for (String id : candidates) {
+                if (voices.size() == 2) return voices;
+                if (credits.contains(id) && !voices.contains(id) && !groups.contains(id)
+                        && id.chars().noneMatch(Character::isWhitespace)) voices.add(id);
             }
         }
-        return false;
+        return voices;
     }
 
-    /**
-     * Whether an agent is a group - the band, or everyone together - however the build says so.
-     *
-     * Only the enum's name is known (the vector hands over enums, measured). A number is a build
-     * this has not seen, and there only a person counts, which is how voices were read before.
-     */
+    private static Object agentType(Object agent) {
+        Object type = call(agent, "getType_");
+        return type != null ? type : call(agent, "getType");
+    }
+
+    /** Native numeric tags on this model include PERSON=1, GROUP=3, and OTHER=5. */
     private static boolean group(Object type) {
-        if (type == null) {
-            return false;
-        }
-        if (type instanceof Number) {
-            return ((Number) type).longValue() != AGENT_PERSON;
-        }
-        return "Group".equalsIgnoreCase(type.toString().trim());
+        return type instanceof Number ? ((Number) type).longValue() == 3L
+                : type != null && "Group".equalsIgnoreCase(type.toString().trim());
     }
 
     /**
@@ -420,7 +527,7 @@ public final class AppleLyrics {
         sb.append(" size=").append(size);
         for (Object a : vector(v)) {
             sb.append(" {").append(a.getClass().getSimpleName())
-                    .append(" type=").append(call(a, "getType"))
+                    .append(" type=").append(agentType(a))
                     .append(" id=").append(call(a, "getId"))
                     .append('}');
         }
@@ -471,13 +578,16 @@ public final class AppleLyrics {
         return out;
     }
 
-    private static final class Line {
+    static final class Line {
         long begin;
         long end;
         String text;
         String translation;
+        String bgText, bgAgent;
         /** Which voice sings it, as Apple's own agent id. Null on a song with one singer. */
         String agent;
+        /** Native lead agreed by the row and its words, before their default display side is applied. */
+        String confirmedAgent;
         /** The background vocal sung over this line, word by word. Empty for most lines. */
         final List<Word> bg = new ArrayList<>();
         final List<Word> words = new ArrayList<>();
@@ -490,6 +600,7 @@ public final class AppleLyrics {
     }
 
     private static final class Word {
+        String agent;
         long begin;
         long end;
         String text;
@@ -505,7 +616,11 @@ public final class AppleLyrics {
      * and translation is a plain LRC of the translated lines. A song Apple has no word timings
      * for simply gets no rawLyric, and the line-timed copy is what shows.
      */
-    private static String payload(String id, List<Line> lines, List<String> voices) {
+    static String payload(String id, List<Line> lines, List<String> voices) {
+        return payload(id, lines, voices, null);
+    }
+
+    private static String payload(String id, List<Line> lines, List<String> voices, String title) {
         StringBuilder plain = new StringBuilder();
         StringBuilder word = new StringBuilder();
         StringBuilder trans = new StringBuilder();
@@ -513,13 +628,15 @@ public final class AppleLyrics {
         boolean anyTrans = false;
         for (Line l : lines) {
             String stamp = stamp(l.begin);
-            plain.append(stamp).append(l.text).append('\n');
+            String visible = l.text.isEmpty() ? l.bgText : l.text;
+            List<Word> timed = l.text.isEmpty() ? l.bg : l.words;
+            plain.append(stamp).append(visible).append('\n');
             word.append(stamp);
-            if (l.words.isEmpty()) {
-                word.append(l.text);
+            if (timed.isEmpty()) {
+                word.append(visible);
             } else {
                 anyWords = true;
-                for (Word w : l.words) {
+                for (Word w : timed) {
                     word.append('<').append(bare(w.begin)).append('>').append(w.text);
                 }
                 // The line's own end, so the last syllable has somewhere to stop. Without it a
@@ -538,7 +655,6 @@ public final class AppleLyrics {
         // believes one - see LyricSource.infoFor(). Apple publishes an ordinary title, so this
         // is a real check here rather than the dead weight it is on a player that writes
         // something else into that field.
-        String title = sPlayingTitle;
         if (title != null && !title.isEmpty()) {
             json.append(",\"songName\":").append(quote(title));
         }
@@ -556,7 +672,7 @@ public final class AppleLyrics {
         // if the parse of it ever fails the lines above are still a whole lyric.
         boolean anyBg = false;
         for (Line l : lines) {
-            if (!l.bg.isEmpty()) {
+            if (!l.bgText.isEmpty()) {
                 anyBg = true;
                 break;
             }
@@ -579,42 +695,41 @@ public final class AppleLyrics {
     private static String ttml(List<Line> lines, List<String> voices) {
         StringBuilder sb = new StringBuilder(4096);
         sb.append("<tt xmlns=\"http://www.w3.org/ns/ttml\" ")
-                .append("xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\">")
+                .append("xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\" xmlns:hmc=\"urn:hyper-music-cover:lyrics\">")
                 .append("<head><metadata>");
-        for (int i = 0; i < voices.size() && i < 2; i++) {
+        for (int i = 0; i < Math.max(1, voices.size()); i++) {
             sb.append("<ttm:agent type=\"person\" xml:id=\"v").append(i + 1).append("\"/>");
         }
         sb.append("</metadata></head><body><div>");
         for (Line l : lines) {
-            String v = "v1";
-            if (l.agent != null && voices.size() >= 2 && l.agent.equals(voices.get(1))) {
-                v = "v2";
-            }
             sb.append("<p begin=\"").append(clock(l.begin)).append("\" end=\"")
-                    .append(clock(l.end)).append("\" ttm:agent=\"").append(v).append("\">");
+                    .append(clock(l.end)).append("\" ttm:agent=\"").append(voice(l.agent, voices))
+                    .append("\" hmc:leadVoice=\"").append(confirmedVoice(l, voices)).append("\">");
             if (l.words.isEmpty()) {
-                sb.append(xml(l.text));
+                // lyrics-core only retains bare paragraph text when there is no timed child.
+                if (!l.text.isEmpty() && !l.bgText.isEmpty()) span(sb, l.text, l.begin, l.end, null);
+                else sb.append(xml(l.text));
             } else {
                 for (Word w : l.words) {
-                    sb.append("<span begin=\"").append(clock(w.begin)).append("\" end=\"")
-                            .append(clock(w.end)).append("\">").append(xml(w.text))
-                            .append("</span>");
+                    String singer = l.agent == null && w.agent != null ? voice(w.agent, voices) : null;
+                    span(sb, w.text, w.begin, w.end, singer);
                 }
             }
             // The background vocal, as the nested x-bg span the format reserves for it. The
             // parser turns this into a line of its own and the renderer hangs it under the line
             // it overlaps, smaller - so it must not be written as ordinary syllables, which
             // would put the echo in the main line's own text.
-            if (!l.bg.isEmpty()) {
-                Word first = l.bg.get(0);
-                Word last = l.bg.get(l.bg.size() - 1);
-                sb.append("<span ttm:role=\"x-bg\" begin=\"").append(clock(first.begin))
-                        .append("\" end=\"").append(clock(last.end)).append("\">");
-                for (Word w : l.bg) {
-                    sb.append("<span begin=\"").append(clock(w.begin)).append("\" end=\"")
-                            .append(clock(w.end)).append("\">").append(xml(w.text))
-                            .append("</span>");
+            if (!l.bgText.isEmpty()) {
+                long start = l.bg.isEmpty() ? l.begin : l.bg.get(0).begin;
+                long end = l.bg.isEmpty() ? l.end : l.bg.get(l.bg.size() - 1).end;
+                sb.append("<span ttm:role=\"x-bg\"");
+                if (l.bgAgent != null) {
+                    sb.append(" ttm:agent=\"").append(voice(l.bgAgent, voices)).append("\"");
                 }
+                sb.append(" begin=\"").append(clock(start)).append("\" end=\"").append(clock(end)).append("\">");
+                // A background without timed children is discarded by lyrics-core 0.4.7.
+                if (l.bg.isEmpty()) span(sb, l.bgText, start, end, null);
+                else for (Word w : l.bg) span(sb, w.text, w.begin, w.end, null);
                 sb.append("</span>");
             }
             if (l.translation != null && !l.translation.isEmpty()) {
@@ -624,6 +739,23 @@ public final class AppleLyrics {
             sb.append("</p>");
         }
         return sb.append("</div></body></tt>").toString();
+    }
+
+    private static String confirmedVoice(Line line, List<String> voices) {
+        if (voices.size() < 2 || line.text.isEmpty() || line.confirmedAgent == null) return "unknown";
+        if (line.confirmedAgent.equals(voices.get(0))) return "v1";
+        if (line.confirmedAgent.equals(voices.get(1))) return "v2";
+        return "unknown";
+    }
+
+    private static String voice(String id, List<String> voices) {
+        return voices.size() >= 2 && voices.get(1).equals(id) ? "v2" : "v1";
+    }
+
+    private static void span(StringBuilder sb, String text, long begin, long end, String voice) {
+        sb.append("<span begin=\"").append(clock(begin)).append("\" end=\"").append(clock(end)).append('"');
+        if (voice != null) sb.append(" ttm:agent=\"").append(voice).append('"');
+        sb.append('>').append(xml(text)).append("</span>");
     }
 
     /** TTML's clock time, written in full so nothing has to guess which fields were left out. */
@@ -742,7 +874,7 @@ public final class AppleLyrics {
                     .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
                     .replace("&nbsp;", " ");
         }
-        return out.trim();
+        return out;
     }
 
     // ---------------------------------------------------------------- publishing
@@ -751,11 +883,11 @@ public final class AppleLyrics {
      * Put the reference to the payload into a metadata on its way out, without disturbing
      * anything else in it. The payload itself is handed over on request - see hookCommand.
      */
-    private static void inject(MediaMetadata md, String id, String payload) {
+    private static void inject(MediaMetadata md, AppleLyricStore.Snapshot snapshot) {
         try {
             Bundle b = (Bundle) Xp.getObjectField(md, "mBundle");
-            if (b != null && id != null) {
-                b.putString(LyricSource.KEY_LYRIC_REF, LyricSource.lyricRef(id, payload));
+            if (b != null) {
+                b.putString(LyricSource.KEY_LYRIC_REF, snapshot.ref);
             }
         } catch (Throwable t) {
             note("could not attach to the metadata: " + t);
@@ -770,7 +902,8 @@ public final class AppleLyrics {
      * The framework treats that as an ordinary metadata change, which is exactly what the lock
      * screen's re-read was built to notice.
      */
-    private static void republish(String payload) {
+    @android.annotation.SuppressLint("WrongConstant") // Both ends recognize this module-owned metadata key.
+    private static void republish(AppleLyricStore.Snapshot lyric) {
         Object session = sSession;
         if (session == null) {
             note("no session to publish to");
@@ -783,15 +916,18 @@ public final class AppleLyrics {
                 note("session is holding no metadata to revise");
                 return;
             }
-            inject((MediaMetadata) md, sHeldId, payload);
+            MediaMetadata old = (MediaMetadata) md;
+            if (!lyric.id.equals(old.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))) return;
+            MediaMetadata next = new MediaMetadata.Builder(old)
+                    .putString(LyricSource.KEY_LYRIC_REF, lyric.ref).build();
             sPublishing = true;
             try {
                 session.getClass().getMethod("setMetadata", MediaMetadata.class)
-                        .invoke(session, md);
+                        .invoke(session, next);
             } finally {
                 sPublishing = false;
             }
-            note("published the reference to " + payload.length() + " chars to the session");
+            note("published the reference to " + lyric.payload.length() + " chars to the session");
         } catch (Throwable t) {
             sPublishing = false;
             note("republish failed: " + t);
@@ -812,7 +948,7 @@ public final class AppleLyrics {
         Method m = android.media.session.MediaSession.class.getDeclaredMethod("dispatchCommand",
                 android.media.session.MediaSessionManager.RemoteUserInfo.class, String.class,
                 Bundle.class, android.os.ResultReceiver.class);
-        Xp.hook(m, (XposedInterface.Hooker) chain -> {
+        Xp.hook("apple.lyrics.dispatch_command", m, (XposedInterface.Hooker) chain -> {
             List<Object> args = chain.getArgs();
             if (!LyricSource.CMD_LYRIC.equals(args.get(1))) {
                 return chain.proceed();
@@ -820,18 +956,16 @@ public final class AppleLyrics {
             android.os.ResultReceiver cb = (android.os.ResultReceiver) args.get(3);
             Bundle asked = (Bundle) args.get(2);
             String ref = asked == null ? null : asked.getString(LyricSource.KEY_LYRIC_REF);
-            String id = sHeldId;
-            String payload = sHeldPayload;
-            boolean have = ref != null && id != null && payload != null
-                    && ref.equals(LyricSource.lyricRef(id, payload));
+            AppleLyricStore.Snapshot lyric = LYRICS.held();
+            boolean have = lyric != null && lyric.ref.equals(ref);
             if (cb != null) {
                 Bundle out = new Bundle();
                 if (have) {
-                    out.putString("lyricInfo", payload);
+                    out.putString("lyricInfo", lyric.payload);
                 }
                 cb.send(have ? 0 : 1, out);
             }
-            note("asked for " + ref + (have ? ", sent " + payload.length() + " chars" : ", not held"));
+            note("asked for " + ref + (have ? ", sent " + lyric.payload.length() + " chars" : ", not held"));
             return null;
         });
     }
@@ -850,17 +984,18 @@ public final class AppleLyrics {
     private static final class Requester {
         private final ClassLoader cl;
         private volatile Object vm;
-        private volatile String last;
+        private long requestedEpoch = -1;
 
         Requester(ClassLoader cl) {
             this.cl = cl;
         }
 
         void request(String id) {
-            if (id == null || id.isEmpty() || id.equals(last)) {
-                return;
+            long epoch = LYRICS.missingEpoch(id);
+            synchronized (this) {
+                if (epoch < 0 || epoch <= requestedEpoch) return;
+                requestedEpoch = epoch;
             }
-            last = id;
             try {
                 Class<?> songCls = cl.loadClass("com.apple.android.music.model.Song");
                 Object song = songCls.newInstance();

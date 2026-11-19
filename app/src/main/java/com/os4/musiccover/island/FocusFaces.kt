@@ -1,4 +1,5 @@
 package com.os4.musiccover.island
+import com.os4.musiccover.Gen
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Paint
@@ -30,11 +31,17 @@ import kotlin.math.sqrt
 internal class RollingDigits(private val view: TextView) {
     private var last: String? = null
 
+    /**
+     * The text object the view held after our last set. Not "any Spanned": a morph puts the
+     * card's line into the view mid-switch, and taken for ours it stood until the next second.
+     */
+    private var shown: CharSequence? = null
+
     /** One per character, counted from the right: the right end is where a count ticks. */
     private val spans = ArrayList<DigitSpan>()
 
     fun set(text: String) {
-        if (text == last && view.text is Spanned) return
+        if (text == last && view.text === shown) return
         val old = last
         last = text
         val now = SystemClock.uptimeMillis()
@@ -57,21 +64,24 @@ internal class RollingDigits(private val view: TextView) {
         }
         while (spans.size > text.length) spans.removeAt(spans.size - 1)
         view.text = out
-        view.removeCallbacks(frame)
-        if (spans.any { it.running(now) }) view.postOnAnimation(frame)
+        // What the view keeps, which may be its own copy of [out].
+        shown = view.text
+        Gen.removeCallbacksOn(view, frame)
+        if (spans.any { it.running(now) }) Gen.postOnAnimation(view, frame)
     }
 
     /** Back to plain text: the spans go, and nothing is left running. */
     fun clear() {
-        view.removeCallbacks(frame)
+        Gen.removeCallbacksOn(view, frame)
         last = null
+        shown = null
         spans.clear()
     }
 
     private val frame = object : Runnable {
         override fun run() {
             view.invalidate()
-            if (spans.any { it.running(SystemClock.uptimeMillis()) }) view.postOnAnimation(this)
+            if (spans.any { it.running(SystemClock.uptimeMillis()) }) Gen.postOnAnimation(view, this)
         }
     }
 

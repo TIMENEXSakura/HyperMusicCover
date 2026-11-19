@@ -1,6 +1,7 @@
 package com.os4.musiccover.lyrics;
 import com.os4.musiccover.LockTaps;
 import com.os4.musiccover.Main;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Xp;
 import android.content.Context;
 import android.graphics.PixelFormat;
@@ -71,6 +72,22 @@ final class LyricWindow {
     private static ViewTreeObserver sHostVto;
     private static boolean sHdr;
     private static int sLayerId;
+    /**
+     * Faded out and kept rather than removed (park): the window stays added, its view see-through
+     * and stepped by nothing, until the next entry brings it back (add) or PARK_MS pass.
+     *
+     * Adding it was a relayout of 7-11ms on the main thread on every entry into the cover (14 of
+     * them in 39s, trace 2026-10-20), in the frames the clock and the card are moving in.
+     */
+    private static boolean sParked;
+    private static final long PARK_MS = 5 * 60_000L;
+
+    private static final Runnable DROP_PARKED = new Runnable() {
+        @Override
+        public void run() {
+            if (sParked) remove();
+        }
+    };
 
     private LyricWindow() {
     }
@@ -132,14 +149,27 @@ final class LyricWindow {
     private static void setHost(View layer) {
         ViewTreeObserver old = sHostVto;
         LyricView v = sView;
-        if (old != null && v != null && old.isAlive()) old.removeOnPreDrawListener(v.preDrawListener());
+        if (old != null && v != null && old.isAlive()) Gen.unpreDraw(old, HOST_PRE_DRAW);
         sHost = layer;
         sHostVto = null;
         if (layer == null || v == null) return;
         ViewTreeObserver vto = layer.getViewTreeObserver();
-        vto.addOnPreDrawListener(v.preDrawListener());
+        // The keyguard's observer, not the view's: the view is a window of its own, and its own
+        // tree only draws when the window does. This is what makes it step on the keyguard's
+        // frames (the swipe's fade and zoom, the bouncer) the way it did as a child.
+        Gen.preDraw(vto, HOST_PRE_DRAW);
         sHostVto = vto;
     }
+
+    /**
+     * The pre-draw on the keyguard's tree, a different object from {@link LyricView}'s own: the
+     * ledger tells registrations apart by listener identity and drops every entry with the same
+     * listener, so one object on both trees would make removing either remove both.
+     */
+    private static final ViewTreeObserver.OnPreDrawListener HOST_PRE_DRAW = () -> {
+        LyricView v = sView;
+        return v == null || v.preDrawListener().onPreDraw();
+    };
 
     /** The keyguard's own root view, for the lookups the view used to do from its own root. */
     static View hostRoot() {
@@ -152,7 +182,12 @@ final class LyricWindow {
      * keyguard's tree is found through it, and nothing else of it is used.
      */
     static LyricView add(View anchor) {
+        if (sView != null && sParked && !sView.isAttachedToWindow()) {
+            // The lock screen's window went from under it: nothing to bring back.
+            remove();
+        }
         if (sView != null) {
+            if (sParked) return unpark(anchor);
             host();
             return sView;
         }
@@ -209,10 +244,15 @@ final class LyricWindow {
             sHdr = LockLyrics.hdrWanted();
             colourMode(lp, sHdr);
             wm.addView(v, lp);
+            Gen.ownWindow(wm, v);
             sView = v;
             sWm = wm;
             sLp = lp;
             setHost(layer);
+            try {
+                lookUpTraversal(Class.forName("android.view.ViewRootImpl"));
+            } catch (Throwable ignored) {
+            }
             Xp.log(TAG + "window added, hw=" + v.isHardwareAccelerated() + " hdr=" + sHdr);
             return v;
         } catch (Throwable t) {
@@ -226,8 +266,177 @@ final class LyricWindow {
         }
     }
 
+    private static volatile java.lang.reflect.Method sDoTraversal;
+    /** Whether sDoTraversal takes the frame's time: doTraversal(long) on this HyperOS build. */
+    private static volatile boolean sDoTraversalTimed;
+    private static volatile boolean sDrawFirstBroken;
+    private static boolean sLookupStarted;
+    private static Object sRtAnimators;
+    private static java.lang.reflect.Method sRtAnimatorSync;
+    private static boolean sRtAnimatorLooked;
+
+    /**
+     * Draws the window now, from the frame's animation step, instead of in the traversal after
+     * the lock screen's own. Both windows' renderers share the one render thread, and the second
+     * to sync waits for it to finish the first one's frame: drawn second, the lyrics' sync waited
+     * out the lock screen's whole frame, blur and all - 4-5ms of the main thread's 8.3, every
+     * frame they moved (3.15ms a draw on average, 1970 draws in 39s, trace 2026-10-20). Drawn
+     * first, the render thread takes the lyrics' light frame while the main thread is still
+     * recording the lock screen's.
+     *
+     * The picture is the same: the step that decides it has already run in the frame's animation
+     * callback (LyricView.frame), and the keyguard's pre-draw only re-steps a frame that has not
+     * been stepped. All this moves is when the window is synced.
+     *
+     * It is what the window's own traversal callback does (ViewRootImpl$TraversalCallback.onVsync
+     * on this build, read off framework.jar): MIUI's RT-animator sync for the root, then
+     * doTraversal(frame time). doTraversal does nothing unless a traversal is scheduled and clears
+     * it, so the queued callback finds nothing left to do. doTraversal is blocked to reflection
+     * (hiddenapi BLOCKED), hence HiddenApiBypass; older builds have it without the time.
+     */
+    static void drawFirst(View v) {
+        if (sDrawFirstBroken || v != sView || sParked || !v.isAttachedToWindow()) return;
+        // Not found yet: drawn in its own traversal, as before, until the lookup lands.
+        java.lang.reflect.Method m = sDoTraversal;
+        if (m == null) return;
+        android.os.Trace.beginSection("MC lyricDrawFirst");
+        try {
+            Object root = Xp.callMethod(v, "getViewRootImpl");
+            if (root == null) return;
+            syncRtAnimators(v);
+            if (sDoTraversalTimed) {
+                m.invoke(root, frameTimeNanos());
+            } else {
+                m.invoke(root);
+            }
+        } catch (Throwable t) {
+            // Left to its own traversal from here on, as before.
+            sDrawFirstBroken = true;
+            Xp.w(TAG + "drawing first unavailable: " + t);
+        } finally {
+            android.os.Trace.endSection();
+        }
+    }
+
+    /**
+     * Finds doTraversal off the main thread, once. HiddenApiBypass's first call opens and
+     * verifies core-oj.jar - 60ms, measured landing in a frame of the cover's way in - so it is
+     * made here, when the window first goes up, and drawFirst waits for it.
+     */
+    private static void lookUpTraversal(final Class<?> rootClass) {
+        if (sLookupStarted || rootClass == null) return;
+        sLookupStarted = true;
+        Gen.thread("mc-lyric-lookup", new Runnable() {
+            @Override
+            public void run() {
+                java.lang.reflect.Method m = findTraversal(rootClass, true);
+                boolean timed = m != null;
+                if (m == null) m = findTraversal(rootClass, false);
+                if (m == null) {
+                    sDrawFirstBroken = true;
+                    Xp.w(TAG + "drawing first unavailable: no ViewRootImpl.doTraversal");
+                    return;
+                }
+                try {
+                    m.setAccessible(true);
+                } catch (Throwable t) {
+                    sDrawFirstBroken = true;
+                    Xp.w(TAG + "drawing first unavailable: " + t);
+                    return;
+                }
+                sDoTraversalTimed = timed;
+                sDoTraversal = m;
+                Xp.log(TAG + "drawing first through " + m);
+            }
+        });
+    }
+
+    /** The frame's own time, as the traversal callback hands it on; hidden from the SDK. */
+    private static long frameTimeNanos() {
+        try {
+            return (Long) Xp.callMethod(android.view.Choreographer.getInstance(), "getFrameTimeNanos");
+        } catch (Throwable t) {
+            return System.nanoTime();
+        }
+    }
+
+    private static java.lang.reflect.Method findTraversal(Class<?> start, boolean timed) {
+        for (Class<?> c = start; c != null; c = c.getSuperclass()) {
+            try {
+                return timed
+                        ? org.lsposed.hiddenapibypass.HiddenApiBypass.getDeclaredMethod(
+                                c, "doTraversal", long.class)
+                        : org.lsposed.hiddenapibypass.HiddenApiBypass.getDeclaredMethod(
+                                c, "doTraversal");
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** MIUI's per-frame RT-animator sync the traversal callback runs first; none, nothing. */
+    private static void syncRtAnimators(View v) {
+        if (!sRtAnimatorLooked) {
+            sRtAnimatorLooked = true;
+            try {
+                Class<?> c = Class.forName("android.graphics.animation.RTAnimatorStub");
+                sRtAnimators = c.getMethod("getInstance").invoke(null);
+                sRtAnimatorSync = c.getMethod("syncRTAnimatorRootNodeUI", View.class);
+            } catch (Throwable t) {
+                sRtAnimators = null;
+                sRtAnimatorSync = null;
+            }
+        }
+        if (sRtAnimatorSync == null) return;
+        try {
+            sRtAnimatorSync.invoke(sRtAnimators, v);
+        } catch (Throwable t) {
+            sRtAnimatorSync = null;
+        }
+    }
+
+    /** The parked window back for an entry: stepped by the keyguard again, in the mode it wants. */
+    private static LyricView unpark(View anchor) {
+        View layer = foregroundLayer(anchor);
+        if (layer == null) {
+            Xp.log(TAG + "keyguard_foreground_layer not found");
+            return null;
+        }
+        Main.main().removeCallbacks(DROP_PARKED);
+        sParked = false;
+        setHost(layer);
+        sView.rejoin();
+        setHdr(LockLyrics.hdrWanted());
+        Xp.log(TAG + "window back from parking, hdr=" + sHdr);
+        return sView;
+    }
+
+    /**
+     * The lyrics have faded out: the window is kept for the next entry instead of removed. Out of
+     * HDR, see-through, and taken off the keyguard's frames, so it costs nothing while it waits.
+     */
+    static void park() {
+        LyricView v = sView;
+        if (v == null || sParked) return;
+        setHdr(false);
+        setHost(null);
+        sParked = true;
+        v.stopFrames();
+        v.setAlpha(0f);
+        Main.main().removeCallbacks(DROP_PARKED);
+        Main.main().postDelayed(DROP_PARKED, PARK_MS);
+        Xp.log(TAG + "window parked");
+    }
+
+    /** Whether [v] is the parked window's view, which nothing should step. */
+    static boolean parked(View v) {
+        return sParked && v != null && v == sView;
+    }
+
     /** Takes the lyrics down: the view, and the window it is the whole of. */
     static void remove() {
+        Main.main().removeCallbacks(DROP_PARKED);
+        sParked = false;
         setHost(null);
         LyricView v = sView;
         WindowManager wm = sWm;
@@ -252,7 +461,7 @@ final class LyricWindow {
      * what the lock screen's window is either way, so the media card's material never sees it.
      */
     static void setHdr(boolean on) {
-        if (sView == null || sLp == null || sHdr == on) return;
+        if (sView == null || sLp == null || sHdr == on || sParked) return;
         sHdr = on;
         colourMode(sLp, on);
         try {
@@ -297,7 +506,7 @@ final class LyricWindow {
         if (v == null) return "win=down";
         int[] loc = new int[2];
         v.getLocationOnScreen(loc);
-        return "win=up hdr=" + (sHdr ? 1 : 0) + " hw=" + (v.isHardwareAccelerated() ? 1 : 0)
+        return "win=" + (sParked ? "parked" : "up") + " hdr=" + (sHdr ? 1 : 0) + " hw=" + (v.isHardwareAccelerated() ? 1 : 0)
                 + " " + v.getWidth() + "x" + v.getHeight() + "@" + loc[0] + "," + loc[1]
                 + " scale=" + v.getScaleY() + " pivot=" + (int) v.getPivotX() + "," + (int) v.getPivotY()
                 + " cm=" + (sLp == null ? "?" : sLp.getColorMode())

@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -58,6 +59,10 @@ import com.os4.musiccover.BuildConfig
 import com.os4.musiccover.R
 import com.os4.musiccover.ui.component.effect.BgEffectBackground
 import com.os4.musiccover.ui.util.BlurredBar
+import com.os4.musiccover.ui.util.GlassPageBar
+import com.os4.musiccover.ui.util.PageBackButton
+import com.os4.musiccover.ui.util.LocalOs4Ui
+import com.os4.musiccover.ui.util.LocalPageBackdrop
 import com.os4.musiccover.ui.util.ColorBlendToken
 import com.os4.musiccover.ui.util.isInDarkTheme
 import com.os4.musiccover.ui.util.openQqGroup
@@ -80,12 +85,14 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
+import top.yukonga.miuix.kmp.utils.MiuixPopupUtils
 import kotlin.math.abs
 import androidx.compose.ui.graphics.BlendMode as ComposeBlendMode
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
 
 @Composable
 fun AboutPageContent(
+    onBack: () -> Unit,
     openLicensePage: () -> Unit,
     openCreditsPage: () -> Unit,
     isBlurEnabled: Boolean = true,
@@ -113,52 +120,83 @@ fun AboutPageContent(
         }
     }
 
+    val os4 = LocalOs4Ui.current
     val backdrop = rememberBlurBackdrop()
     val collapsed by remember { derivedStateOf { scrollProgress == 1f } }
+    val backdropActive = (isBlurEnabled || os4) && backdrop != null
     val blurActive by remember(backdrop, isBlurEnabled) { derivedStateOf { isBlurEnabled && backdrop != null && scrollProgress == 1f } }
 
-    Scaffold(
-        popupHost = { },
-        topBar = {
-            val barColor = if (blurActive) {
-                Color.Transparent
-            } else {
-                if (collapsed) colorScheme.surface else Color.Transparent
-            }
-            val titleColor = colorScheme.onSurface.copy(
-                alpha = ((scrollProgress - 0.35f) / 0.65f).coerceIn(0f, 1f),
-            )
-            BlurredBar(backdrop, blurActive) {
-                SmallTopAppBar(
-                    title = stringResource(R.string.about),
-                    scrollBehavior = topAppBarScrollBehavior,
-                    color = barColor,
-                    titleColor = titleColor,
-                    defaultWindowInsetsPadding = false,
+    // The page's dialogs open above the Scaffold, so the backdrop it publishes has to wrap
+    // them too - otherwise they would sample nothing in OS4.
+    CompositionLocalProvider(LocalPageBackdrop provides backdrop.takeIf { backdropActive }) {
+        Scaffold(
+            // OS4's glass dialogs are Compose popups and need a Miuix popup host. This page used
+            // to sit inside MainActivity's root Scaffold, which was that host; as a screen of its
+            // own it has to bring one. OS3's dialogs are windows, so it keeps the empty host.
+            popupHost = if (os4) { { MiuixPopupUtils.MiuixPopupHost() } } else { { } },
+            topBar = {
+                if (os4) {
+                    // No large title: the big mark below is the page's own, and it is the thing
+                    // that collapses on scroll. The bar only fades its compact title in, at the
+                    // same progress the OS3 bar used.
+                    GlassPageBar(
+                        title = stringResource(R.string.about),
+                        backdrop = backdrop,
+                        scrollBehavior = topAppBarScrollBehavior,
+                        onBack = onBack,
+                        expandable = false,
+                        defaultWindowInsetsPadding = false,
+                        titleAlpha = {
+                            ((scrollProgress - 0.35f) / 0.65f).coerceIn(0f, 1f)
+                        },
+                    )
+                } else {
+                    val barColor = if (blurActive) {
+                        Color.Transparent
+                    } else {
+                        if (collapsed) colorScheme.surface else Color.Transparent
+                    }
+                    val titleColor = colorScheme.onSurface.copy(
+                        alpha = ((scrollProgress - 0.35f) / 0.65f).coerceIn(0f, 1f),
+                    )
+                    BlurredBar(backdrop, blurActive) {
+                        SmallTopAppBar(
+                            title = stringResource(R.string.about),
+                            scrollBehavior = topAppBarScrollBehavior,
+                            color = barColor,
+                            titleColor = titleColor,
+                            navigationIcon = { PageBackButton(onBack) },
+                            defaultWindowInsetsPadding = false,
+                        )
+                    }
+                }
+            },
+            contentWindowInsets = WindowInsets.systemBars.add(WindowInsets.displayCutout).only(WindowInsetsSides.Horizontal),
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (backdropActive) Modifier.layerBackdrop(backdrop) else Modifier)
+            ) {
+                AboutContent(
+                    padding = PaddingValues(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = 0.dp,
+                    ),
+                    topAppBarScrollBehavior = topAppBarScrollBehavior,
+                    lazyListState = lazyListState,
+                    scrollProgressProvider = { scrollProgress },
+                    openLicensePage = openLicensePage,
+                    openCreditsPage = openCreditsPage,
+                    isBlurEnabled = isBlurEnabled,
+                    isCurrent = isCurrent,
+                    update = update,
                 )
             }
-        },
-        contentWindowInsets = WindowInsets.systemBars.add(WindowInsets.displayCutout).only(WindowInsetsSides.Horizontal),
-    ) { innerPadding ->
-        Box(modifier = if (isBlurEnabled && backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier) {
-            AboutContent(
-                padding = PaddingValues(
-                    top = innerPadding.calculateTopPadding(),
-                    bottom = 0.dp,
-                ),
-                topAppBarScrollBehavior = topAppBarScrollBehavior,
-                lazyListState = lazyListState,
-                scrollProgressProvider = { scrollProgress },
-                openLicensePage = openLicensePage,
-                openCreditsPage = openCreditsPage,
-                isBlurEnabled = isBlurEnabled,
-                isCurrent = isCurrent,
-                update = update,
-            )
         }
-    }
 
-    UpdateDialogs(update)
+        UpdateDialogs(update)
+    }
 }
 
 @Composable
@@ -389,8 +427,8 @@ private fun AboutContent(
                             onClick = {
                                 // The group number, not the qm.qq.com link, is what QQ's card
                                 // route takes; the link is only here for the browser fallback.
-                                if (!ctx.openQqGroup("392493127")) {
-                                    uriHandler.openUri("https://qm.qq.com/q/RcLbYXgBy2")
+                                if (!ctx.openQqGroup("687710537")) {
+                                    uriHandler.openUri("https://qm.qq.com/q/loicCHi79")
                                 }
                             },
                         )

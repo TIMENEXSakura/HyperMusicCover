@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.os4.musiccover.BuildConfig
 import com.os4.musiccover.R
 import com.os4.musiccover.ui.util.openQqGroup
+import com.os4.musiccover.ui.util.AppCard
 import com.os4.musiccover.ui.util.openTelegramGroup
 import com.os4.musiccover.updater.InstallOutcome
 import com.os4.musiccover.updater.UpdateApi
@@ -50,23 +52,24 @@ import com.os4.musiccover.updater.UpdateInstaller
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.os4.musiccover.ui.util.AppDialog
+import com.os4.musiccover.ui.util.AppDialogButton
+import com.os4.musiccover.ui.util.AppDialogButtonRole
+import com.os4.musiccover.ui.util.LocalOs4Ui
 
 private const val POLL_MS = 200L
 
 /** Where the links dialog sends people. The QQ pair is the group's number and its share link. */
 private const val RELEASES_PAGE = "https://github.com/zyl6932/HyperMusicCover/releases"
 private const val TELEGRAM_GROUP = "https://t.me/HyperMusicCover"
-private const val QQ_GROUP_UIN = "392493127"
-private const val QQ_GROUP_LINK = "https://qm.qq.com/q/RcLbYXgBy2"
+private const val QQ_GROUP_UIN = "687710537"
+private const val QQ_GROUP_LINK = "https://qm.qq.com/q/loicCHi79"
 
 /**
  * Every piece of state the updater needs.
@@ -322,7 +325,7 @@ fun UpdateDialogs(controller: UpdateController) {
 @Composable
 private fun UpdateStatusDialog(status: String?, onDismiss: () -> Unit) {
     if (status == null) return
-    WindowDialog(
+    AppDialog(
         show = true,
         title = stringResource(R.string.update_status_title),
         onDismissRequest = onDismiss,
@@ -339,7 +342,7 @@ private fun UpdateStatusDialog(status: String?, onDismiss: () -> Unit) {
                 style = MiuixTheme.textStyles.body2,
                 color = colorScheme.onSurface,
             )
-            TextButton(
+            AppDialogButton(
                 modifier = Modifier.fillMaxWidth(),
                 text = stringResource(R.string.update_close),
                 onClick = { dismiss?.invoke() },
@@ -357,7 +360,7 @@ private fun UpdateStatusDialog(status: String?, onDismiss: () -> Unit) {
  */
 @Composable
 private fun UpdateLatestDialog(show: Boolean, onDismiss: () -> Unit) {
-    WindowDialog(
+    AppDialog(
         show = show,
         title = stringResource(R.string.update_status_title),
         summary = stringResource(R.string.update_current_version, BuildConfig.VERSION_NAME),
@@ -371,7 +374,7 @@ private fun UpdateLatestDialog(show: Boolean, onDismiss: () -> Unit) {
                 style = MiuixTheme.textStyles.body2,
                 color = colorScheme.onSurface,
             )
-            TextButton(
+            AppDialogButton(
                 modifier = Modifier.fillMaxWidth(),
                 text = stringResource(R.string.update_close),
                 onClick = { dismiss?.invoke() },
@@ -389,7 +392,7 @@ private fun UpdateLatestDialog(show: Boolean, onDismiss: () -> Unit) {
  */
 @Composable
 private fun UpdateProgressDialog(show: Boolean, progress: Float?, onCancel: () -> Unit) {
-    WindowDialog(
+    AppDialog(
         show = show,
         title = stringResource(R.string.update_downloading),
         onDismissRequest = onCancel,
@@ -424,7 +427,7 @@ private fun UpdateNotesDialog(
     onConfirm: () -> Unit,
 ) {
     if (update == null) return
-    WindowDialog(
+    AppDialog(
         show = show,
         title = stringResource(R.string.update_notes_title),
         summary = update.versionName,
@@ -453,17 +456,17 @@ private fun UpdateNotesDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.padding(top = 12.dp),
             ) {
-                TextButton(
+                AppDialogButton(
                     modifier = Modifier.weight(1f),
                     text = stringResource(R.string.update_cancel),
                     onClick = { dismiss?.invoke() },
                 )
                 Spacer(Modifier.width(20.dp))
-                TextButton(
+                AppDialogButton(
                     modifier = Modifier.weight(1f),
                     text = stringResource(R.string.update_confirm),
                     onClick = onConfirm,
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                    role = AppDialogButtonRole.Primary,
                 )
             }
         }
@@ -475,41 +478,49 @@ private fun UpdateNotesDialog(
 private fun UpdateLinksDialog(show: Boolean, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
-    WindowDialog(
+    AppDialog(
         show = show,
         title = stringResource(R.string.get_update),
         onDismissRequest = onDismiss,
     ) {
         val dismiss = LocalDismissState.current
+        val rows: @Composable ColumnScope.() -> Unit = {
+            BasicComponent(
+                title = "GitHub",
+                onClick = {
+                    uriHandler.openUri(RELEASES_PAGE)
+                    dismiss?.invoke()
+                },
+            )
+            BasicComponent(
+                title = stringResource(R.string.about_telegram),
+                onClick = {
+                    if (!context.openTelegramGroup(TELEGRAM_GROUP)) {
+                        uriHandler.openUri(TELEGRAM_GROUP)
+                    }
+                    dismiss?.invoke()
+                },
+            )
+            BasicComponent(
+                title = stringResource(R.string.about_qq_group),
+                onClick = {
+                    if (!context.openQqGroup(QQ_GROUP_UIN)) {
+                        uriHandler.openUri(QQ_GROUP_LINK)
+                    }
+                    dismiss?.invoke()
+                },
+            )
+        }
         Column {
-            Card(modifier = Modifier.padding(bottom = 8.dp)) {
-                BasicComponent(
-                    title = "GitHub",
-                    onClick = {
-                        uriHandler.openUri(RELEASES_PAGE)
-                        dismiss?.invoke()
-                    },
-                )
-                BasicComponent(
-                    title = stringResource(R.string.about_telegram),
-                    onClick = {
-                        if (!context.openTelegramGroup(TELEGRAM_GROUP)) {
-                            uriHandler.openUri(TELEGRAM_GROUP)
-                        }
-                        dismiss?.invoke()
-                    },
-                )
-                BasicComponent(
-                    title = stringResource(R.string.about_qq_group),
-                    onClick = {
-                        if (!context.openQqGroup(QQ_GROUP_UIN)) {
-                            uriHandler.openUri(QQ_GROUP_LINK)
-                        }
-                        dismiss?.invoke()
-                    },
-                )
+            if (LocalOs4Ui.current) {
+                // The dialog's own glass is the surface. A card here paints an opaque card over
+                // it, which is what made this one dialog look solid while every other one was
+                // glass.
+                Column(modifier = Modifier.padding(bottom = 8.dp), content = rows)
+            } else {
+                AppCard(modifier = Modifier.padding(bottom = 8.dp), content = rows)
             }
-            TextButton(
+            AppDialogButton(
                 modifier = Modifier.fillMaxWidth(),
                 text = stringResource(R.string.update_cancel),
                 onClick = { dismiss?.invoke() },

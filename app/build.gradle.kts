@@ -23,6 +23,8 @@ val releaseStorePath = signingValue("storeFile", "SIGNING_STORE_FILE")
 android {
     namespace = "com.os4.musiccover"
     compileSdk = 37
+    // miuix 0.9.5's AAR metadata requires 37.2; the app's target stays 37.
+    compileSdkMinor = 2
 
     defaultConfig {
         // The GitHub identity the module ships under. LSPosed keys a module on this, so
@@ -36,9 +38,18 @@ android {
         // CI stamps builds so every one is distinguishable in LSPosed and in the About page:
         // release.yml derives -PmcVersionName / -PmcVersionCode from the tag, nightly.yml adds
         // -PmcVersionSuffix. A plain local build keeps the values below.
-        versionCode = (findProperty("mcVersionCode") as String?)?.toInt() ?: 903006
-        versionName = ((findProperty("mcVersionName") as String?) ?: "0.9.3-Plus") +
+        versionCode = (findProperty("mcVersionCode") as String?)?.toInt() ?: 2
+        versionName = ((findProperty("mcVersionName") as String?) ?: "0.0.1") +
                 ((findProperty("mcVersionSuffix") as String?) ?: "")
+        // The hot reload's fault injection (HotReload), for a release-signed test build on the
+        // phone: -PmcHrFaults=true. Off in every build CI makes.
+        buildConfigField("boolean", "HR_FAULTS",
+                ((findProperty("mcHrFaults") as String?) == "true").toString())
+    }
+
+    lint {
+        // Track only the five existing threading findings surfaced by the new AGP.
+        baseline = file("lint-baseline.xml")
     }
 
     signingConfigs {
@@ -108,13 +119,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    if (providers.gradleProperty("mcLyricTestsOnly").orNull == "true") {
-        sourceSets.getByName("test") {
-            java.setSrcDirs(listOf("src/test/java/com/os4/musiccover/lyrics"))
-            kotlin.setSrcDirs(listOf("src/test/java/com/os4/musiccover/lyrics"))
-        }
-    }
-
     buildFeatures {
         compose = true
         // The module and the app both log a full account of the preview pipeline in debug
@@ -149,6 +153,9 @@ dependencies {
     // The lyric bridge the LyricProvider plugins publish through. Optional at runtime: when
     // nothing on the device implements it, LyriconSource simply never connects.
     implementation(libs.lyricon.subscriber)
+    // The other lyric bridge, fed through a system service the SuperLyric module registers.
+    // Same posture: no server, no frames, SuperLyricSource quietly answers nothing.
+    implementation(libs.superlyric.api)
 
     // The release notes are Markdown and are rendered as such in the update dialog.
     implementation(libs.commonmark)
@@ -168,11 +175,14 @@ dependencies {
 
     implementation(libs.miuix.core)
     implementation(libs.miuix.ui)
-    implementation(libs.miuix.shader)
+    implementation(libs.miuix.material)
     implementation(libs.miuix.blur)
+    implementation(libs.miuix.glass)
+    implementation(libs.miuix.glass.icons)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
     implementation(libs.miuix.squircle)
+    implementation(libs.material.color.utilities)
     implementation(libs.material.icons.extended)
 
     // ColorOS's pickup plugin (assets/coloros/pcr_plugin.apk) is loaded at runtime into a class
@@ -181,8 +191,15 @@ dependencies {
     // here for a caller nothing on our own classpath can see; see proguard-rules.pro, which has to
     // keep it for the same reason.
     implementation("com.google.code.gson:gson:2.11.0")
+    // One hidden framework method, ViewRootImpl.doTraversal (LyricWindow.drawFirst), which the
+    // hidden-API filter keeps out of reflection in SystemUI. Looked up through this rather than
+    // exempting the process, so nothing else in SystemUI sees a different policy. Apache-2.0.
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
 
     testImplementation("junit:junit:4.13.2")
+    // HandleStore is tested against the real hook-handle interface; compileOnly keeps it out of
+    // the APK, so the tests need their own copy.
+    testImplementation("io.github.libxposed:api:102.0.0")
     // The real org.json for the JVM tests: android.jar's is a stub (AmapTransitCardTest).
     testImplementation("org.json:json:20231013")
 }

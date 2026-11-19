@@ -11,13 +11,16 @@ public final class LyricLine {
     final String translation;
     /**
      * How the line is said in Latin letters - romaji, jyutping, a Korean romanisation - or null.
-     * Kept apart from the translation because it has a switch of its own (LockLyrics.sRoma);
+     * Kept apart from the translation because it has a switch of its own (Settings.LYRIC_ROMA);
      * drawn over it when both are on (under()).
      */
     final String roma;
     final int start;
     /** Not final: a background vocal hung under this line can outlast it, and extends it. */
     int end;
+    /** This singer's own timing survives attaching another singer to the layout row. */
+    final int voiceEnd;
+    final int highlightEnd;
     /** The second singer's line in a duet: drawn against the other edge. */
     final boolean opposite;
 
@@ -29,11 +32,54 @@ public final class LyricLine {
     final int[] sylEnd;
     final int[] charEnd;
 
+    enum Voice { LEAD, DUET, BACKING }
+
+    // A provider can return a paragraph containing only a backing vocal. It occupies a
+    // top-level layout slot, but its singer and colour still belong to the backing track.
+    private boolean backing;
+
+    LyricLine asBacking() {
+        backing = true;
+        return this;
+    }
+
+    Voice voice(boolean distinguishDuet) {
+        if (backing) return Voice.BACKING;
+        return distinguishDuet && opposite ? Voice.DUET : Voice.LEAD;
+    }
+
+    boolean oppositeSide(boolean distinguishDuet) {
+        return opposite && (distinguishDuet || backing);
+    }
+
+    private static final LyricLine[] NONE = new LyricLine[0];
+
     /**
-     * The background vocal sung over this line, if the file has one - drawn smaller underneath,
-     * with its own word timing. Null for most lines.
+     * The background vocals sung over this line, each drawn smaller underneath in turn, with its
+     * own word timing. Empty for most lines; a TTML line can carry several x-bg spans, and only
+     * keeping the first dropped the rest (PR #106). Never changed in place - addBackground
+     * replaces the array - so a copy of the line can share it.
      */
-    LyricLine bg;
+    private LyricLine[] backgrounds = NONE;
+
+    LyricLine[] backgrounds() {
+        return backgrounds;
+    }
+
+    /** Hangs a background vocal under this line; one that outlasts the line extends it. */
+    void addBackground(LyricLine b) {
+        LyricLine[] next = java.util.Arrays.copyOf(backgrounds, backgrounds.length + 1);
+        next[backgrounds.length] = b.asBacking();
+        backgrounds = next;
+        if (b.end > end) end = b.end;
+    }
+
+    /** The same background vocals as from, for a copy of it with other text. */
+    void copyBackgrounds(LyricLine from) {
+        backgrounds = from.backgrounds;
+        backing = from.backing;
+        end = Math.max(end, from.end);
+    }
 
     public LyricLine(String text, String translation, int start, int end, boolean opposite,
                      int[] sylStart, int[] sylEnd, int[] charEnd) {
@@ -42,21 +88,36 @@ public final class LyricLine {
 
     public LyricLine(String text, String translation, String roma, int start, int end,
                      boolean opposite, int[] sylStart, int[] sylEnd, int[] charEnd) {
-        this.text = text;
+        this.text = text == null ? "" : text;
         this.translation = translation == null || translation.trim().isEmpty()
                 ? null : translation.trim();
         this.roma = roma == null || roma.trim().isEmpty() ? null : roma.trim();
-        this.start = start;
-        // A database file is edited by hand; a line that ends before it starts is clamped here
-        // rather than trusted into a negative duration later.
-        this.end = Math.max(end, start);
         this.opposite = opposite;
         boolean words = sylStart != null && sylStart.length > 0
                 && sylEnd != null && sylEnd.length == sylStart.length
                 && charEnd != null && charEnd.length == sylStart.length;
-        this.sylStart = words ? sylStart : null;
-        this.sylEnd = words ? sylEnd : null;
-        this.charEnd = words ? charEnd : null;
+        // Character ranges the renderer would index past the text with, or run backwards over,
+        // leave the line line-timed: it still draws, just not word by word. Only that is checked
+        // here - times out of order are odd but drawable, and sungChars copes with them.
+        if (words) {
+            int previous = 0;
+            for (int k = 0; k < charEnd.length; k++) {
+                if (charEnd[k] < previous || charEnd[k] > this.text.length() || sylStart[k] < 0) {
+                    words = false;
+                    break;
+                }
+                previous = charEnd[k];
+            }
+        }
+        this.sylStart = words ? sylStart.clone() : null;
+        this.sylEnd = words ? sylEnd.clone() : null;
+        this.charEnd = words ? charEnd.clone() : null;
+        // A first word sung before the line's own start would be half filled by the time the
+        // line is lit; the line starts when its singing does.
+        this.start = words ? Math.min(Math.max(0, start), sylStart[0]) : Math.max(0, start);
+        // A database file is edited by hand; a line that ends before it starts is clamped here
+        // rather than trusted into a negative duration later.
+        this.end = Math.max(end, this.start);
         // A word-timed line is not over while its last word is still being sung, whatever end
         // the file reported. Most word-timed files give a line no end of its own - enhanced LRC
         // is a timestamp per word and nothing else - and lyrics-core reads the line's end off
@@ -65,7 +126,19 @@ public final class LyricLine {
         // this end and stops drawing the word path at it, so an end ahead of the last syllable
         // cuts its fill off mid-sweep: on a line whose next one starts within a second, the
         // last word gets no sweep at all and the line leaves just as it begins.
-        if (words) this.end = Math.max(this.end, sylEnd[sylEnd.length - 1]);
+        // Every word's end, not the last one's: times are not required to be in order.
+        int wordEnd = this.start;
+        if (words) for (int e : sylEnd) wordEnd = Math.max(wordEnd, e);
+        voiceEnd = this.end = Math.max(this.end, wordEnd);
+        highlightEnd = wordEnd > this.start ? wordEnd : voiceEnd;
+    }
+
+    boolean highlightsAt(int ms) {
+        return ms >= start && ms < highlightEnd;
+    }
+
+    int nextHighlightChange(int ms) {
+        return ms < start ? start : ms < highlightEnd ? highlightEnd : Integer.MAX_VALUE;
     }
 
     /**

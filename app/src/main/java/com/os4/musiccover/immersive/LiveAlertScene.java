@@ -1,4 +1,5 @@
 package com.os4.musiccover.immersive;
+import com.os4.musiccover.Gen;
 import com.os4.musiccover.Main;
 import com.os4.musiccover.PageSpring;
 import com.os4.musiccover.Xp;
@@ -164,16 +165,28 @@ public class LiveAlertScene implements ImmersiveScene {
         sv.setSurfaceLifecycle(SurfaceView.SURFACE_LIFECYCLE_FOLLOWS_ATTACHMENT);
         sv.setVisibility(View.INVISIBLE);
         sv.getHolder().setFormat(PixelFormat.TRANSLUCENT);
+        // The service can connect before this view has a window token. Retry at both
+        // attachment and surface creation: neither event is guaranteed to precede the other.
+        Gen.attachState(sv, new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View view) {
+                if (mSurface == view) sendBind();
+            }
+            @Override public void onViewDetachedFromWindow(View view) { }
+        });
         sv.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
+                if (mSurface != sv) return;
                 // A new surface starts opaque; a fade may be under way.
                 applyFade();
+                sendBind();
             }
 
             @Override
             public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+                if (mSurface != sv) return;
                 if (mBindSent) send(MSG_RESIZE, resizeData());
+                else sendBind();
             }
 
             @Override
@@ -181,9 +194,15 @@ public class LiveAlertScene implements ImmersiveScene {
             }
         });
         // Under the host's veil, which is the slot's last child.
-        slot.addView(sv, 0, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // Publish before addView: an already attached slot can attach the child synchronously.
         mSurface = sv;
+        try {
+            slot.addView(sv, 0, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        } catch (RuntimeException | Error failure) {
+            mSurface = null;
+            throw failure;
+        }
         bind();
     }
 
@@ -229,6 +248,7 @@ public class LiveAlertScene implements ImmersiveScene {
     private float mScaleTo = 1f;
     private android.animation.ValueAnimator mScaleAnim;
     private SurfaceControlViewHost.SurfacePackage mPackage;
+    private long mContrastSurfaceGeneration;
     private final SurfaceControl.Transaction mScaleTx = new SurfaceControl.Transaction();
 
     /** The scale follows the fade's direction, as the host's springs both start on one call. */
@@ -331,6 +351,66 @@ public class LiveAlertScene implements ImmersiveScene {
         }
     }
 
+    /** Borrowed handle and local size only; consumers must never release the scene's handle. */
+    public static final class ContrastSurface {
+        public final SurfaceControl control;
+        public final int width, height;
+        public final long generation;
+        ContrastSurface(SurfaceControl control, int width, int height, long generation) {
+            this.control = control;
+            this.width = width;
+            this.height = height;
+            this.generation = generation;
+        }
+    }
+
+    private static volatile java.lang.reflect.Method sContrastSurfaceAccessor;
+    private String mContrastSurfaceAccess = "pending";
+
+    /** Resolve the one hidden accessor on the sampler's worker, never on a rendering frame. */
+    public static void prepareContrastSurfaceAccess() throws ReflectiveOperationException {
+        if (sContrastSurfaceAccessor != null) return;
+        java.lang.reflect.Method method;
+        try { method = SurfaceControlViewHost.SurfacePackage.class.getMethod("getSurfaceControl"); }
+        catch (NoSuchMethodException hidden) {
+            method = org.lsposed.hiddenapibypass.HiddenApiBypass.getDeclaredMethod(
+                    SurfaceControlViewHost.SurfacePackage.class, "getSurfaceControl");
+        }
+        method.setAccessible(true);
+        sContrastSurfaceAccessor = method;
+    }
+
+    /** Read-only state without notification content or map coordinates. */
+    public String contrastSurfaceState() {
+        SurfaceView view = mSurface;
+        return "content=" + mContent + ",shown=" + mShown
+                + ",attached=" + (view != null && view.isAttachedToWindow())
+                + ",visible=" + (view != null && view.isShown())
+                + ",fade=" + Math.round(mFade * 100f) + ",scale=" + Math.round(mScale * 100f)
+                + ",size=" + (view == null ? "none" : view.getWidth() + "x" + view.getHeight())
+                + ",package=" + (mPackage != null) + ",accessor=" + (sContrastSurfaceAccessor != null)
+                + ",control=" + mContrastSurfaceAccess;
+    }
+
+    /** Main thread only: the remote app's subtree, excluding SystemUI glyphs and lyric overlays. */
+    public ContrastSurface contrastSurface() {
+        SurfaceView view = mSurface;
+        if (!mContent || !mShown || view == null || !view.isAttachedToWindow() || !view.isShown()
+                || mFade < 0.98f || Math.abs(mScale - 1f) > 0.01f) return null;
+        SurfaceControl control = null;
+        try {
+            java.lang.reflect.Method accessor = sContrastSurfaceAccessor;
+            if (accessor != null && mPackage != null) control = (SurfaceControl) accessor.invoke(mPackage);
+            mContrastSurfaceAccess = control == null ? "null" : control.isValid() ? "valid" : "invalid";
+        } catch (Throwable failure) {
+            Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+            mContrastSurfaceAccess = cause.toString().replace('\n', ' ').replace('\r', ' ');
+        }
+        if (control == null || !control.isValid() || view.getWidth() <= 0 || view.getHeight() <= 0)
+            return null;
+        return new ContrastSurface(control, view.getWidth(), view.getHeight(), mContrastSurfaceGeneration);
+    }
+
     /**
      * Both halves of the alpha: the view's, which SurfaceView carries onto its surface in its own
      * updates, and the SurfaceControl's directly, so the frame this is called in has it whether or
@@ -380,6 +460,7 @@ public class LiveAlertScene implements ImmersiveScene {
         mFade = 1f;
         stopScale();
         mPackage = null;
+        mContrastSurfaceGeneration++;
         mScale = 1f;
         mScaleTo = 1f;
         boolean had = mContent;
@@ -402,6 +483,8 @@ public class LiveAlertScene implements ImmersiveScene {
         mConn = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder service) {
+                // A late callback after release belongs to the retired view, not a new page.
+                if (mConn != this || mSurface == null) return;
                 mServer = new Messenger(service);
                 Xp.log(mTag + "connected");
                 sendBind();
@@ -409,6 +492,7 @@ public class LiveAlertScene implements ImmersiveScene {
 
             @Override
             public void onServiceDisconnected(ComponentName name) {
+                if (mConn != this) return;
                 mServer = null;
                 // The app's process died, and its page with it; what is left in the SurfaceView
                 // is the black layer behind it. Nothing comes back on its own: the app has to be
@@ -430,6 +514,9 @@ public class LiveAlertScene implements ImmersiveScene {
             Xp.log(mTag + "no host token yet");
             return;
         }
+        // Attachment may precede the first layout. Do not ask the remote app to build a
+        // zero-sized page; surfaceChanged will retry as soon as usable dimensions arrive.
+        if (width() <= 0 || height() <= 0) return;
         Bundle data = new Bundle();
         data.putBinder("hostToken", token);
         data.putBundle("extra", displayExtra());
@@ -438,7 +525,7 @@ public class LiveAlertScene implements ImmersiveScene {
     }
 
     /** The app's replies, on the main thread like the plugin's MsgReceiver. */
-    private final Messenger mReplyTo = new Messenger(new Handler(Looper.getMainLooper()) {
+    private final Messenger mReplyTo = new Messenger(Gen.watchHandler(new Handler(Looper.getMainLooper()) {
         @Override
         public void handleMessage(Message msg) {
             mReplies++;
@@ -459,6 +546,7 @@ public class LiveAlertScene implements ImmersiveScene {
             }
             mSurface.setChildSurfacePackage(pkg);
             mPackage = pkg;
+            mContrastSurfaceGeneration++;
             // A new page takes the scale the fade has it at.
             applyScale(mScale);
             boolean first = !mContent;
@@ -467,7 +555,7 @@ public class LiveAlertScene implements ImmersiveScene {
             onPage();
             if (first) ImmersiveHost.contentChanged(LiveAlertScene.this);
         }
-    });
+    }));
 
     /** A page came back (21): the first, or a new one after the app re-rendered. */
     protected void onPage() {

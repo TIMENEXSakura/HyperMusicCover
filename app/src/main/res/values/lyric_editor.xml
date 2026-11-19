@@ -1,0 +1,19 @@
+<resources>
+    <string name="lyric_editor_adjust_color">调整%1$s颜色</string>
+    <string name="lyric_editor_tap_hint">轻点锁屏中的歌词调整颜色</string>
+    <string name="lyric_editor_replay">预览逐词退场</string>
+    <!-- The separators mark the timed words of this sample. They never appear on screen. -->
+    <string name="lyric_editor_sample_lead">晚风|穿过|星光里的|街</string>
+    <string name="lyric_editor_sample_duet">我在|山的|那一边|回应</string>
+    <string name="lyric_editor_sample_backing">听见|你的|回声</string>
+    <string name="lyric_editor_sample_trans">"The breeze |crosses |a starlit |street"</string>
+    <string name="lyric_editor_sample_roman">"Wǎnfēng |chuānguò |xīngguāng lǐ de |jiē"</string>
+    <string name="lyric_editor_preview_only">当前仅预览效果。启用模块后可将调整应用到锁屏。</string>
+    <string name="lyric_editor_reset_summary">恢复所有声部的默认颜色？</string>
+    <string name="lyric_editor_duet_enabled">区分对唱</string>
+    <string name="lyric_editor_duet_summary">有对唱标记时，第二主唱使用独立的颜色和对齐方式。</string>
+    <string name="lyric_editor_duet_voice">第二主唱</string>
+    <string name="lyric_text_voice_size">%1$s字号</string>
+    <string name="lyric_text_voice_weight">%1$s字重</string>
+    <string name="lyric_text_voice_opacity">%1$s不透明度</string>
+</resources>

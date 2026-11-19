@@ -2,13 +2,10 @@ package com.os4.musiccover
 
 import com.os4.musiccover.app.AppNightMode
 import com.os4.musiccover.app.AppSettings
-import com.os4.musiccover.app.CreditsActivity
 import com.os4.musiccover.app.LaunchBackground
-import com.os4.musiccover.app.LicenseActivity
 import com.os4.musiccover.app.LocaleHelper
 import com.os4.musiccover.app.LsposedService
 import android.content.Context
-import android.content.Intent
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -26,11 +23,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -39,24 +38,28 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.os4.musiccover.ui.component.PagerNavigationSpringSpec
 import com.os4.musiccover.ui.component.liquid.IosLiquidGlassNavigationBar
-import com.os4.musiccover.ui.screen.about.AboutPageContent
 import com.os4.musiccover.updater.UpdateCheck
-import com.os4.musiccover.ui.screen.features.FeaturesPageView
 import com.os4.musiccover.ui.screen.home.HomePageView
 import com.os4.musiccover.ui.screen.settings.SettingsPageView
 import com.os4.musiccover.ui.theme.AppTheme
+import com.os4.musiccover.ui.util.LocalOs4Ui
+import com.os4.musiccover.ui.util.LocalPageBackdrop
 import com.os4.musiccover.ui.util.isInDarkTheme
+import com.os4.musiccover.ui.welcome.SplashIcon
+import com.os4.musiccover.ui.welcome.WelcomeScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Badge
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBarItem
 import top.yukonga.miuix.kmp.basic.FloatingToolbarDefaults
@@ -67,15 +70,17 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import top.yukonga.miuix.kmp.glass.GlassNavigationBar
+import top.yukonga.miuix.kmp.glass.GlassNavigationItem
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Home
-import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Settings
-import top.yukonga.miuix.kmp.icon.extended.Tune
+import top.yukonga.miuix.kmp.material.EdgeStrokes
+import top.yukonga.miuix.kmp.material.GlassDefaults
+import top.yukonga.miuix.kmp.material.edgeStroke
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.abs
@@ -90,6 +95,24 @@ class MainActivity : ComponentActivity() {
     /** Set once the first composition has run, so the splash can hand over to real content. */
     @Volatile
     private var uiReady = false
+
+    /**
+     * Where the system splash drew the app icon, read once as the splash goes away. The welcome
+     * page starts its own mark from there, so the hand-over does not jump; measured rather than
+     * assumed, because the platform draws that icon itself and a vendor can change where.
+     */
+    private val splashIcon = mutableStateOf<SplashIcon?>(null)
+
+    /**
+     * True once the system splash has actually gone. The welcome page waits for it instead of
+     * counting from the process start: the platform keeps the splash up past the icon animation,
+     * until the first frame is drawn and its own exit runs, so a timer started at launch played
+     * the page's entrance behind the splash and finished before it went.
+     */
+    private val splashGone = mutableStateOf<Boolean?>(null)
+
+    /** The platform splash object, kept only so the listener can be cleared on destroy. */
+    private var activitySplash: Any? = null
 
     /**
      * Bumped every time this activity comes back to the front, read as a `remember` key in
@@ -122,6 +145,19 @@ class MainActivity : ComponentActivity() {
         AppNightMode.apply(this, AppSettings.load(this).themeMode)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // The window usually takes the listener with it; clearing is for the times it does not
+        // (multi-window, a window kept alive past the activity). By reflection, like the rest of
+        // this: the type is SystemApi and not in the SDK this compiles against.
+        runCatching {
+            activitySplash?.let {
+                it.javaClass.getMethod("clearOnExitAnimationListener").invoke(it)
+            }
+        }
+        activitySplash = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         LsposedService.init(this)
@@ -141,9 +177,12 @@ class MainActivity : ComponentActivity() {
         // of this runs, so it can only be steered through the configuration. Normally a no-op -
         // it only does anything the first launch after the theme mode changes.
         AppNightMode.apply(this, savedSettings.themeMode)
-        // A config change (rotation, language) re-runs onCreate with no splash behind it,
-        // and holding a blank window then would be a delay the user just sees.
-        holdSplashUntilContentIsReady(splashIsShowing = savedInstanceState == null)
+        // A config change (rotation, language) re-runs onCreate with no splash behind it, but
+        // the hold only lasts until the composition is ready either way.
+        holdSplashUntilContentIsReady()
+        // Only a cold start has a splash to hand over; on a recreation the listener would wait
+        // for an exit that never comes, on a window that no longer exists.
+        if (savedInstanceState == null) readSplashIcon()
 
         setContent {
             // Re-read on the way back from the theme screen, which saves its own changes while
@@ -162,6 +201,17 @@ class MainActivity : ComponentActivity() {
             var isFloatingNavbar by remember(settingsEpoch) { mutableStateOf(settings.isFloatingNavbar) }
             var isLiquidGlass by remember(settingsEpoch) { mutableStateOf(settings.isLiquidGlass) }
             var isBlurEnabled by remember(settingsEpoch) { mutableStateOf(settings.isBlurEnabled) }
+            var useOs4Ui by remember(settingsEpoch) { mutableStateOf(settings.useOs4Ui) }
+            var welcomeShown by remember(settingsEpoch) { mutableStateOf(settings.welcomeShown) }
+            // Read once, not keyed on the epoch: a trip to Settings must not bring the page back
+            // by itself - only its own entry does that.
+            var showWelcome by remember { mutableStateOf(!settings.welcomeShown) }
+            // Whether this showing is the one that comes out of the splash: the first launch,
+            // and only then - not a replay from settings, not a recreation. Cleared when the
+            // page closes, so a later replay never flies the mark in from the old splash.
+            var welcomeFromSplash by remember {
+                mutableStateOf(!settings.welcomeShown && savedInstanceState == null)
+            }
 
             fun persistState() {
                 AppSettings.save(
@@ -171,12 +221,15 @@ class MainActivity : ComponentActivity() {
                         isFloatingNavbar = isFloatingNavbar,
                         isLiquidGlass = isLiquidGlass,
                         isBlurEnabled = isBlurEnabled,
+                        useOs4Ui = useOs4Ui,
+                        cardGlass = settings.cardGlass,
                         language = LocaleHelper.getSavedLanguage(this@MainActivity).code,
+                        welcomeShown = welcomeShown,
                     )
                 )
             }
 
-            AppTheme(themeMode = themeMode) {
+            AppTheme(themeMode = themeMode, useOs4Ui = useOs4Ui, cardGlass = settings.cardGlass) {
                 // What the pages actually draw on. Recording it here is what lets the next cold
                 // start paint the same colour before Compose exists - including the Monet modes
                 // and a theme forced against the system's.
@@ -191,19 +244,152 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     UpdateCheck.refresh(this@MainActivity)
                 }
-                MainScreen(
-                    themeMode = themeMode,
-                    isFloatingNavbar = isFloatingNavbar,
-                    isLiquidGlass = isLiquidGlass,
-                    isBlurEnabled = isBlurEnabled,
-                    resumeKey = settingsEpoch,
-                    onThemeModeChange = { themeMode = it; persistState() },
-                    onFloatingNavbarChange = { isFloatingNavbar = it; persistState() },
-                    onLiquidGlassChange = { isLiquidGlass = it; persistState() },
-                    onBlurEnabledChange = { isBlurEnabled = it; persistState() },
-                )
+                Box(Modifier.fillMaxSize()) {
+                    MainScreen(
+                        themeMode = themeMode,
+                        isFloatingNavbar = isFloatingNavbar,
+                        isLiquidGlass = isLiquidGlass,
+                        isBlurEnabled = isBlurEnabled,
+                        resumeKey = settingsEpoch,
+                        onThemeModeChange = { themeMode = it; persistState() },
+                        onFloatingNavbarChange = { isFloatingNavbar = it; persistState() },
+                        onLiquidGlassChange = { isLiquidGlass = it; persistState() },
+                        onBlurEnabledChange = { isBlurEnabled = it; persistState() },
+                        onShowWelcome = {
+                            welcomeFromSplash = false
+                            showWelcome = true
+                        },
+                    )
+                    // Over the home page rather than instead of it: the way out is the button
+                    // opening a circle onto what is already drawn underneath.
+                    if (showWelcome) {
+                        WelcomeScreen(
+                            splashIcon = splashIcon.value,
+                            splashGone = { splashGone.value },
+                            fromSplash = welcomeFromSplash,
+                            onDone = {
+                                welcomeShown = true
+                                welcomeFromSplash = false
+                                persistState()
+                                showWelcome = false
+                            },
+                        )
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * Takes over the splash's exit: reads the icon's place and size off the splash view, lets
+     * the composition see them, and only then lets the splash go. Past API 31 the splash hands
+     * its view out here instead of animating itself away.
+     */
+    private fun readSplashIcon() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        try {
+            // Built at run time: R8 rewrites constant Class.forName arguments into this app's
+            // own obfuscated names (see the module's notes on the same trap).
+            //
+            // From Android 15 the splash is an object reached through the activity -
+            // Activity.getSplashScreen() - and its listener is a method on that object; the old
+            // static SplashScreen.setOnExitAnimationListener(Window, listener) is gone, which is
+            // why asking for it threw NoSuchMethodException.
+            val activityClass = Class.forName(listOf("android", "app", "Activity").joinToString("."))
+            val splash = activityClass.getMethod("getSplashScreen").invoke(this) ?: return
+            activitySplash = splash
+            val splashClass = Class.forName(listOf("android", "window", "SplashScreen").joinToString("."))
+            // The listener is a nested interface: its binary name uses a dollar, not a dot.
+            val listenerClass = Class.forName(splashClass.name + "\$OnExitAnimationListener")
+            // The platform hands its splash view over here instead of animating it away. Both
+            // the listener and the provider are SystemApi: present at run time, missing from the
+            // public SDK that this compiles against.
+            val listener = java.lang.reflect.Proxy.newProxyInstance(
+                listenerClass.classLoader,
+                arrayOf(listenerClass),
+            ) { _, method, args ->
+                if (method.name == "onSplashScreenExit" && args != null && args.isNotEmpty()) {
+                    android.util.Log.i(SPLASH_LOG, "splash exit callback")
+                    // The argument is the splash's own view; its icon is asked for directly. On
+                    // a cold start the first frame can be asked before the icon has been laid
+                    // out, so an empty answer is retried a frame later.
+                    val splashView = args[0] as? View ?: return@newProxyInstance null
+                    var attempts = 0
+                    fun take() {
+                        val icon = runCatching {
+                            splashView.javaClass.getMethod("getIconView").invoke(splashView) as? View
+                        }.getOrNull()
+                        if ((icon == null || icon.width <= 0) && attempts < 3) {
+                            attempts++
+                            window.decorView.postDelayed({ take() }, 16)
+                            return
+                        }
+                        if (icon != null && icon.width > 0) {
+                            val at = IntArray(2)
+                            icon.getLocationOnScreen(at)
+                            android.util.Log.i(
+                                SPLASH_LOG,
+                                "icon w=${icon.width} h=${icon.height} at=${at[0]},${at[1]} (attempts=$attempts)",
+                            )
+                            splashIcon.value = SplashIcon(
+                                centerX = at[0] + icon.width / 2f,
+                                centerY = at[1] + icon.height / 2f,
+                                size = icon.width.toFloat(),
+                            )
+                        }
+                        // One frame for the welcome page to take the new place before the splash
+                        // goes, so the mark is never drawn in the wrong spot.
+                        window.decorView.postDelayed({
+                            val removed = runCatching { splashView.javaClass.getMethod("remove").invoke(splashView) }
+                            android.util.Log.i(SPLASH_LOG, "splash exit: removed=$removed")
+                            // The view letting go of the window is the splash going, and it is
+                            // what the page starts on. remove() takes effect on the next frame
+                            // or two - measured at 27ms - so there is nothing to wait for past
+                            // that. A fixed wait after remove() (300ms was tried) only left
+                            // the mark standing still on an empty screen before it flew.
+                            val removedAt = SystemClock.uptimeMillis()
+                            val done = object : Runnable {
+                                override fun run() {
+                                    val elapsed = SystemClock.uptimeMillis() - removedAt
+                                    // Not for ever: a view that never detaches would hold the
+                                    // page still for the rest of the launch.
+                                    if (splashView.isAttachedToWindow &&
+                                        elapsed < SPLASH_DETACH_MAX_MS
+                                    ) {
+                                        window.decorView.postDelayed(this, 16)
+                                        return
+                                    }
+                                    android.util.Log.i(SPLASH_LOG, "splash gone after ${elapsed}ms")
+                                    splashGone.value = true
+                                }
+                            }
+                            window.decorView.postDelayed(done, 16)
+                        }, 32)
+                    }
+                    take()
+                }
+                null
+            }
+            splashClass
+                .getMethod("setOnExitAnimationListener", listenerClass)
+                .invoke(splash, listener)
+            // There is a splash and it is being waited for. Without this the state stays null,
+            // which reads as "no signal" and lets the entrance play behind the splash.
+            splashGone.value = false
+        } catch (e: Throwable) {
+            // No listener: the splash goes by itself and the welcome page starts from the
+            // platform's own numbers instead - splashGone stays null, which the page reads as
+            // "no signal".
+            android.util.Log.w(SPLASH_LOG, "splash listener unavailable", e)
+        }
+        // The listener is the signal. This is only for a platform that takes the listener and
+        // never calls it, which would otherwise leave the page waiting for ever.
+        window.decorView.postDelayed({
+            if (splashGone.value != true) {
+                android.util.Log.w(SPLASH_LOG, "splash listener never fired; falling back")
+                splashGone.value = true
+            }
+        }, SPLASH_GONE_TIMEOUT_MS)
     }
 
     /**
@@ -215,20 +401,14 @@ class MainActivity : ComponentActivity() {
      * The timeout is the escape hatch: a launch must never be held hostage by a composition that
      * is slower than expected, so past it the window is shown with whatever it has.
      */
-    private fun holdSplashUntilContentIsReady(splashIsShowing: Boolean) {
+    private fun holdSplashUntilContentIsReady() {
         val content = findViewById<View>(android.R.id.content)
-        val start = SystemClock.uptimeMillis()
-        // Compose is usually ready before the record has finished spinning. Handing over then
-        // would cut the icon animation off mid-turn, so the splash also stays for as long as the
-        // animation lasts - it is the whole point of having drawn one.
-        val minimumHold = if (splashIsShowing) SPLASH_ANIMATION_MS else 0L
         content.viewTreeObserver.addOnPreDrawListener(
             object : ViewTreeObserver.OnPreDrawListener {
                 override fun onPreDraw(): Boolean {
                     // Cancelling the draw makes ViewRootImpl schedule another traversal, so this
-                    // re-asks every frame on its own until both conditions hold.
+                    // re-asks every frame on its own until the condition holds.
                     if (!uiReady) return false
-                    if (SystemClock.uptimeMillis() - start < minimumHold) return false
                     content.viewTreeObserver.removeOnPreDrawListener(this)
                     return true
                 }
@@ -238,9 +418,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        /** Matches windowSplashScreenAnimationDuration in themes.xml. */
-        const val SPLASH_ANIMATION_MS = 700L
         const val SPLASH_HOLD_MAX_MS = 1500L
+
+        /** How long to wait for a splash listener that was accepted but never called. */
+        const val SPLASH_GONE_TIMEOUT_MS = 2000L
+
+        const val SPLASH_LOG = "HMC-Splash"
+
+        /** The longest wait for the splash view to leave the window on its own. */
+        const val SPLASH_DETACH_MAX_MS = 1000L
     }
 }
 
@@ -255,23 +441,35 @@ private fun MainScreen(
     onFloatingNavbarChange: (Boolean) -> Unit,
     onLiquidGlassChange: (Boolean) -> Unit,
     onBlurEnabledChange: (Boolean) -> Unit,
+    onShowWelcome: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val pagerState = rememberPagerState(pageCount = { 4 })
+    val pagerState = rememberPagerState(pageCount = { 2 })
     var selectedIndex by remember { mutableIntStateOf(0) }
     var isNavigating by remember { mutableStateOf(false) }
     var navJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
     val items = listOf(
         stringResource(R.string.tab_home),
-        stringResource(R.string.tab_features),
         stringResource(R.string.tab_settings),
-        stringResource(R.string.tab_about),
     )
-    val icons = listOf(MiuixIcons.Home, MiuixIcons.Tune, MiuixIcons.Settings, MiuixIcons.Info)
+    val icons = listOf(MiuixIcons.Home, MiuixIcons.Settings)
+
+    // The settings tab carries a dot while a release is waiting. The check runs once when the
+    // app starts (see below); this only picks up its answer. `UpdateCheck.result` is a plain
+    // volatile field rather than Compose state, so an answer that lands after this composed is
+    // polled for, bounded, and the poll also stops once a check has been recorded either way.
+    var hasUpdate by remember { mutableStateOf(UpdateCheck.result != null) }
+    LaunchedEffect(resumeKey) {
+        hasUpdate = UpdateCheck.result != null
+        repeat(120) {
+            if (hasUpdate || UpdateCheck.isFresh()) return@LaunchedEffect
+            delay(500)
+            hasUpdate = UpdateCheck.result != null
+        }
+    }
 
     /**
-     * One flag per page rather than one counter shared by all four.
+     * One flag per page rather than one counter shared by all of them.
      *
      * The pages re-ask the module when they come to the front, and a single counter bumped on
      * every tab change made that *every* page: a tap re-composed and re-queried the pages nobody
@@ -285,9 +483,7 @@ private fun MainScreen(
      * otherwise every page is unskippable and the split buys nothing.
      */
     val onHomePage = remember { derivedStateOf { pagerState.currentPage == 0 } }
-    val onAboutPage = remember { derivedStateOf { pagerState.currentPage == 3 } }
     val isHomeCurrent: () -> Boolean = remember(onHomePage) { { onHomePage.value } }
-    val isAboutCurrent: () -> Boolean = remember(onAboutPage) { { onAboutPage.value } }
 
     LaunchedEffect(pagerState.currentPage) {
         if (!isNavigating && selectedIndex != pagerState.currentPage) {
@@ -296,6 +492,11 @@ private fun MainScreen(
     }
 
     val surfaceColor = MiuixTheme.colorScheme.surface
+    // OS4 records this whether the blur switch is on or not: the glass bars have nothing to
+    // sample otherwise, and the switch only governs the OS3 chrome. OS3 keeps the old gate,
+    // where recording with blur off was a second render nobody read.
+    val os4 = LocalOs4Ui.current
+    val backdropActive = isBlurEnabled || os4
     val backdrop = rememberLayerBackdrop {
         drawRect(surfaceColor)
         drawContent()
@@ -354,6 +555,7 @@ private fun MainScreen(
                 selectedIndex = selectedIndex,
                 backdrop = backdrop,
                 blurActive = isBlurEnabled,
+                showSettingsBadge = hasUpdate,
                 onItemSelected = { index -> goToPage(index) },
             )
         }
@@ -365,43 +567,36 @@ private fun MainScreen(
                 // Gated on the setting, not just on the bar that samples it. Recording a layer
                 // is a second render of everything inside it, and with blur off nothing was
                 // reading this one - the bar had already switched to its opaque colour.
-                .then(if (isBlurEnabled) Modifier.layerBackdrop(backdrop) else Modifier)
+                .then(if (backdropActive) Modifier.layerBackdrop(backdrop) else Modifier)
                 .background(surfaceColor)
         ) {
-            HorizontalPager(
-                state = pagerState,
-                beyondViewportPageCount = 1,
-                overscrollEffect = null,
-                modifier = Modifier.fillMaxSize(),
-            ) { page ->
-                when (page) {
-                    0 -> HomePageView(
-                        isBlurEnabled = isBlurEnabled,
-                        isCurrent = isHomeCurrent,
-                        resumeKey = resumeKey,
-                        extraBottomPadding = navBarHeight,
-                    )
+            // The fallback page for anything drawn inside the pager that records no backdrop
+            // of its own (the pages under PageScaffold provide their own): its dialogs still
+            // get something to sample, and the root popup host lives outside this recording,
+            // so a dialog never samples itself.
+            CompositionLocalProvider(
+                LocalPageBackdrop provides backdrop.takeIf { backdropActive },
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    beyondViewportPageCount = 1,
+                    overscrollEffect = null,
+                    modifier = Modifier.fillMaxSize(),
+                ) { page ->
+                    when (page) {
+                        0 -> HomePageView(
+                            isBlurEnabled = isBlurEnabled,
+                            isCurrent = isHomeCurrent,
+                            resumeKey = resumeKey,
+                            extraBottomPadding = navBarHeight,
+                        )
 
-                    1 -> FeaturesPageView(
-                        isBlurEnabled = isBlurEnabled,
-                        extraBottomPadding = navBarHeight,
-                    )
-
-                    2 -> SettingsPageView(
-                        isBlurEnabled = isBlurEnabled,
-                        extraBottomPadding = navBarHeight,
-                    )
-
-                    3 -> AboutPageContent(
-                        openLicensePage = {
-                            context.startActivity(Intent(context, LicenseActivity::class.java))
-                        },
-                        openCreditsPage = {
-                            context.startActivity(Intent(context, CreditsActivity::class.java))
-                        },
-                        isBlurEnabled = isBlurEnabled,
-                        isCurrent = isAboutCurrent,
-                    )
+                        1 -> SettingsPageView(
+                            isBlurEnabled = isBlurEnabled,
+                            extraBottomPadding = navBarHeight,
+                            onShowWelcome = onShowWelcome,
+                        )
+                    }
                 }
             }
         }
@@ -416,21 +611,53 @@ private fun BottomNavigationBar(
     selectedIndex: Int,
     backdrop: LayerBackdrop?,
     blurActive: Boolean,
+    showSettingsBadge: Boolean,
     onItemSelected: (Int) -> Unit,
 ) {
+    // The settings tab is always the last one, which is what the update dot hangs on.
+    val settingsTab = items.lastIndex
+    val badge: (@Composable () -> Unit)? =
+        if (showSettingsBadge) ({ Badge() }) else null
+
+    // miuix's demo lets the floating capsule bars size themselves and leaves the standard bar to
+    // its container. With four tabs the capsule bars gave each tab the width the demo shows; with
+    // two it doubles it, so the capsules are given the width they had and centred instead of
+    // stretched. The standard bar stays full width - it is a surface, not a capsule.
+    val liquidWidth = (items.size * 74).dp + 96.dp
+
+    // In OS4 the bar is glass, whatever the OS3 trio was set to. Those settings stay stored,
+    // untouched, and come back with the OS3 interface.
+    if (LocalOs4Ui.current) {
+        BottomNavigationBarOs4(
+            items = items,
+            icons = icons,
+            selectedIndex = selectedIndex,
+            backdrop = backdrop,
+            showSettingsBadge = showSettingsBadge,
+            onItemSelected = onItemSelected,
+        )
+        return
+    }
+
     when (mode) {
         2 -> {
             val navigationItems = remember(items, icons) {
                 List(items.size) { i -> NavigationItem(items[i], icons[i]) }
             }
-            IosLiquidGlassNavigationBar(
-                modifier = Modifier.padding(horizontal = 12.dp),
-                items = navigationItems,
-                selectedIndex = selectedIndex,
-                onItemClick = onItemSelected,
-                backdrop = backdrop,
-                isBlurActive = blurActive,
-            )
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                IosLiquidGlassNavigationBar(
+                    modifier = Modifier.width(liquidWidth),
+                    items = navigationItems,
+                    selectedIndex = selectedIndex,
+                    onItemClick = onItemSelected,
+                    backdrop = backdrop,
+                    isBlurActive = blurActive,
+                    badge = { index -> if (index == settingsTab) badge else null },
+                )
+            }
         }
 
         1 -> {
@@ -438,8 +665,8 @@ private fun BottomNavigationBar(
                 if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surfaceContainer
             val floatingBarShape = RoundedCornerShape(FloatingToolbarDefaults.CornerRadius)
             val isDark = isInDarkTheme()
-            val floatingHighlight = remember(isDark) {
-                if (isDark) Highlight.GlassStrokeMiddleDark else Highlight.GlassStrokeMiddleLight
+            val floatingStroke = remember(isDark) {
+                if (isDark) EdgeStrokes.MiddleDark else EdgeStrokes.MiddleLight
             }
             FloatingNavigationBar(
                 modifier = if (blurActive && backdrop != null) {
@@ -452,8 +679,7 @@ private fun BottomNavigationBar(
                                 BlendColorEntry(color = MiuixTheme.colorScheme.surfaceContainer.copy(0.4f)),
                             ),
                         ),
-                        highlight = floatingHighlight,
-                    )
+                    ).edgeStroke(floatingBarShape, floatingStroke)
                 } else {
                     Modifier
                 },
@@ -465,13 +691,17 @@ private fun BottomNavigationBar(
                         onClick = { onItemSelected(index) },
                         icon = icons[index],
                         label = label,
-                        enabled = true
+                        enabled = true,
+                        badge = if (index == settingsTab) badge else null,
                     )
                 }
             }
         }
 
         else -> {
+            // The standard bar is a full-width surface under the page, not a floating capsule:
+            // narrowing it left the blur and the colour only under the two tabs and the page
+            // showing through on either side. It keeps its width and stretches its two tabs.
             val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
             Box(
                 modifier = Modifier
@@ -505,11 +735,54 @@ private fun BottomNavigationBar(
                             onClick = { onItemSelected(index) },
                             icon = icons[index],
                             label = label,
-                            enabled = true
+                            enabled = true,
+                            badge = if (index == settingsTab) badge else null,
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * The OS4 bar: a floating glass capsule sampling the page behind it.
+ *
+ * The insets and the floating margin are the bar's own (defaultWindowInsetsPadding), so the
+ * height the Scaffold hands the pages includes them and the lists stop above it. Doing that
+ * here and not around it keeps one source for the gap under the content.
+ */
+@Composable
+private fun BottomNavigationBarOs4(
+    items: List<String>,
+    icons: List<androidx.compose.ui.graphics.vector.ImageVector>,
+    selectedIndex: Int,
+    backdrop: LayerBackdrop?,
+    showSettingsBadge: Boolean,
+    onItemSelected: (Int) -> Unit,
+) {
+    val settingsTab = items.lastIndex
+    val glassItems = remember(items, icons, showSettingsBadge) {
+        List(items.size) { i ->
+            GlassNavigationItem(
+                icon = icons[i],
+                label = items[i],
+                badge = if (showSettingsBadge && i == settingsTab) ({ Badge() }) else null,
+            )
+        }
+    }
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        GlassNavigationBar(
+            items = glassItems,
+            selectedIndex = selectedIndex,
+            onSelect = onItemSelected,
+            backdrop = backdrop,
+            // The demo's four-tab bar: 8dp of content padding each side plus 84dp a tab.
+            modifier = Modifier.width((items.size * 84).dp + 16.dp),
+            style = GlassDefaults.style(isInDarkTheme()),
+        )
     }
 }

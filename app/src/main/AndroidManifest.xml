@@ -18,6 +18,12 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
+        <!-- 指纹快捷功能's app picker: the launchable apps, with their names and icons. -->
+        <package android:name="com.android.systemui" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <!-- Whether a lyric provider module is installed, for the notice on the lyrics page.
              Declared because package visibility is filtered from Android 11 on: without this the
              lookup throws NameNotFound even when the package is there. -->
@@ -98,6 +104,14 @@
             </intent-filter>
         </receiver>
 
+        <!-- The About page, opened from its card at the bottom of the settings page. It used to
+             be the pager's fourth tab; declared like every other sub-screen above. -->
+        <activity
+            android:name=".app.AboutActivity"
+            android:exported="false"
+            android:label="@string/tab_about"
+            android:theme="@style/Theme.HyperMusicCover" />
+
         <activity
             android:name=".app.LicenseActivity"
             android:exported="false"
@@ -120,6 +134,13 @@
             android:label="@string/features_cover_title"
             android:theme="@style/Theme.HyperMusicCover" />
 
+        <!-- 歌词外观, opened from the cover screen's lyrics tab. -->
+        <activity
+            android:name=".app.LyricStyleActivity"
+            android:exported="false"
+            android:label="@string/lyrics_style_title"
+            android:theme="@style/Theme.HyperMusicCover" />
+
         <activity
             android:name=".app.ShadeActivity"
             android:exported="false"
@@ -136,6 +157,24 @@
             android:name=".app.TransitActivity"
             android:exported="false"
             android:label="@string/features_transit_title"
+            android:theme="@style/Theme.HyperMusicCover" />
+
+        <activity
+            android:name=".app.FpQuickActivity"
+            android:exported="false"
+            android:label="@string/features_fpquick_title"
+            android:theme="@style/Theme.HyperMusicCover" />
+
+        <activity
+            android:name=".app.FpAppPickActivity"
+            android:exported="false"
+            android:label="@string/fpquick_pick_app"
+            android:theme="@style/Theme.HyperMusicCover" />
+
+        <activity
+            android:name=".app.FpShortcutPickActivity"
+            android:exported="false"
+            android:label="@string/fpquick_pick_shortcut"
             android:theme="@style/Theme.HyperMusicCover" />
 
         <!-- The theme settings, opened from the settings page's interface section. Declared like

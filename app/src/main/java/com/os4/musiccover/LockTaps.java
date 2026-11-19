@@ -1,5 +1,9 @@
 package com.os4.musiccover;
 
+import com.os4.musiccover.clock.ClockViews;
+
+import com.os4.musiccover.card.CardTouch;
+import com.os4.musiccover.card.MediaCard;
 import com.os4.musiccover.island.MiniPlayerRuntime;
 import java.util.List;
 import com.os4.musiccover.immersive.ImmersiveHost;
@@ -57,7 +61,7 @@ public final class LockTaps {
     static void feedTap(MotionEvent ev) {
         if (ev == null) return;
         feedTwoFingerTap(ev);
-        if (!Main.sTapToggle) return;
+        if (!Settings.TAP_TOGGLE.on()) return;
         // A gesture the system took away is never going to produce the second tap.
         if (ev.getActionMasked() == MotionEvent.ACTION_CANCEL) {
             cancelPendingTap("gesture cancelled");
@@ -241,7 +245,7 @@ public final class LockTaps {
      * ours, and every double tap the framework itself did not recognise as one.
      */
     static void armLockTap(final float y) {
-        if (!Main.sTapToggle) return;
+        if (!Settings.TAP_TOGGLE.on()) return;
         // Decided at the DOWN, because by the time this runs the centre - or the charging
         // animation - may have closed under the guard in onLockTap. See the dispatch hook for
         // the full account.
@@ -294,7 +298,7 @@ public final class LockTaps {
      * this device has simply not taken yet.
      */
     static void onLockTap(float y) {
-        if (!Main.sTapToggle) return;
+        if (!Settings.TAP_TOGGLE.on()) return;
         if (!Main.screenOn() || !Main.keyguardShowing()) return;
         // Only the keyguard shows the clock container, so this is also what rules out the shade
         // being pulled down over an unlocked phone - the same test the card restyle uses.
@@ -348,7 +352,7 @@ public final class LockTaps {
         try {
             Class<?> shade = Xp.findClass(
                     "com.android.systemui.shade.NotificationShadeWindowView", cl);
-            Xp.hookAll(shade, "dispatchTouchEvent", chain -> {
+            Xp.hookAll("sysui.taps.shade_dispatch", shade, "dispatchTouchEvent", chain -> {
                 MotionEvent ev = null;
                 try {
                     java.util.List<Object> a = chain.getArgs();
@@ -380,20 +384,17 @@ public final class LockTaps {
                         ChargeAnim.sGestureOnCharge = ChargeAnim.chargeAnimUp();
                         if (ChargeAnim.sGestureOnCharge) cancelPendingTap("gesture began on the charging animation");
                     }
-                    // A tap on the open immersive page's own target in its row - 高德's turn
-                    // arrow - is the page's, and the row must not see it. See
-                    // ImmersiveHost.routeTouch.
-                    try {
-                        if (ImmersiveHost.routeTouch(ev)) return Boolean.TRUE;
-                    } catch (Throwable ignored) {
-                    }
-                    // The one case this hook does more than watch. Returning true without
-                    // proceeding takes the gesture out of the dispatch entirely, which is the
-                    // only way the artwork can mean something other than "open the player".
-                    // A gesture that starts on the mini player is the mini player's alone: its
-                    // swipe up would otherwise also be swipe-to-unlock.
+                    // Visible capsules own their whole gesture before any underlying row/page.
+                    // Their body policy and child playback controls must not fall into the
+                    // notification or immersive-page tap handler underneath them.
                     try {
                         if (MiniPlayerRuntime.routeTouch(ev)) return Boolean.TRUE;
+                    } catch (Throwable error) {
+                        Xp.w(Main.TAG + "capsule touch failed: " + error);
+                        if (MiniPlayerRuntime.cancelOwnedTouch()) return Boolean.TRUE;
+                    }
+                    try {
+                        if (ImmersiveHost.routeTouch(ev)) return Boolean.TRUE;
                     } catch (Throwable ignored) {
                     }
                     // A downward swipe on the media card folds it back into the mini player. Seen
