@@ -63,7 +63,8 @@ def collect():
     else:
         raise TimeoutError("HWUI did not commit and capture the full exit sequence")
     meta = json.loads((OUT / "capture.json").read_bytes())
-    for name in ["background", "reference", "clip-fade", *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
+    for name in ["background", "reference", "clip-fade", "blur-soft", "blur-wide",
+                 *(f"step-{i:02d}" for i in range(meta["steps"] + 1))]:
         result = app_file(name + ".png")
         if result.returncode or not result.stdout.startswith(b"\x89PNG"):
             raise RuntimeError(f"Missing PixelCopy frame {name}")
@@ -157,6 +158,16 @@ def analyse():
                / (255 - background[top:top + feather + 10, sample])).mean(axis=(1, 2))
     assert opacity[0] < .03 and .35 < opacity[feather // 2] < .78
     assert np.min(np.diff(opacity)) >= -.02 and opacity[-1] > .99, "Viewport feather lacks a smooth ramp"
+
+    # Same command stream at two radii on a real RenderNode. A wider effect must spread more
+    # ink out of the original glyph's bounds without moving its centre or affecting the backdrop.
+    soft, wide = rgb("blur-soft"), rgb("blur-wide")
+    rim = (slice(310, 330), slice(130, 136))
+    soft_rim = float((soft[rim] - background[rim]).mean())
+    wide_rim = float((wide[rim] - background[rim]).mean())
+    assert wide_rim > soft_rim + 8, (soft_rim, wide_rim)
+    assert wide[320, 156].mean() > background[320, 156].mean() + 100
+    matching_pixels(wide[:, :70], background[:, :70], "Blur affected adjacent backdrop")
     # Build an overview directly from the captured PNGs, without redrawing the Android text.
     indices = (0, 2, 4, 6, 8)
     strip = Image.new("RGB", (216 * len(indices), 334), "#121622")
@@ -169,7 +180,8 @@ def analyse():
     (OUT / "verified.json").write_text(json.dumps({"renderer": "Android HWUI / Window PixelCopy",
         "fixture": "Frozen multi-line StaticLayout display list through production LyricPageExitMask.draw",
         "halfFadeFrames": halves, "rows": metrics,
-        "clipOpacity": [float(opacity[i]) for i in (0, feather // 2, len(opacity) - 1)]}, indent=2))
+        "clipOpacity": [float(opacity[i]) for i in (0, feather // 2, len(opacity) - 1)],
+        "blurRimInk": [soft_rim, wide_rim]}, indent=2))
     print("Verified top-to-bottom wipe and stationary visible glyphs", halves, flush=True)
 
 

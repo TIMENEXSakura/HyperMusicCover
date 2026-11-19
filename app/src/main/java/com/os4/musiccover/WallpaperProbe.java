@@ -1451,7 +1451,7 @@ public class WallpaperProbe {
                             if (fade && from != null && to != null) {
                                 sLeaveAt = SystemClock.uptimeMillis();
                                 sLeaveMs = sFadeMs;
-                                WallpaperFade.startFade(from, to, new Runnable() {
+                                WallpaperFade.startExitFade(from, to, new Runnable() {
                                     @Override
                                     public void run() {
                                         // Kept when a cover is already on its way: it arrives

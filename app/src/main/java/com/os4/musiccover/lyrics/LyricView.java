@@ -15,7 +15,6 @@ import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Bitmap;
-import android.graphics.BlurMaskFilter;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.SystemClock;
@@ -104,7 +103,6 @@ final class LyricView extends View {
     /** A band shorter than this many rows of text is not worth showing lyrics in. */
     private static final float MIN_BAND_ROWS = 2.4f;
     // ---- depth
-    private static final int BLUR_MAX_ROWS = LyricDepth.LEVELS;
     private static final float TAU_BLUR_IN = 0.18f;
     private static final float TAU_BLUR_OUT = 0.07f;
     /**
@@ -116,7 +114,6 @@ final class LyricView extends View {
     private static final int HDR_ARM_MS = 250;
     private static final android.graphics.ColorSpace EXTENDED =
             android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.EXTENDED_SRGB);
-    private static final float BLUR_ALPHA_PER_DP = 0.12f;
 
     // ---- words
     /** How far a syllable rises as it is sung. */
@@ -217,7 +214,6 @@ final class LyricView extends View {
     private LyricAppearance appearance;
     private final LyricContrastState navigationContrast = new LyricContrastState();
     private final LyricNavigationColor navigationColor = new LyricNavigationColor();
-    private final float[] navigationMatrix = new float[20];
     /** Zero leaves the saved appearance in control; otherwise pure black or pure white. */
     private int navigationInk;
     private String navigationSource;
@@ -226,9 +222,7 @@ final class LyricView extends View {
     private int baseMainDim = -1, baseMainLit = -1, baseBgDim = -1, baseBgLit = -1;
     private int baseTranslation = -1, translationDim = -1, translationLit = -1;
     private int baseTranslationLit = -1;
-    private volatile int blurGeneration;
     /** Most recently queued focus, read by the worker to bound texture preparation. */
-    private volatile int blurWarmFocus = -1;
     private final Matrix gradMatrix = new Matrix();
     private final LinearGradient[] grads = new LinearGradient[3];
     private final long[] gradHi = {-1L, -1L, -1L}, gradLo = {-1L, -1L, -1L};
@@ -269,9 +263,9 @@ final class LyricView extends View {
      * 0, 2, 3 - so every line change threw pictures away that the next one asked for again: a
      * dozen blurs, bitmaps and texture uploads landing in the middle of every scroll.
      */
-    private Bitmap[][] blurBmp = new Bitmap[0][];
+    private LyricRenderBlur[] rowEffects = new LyricRenderBlur[0];
+    private final android.graphics.Rect rowClip = new android.graphics.Rect();
     /** Pictures asked of the blur thread and not back yet, as line * 8 + distance. */
-    private final java.util.HashMap<Integer, BlurJob> blurPending = new java.util.HashMap<>();
     /** Bumped by every rebuild, so a picture made for the previous layout is thrown away. */
     private volatile int buildGen;
     private LyricGlowMask[] glowMasks = new LyricGlowMask[0];
@@ -298,9 +292,6 @@ final class LyricView extends View {
     /** Diagnostics: how long the last layout took on its thread. */
     private long layoutMs;
     /** From this distance on the blur is wide enough to be made at a quarter of the resolution. */
-    private static final int BLUR_QUARTER_ROWS = 3;
-    private final android.graphics.RectF bmpDst = new android.graphics.RectF();
-    private final Paint bmpPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
 
     // ---- per-line animated state
     private float[] scroll = new float[0];
@@ -459,7 +450,7 @@ final class LyricView extends View {
         density = getResources().getDisplayMetrics().density;
         liftPx = LIFT_DP * density;
         glowPx = GLOW_DP * density;
-        blurPad = (int) Math.ceil(LyricDepth.radius(BLUR_MAX_ROWS) * density * 2f);
+        blurPad = (int) Math.ceil(LyricDepth.radius(LyricDepth.LEVELS) * density * 2f);
         paint.setColor(0xFFFFFFFF);
         transPaint.setColor(0xFFFFFFFF);
         bgPaint.setColor(0xFFFFFFFF);
@@ -624,16 +615,14 @@ final class LyricView extends View {
         overflowMoving = false;
         navigationContrast.clear();
         navigationColor.clear();
-        bmpPaint.setColorFilter(null);
         navigationInk = 0;
         navigationSource = null;
         // In-flight bitmap jobs can finish after this view leaves the keyguard. Invalidate
         // their generation before they post a result into a retired or detached view.
-        blurGeneration++;
-        blurPending.clear();
         glowGeneration++;
         glowWarmFocus = Integer.MIN_VALUE;
         glowPending.clear();
+        java.util.Arrays.fill(rowEffects, null);
         java.util.Arrays.fill(glowMasks, null);
         paletteRequest++;
         if (paletteWork != null) blurHandler().removeCallbacks(paletteWork);
@@ -909,7 +898,6 @@ final class LyricView extends View {
                     }
                 }
             }
-            prewarmBlur();
             if (LockLyrics.verbose) {
                 Xp.log(TAG + (dots >= 0 ? "interlude before " : "line ") + sf + "/" + n
                         + " at " + ms + "ms");
@@ -976,7 +964,7 @@ final class LyricView extends View {
                     java.util.Arrays.fill(backingLit[i], 0f);
                     blur[i] = 0f;
                 }
-                dropBlurred(i);
+                rowEffects[i] = null;
                 continue;
             }
             // Position: the line's own ripple delay, then the move's spring.
@@ -1068,15 +1056,6 @@ final class LyricView extends View {
         float target = singing ? 1f : 0f;
         float value = approach(previous, target, dt, singing ? TAU_EMPH_IN : TAU_EMPH_OUT);
         return Math.abs(value - target) < 0.003f ? target : value;
-    }
-
-    private float blurFor(int rows) {
-        return LyricDepth.radius(rows) * density;
-    }
-
-    private int rowsFromFocus(int i) {
-        if (dotsFor >= 0) return i >= dotsFor ? i - dotsFor + 1 : dotsFor - i + 2;
-        return singing.distance(i);
     }
 
     /** Depth uses the current spring positions, so wrapped rows follow their visible distance. */
@@ -1881,7 +1860,6 @@ final class LyricView extends View {
         glowGeneration++;
         glowWarmFocus = Integer.MIN_VALUE;
         glowPending.clear();
-        blurPending.clear();
         int n = lines.size();
         glowMasks = new LyricGlowMask[n];
         finalMask = null;
@@ -1896,7 +1874,7 @@ final class LyricView extends View {
         if (overlapSlots.length != n) overlapSlots = new boolean[n];
         singing.update(lines, ms, Settings.LYRIC_MAX_LINES.get(), Math.max(0, focus), indexAt(ms));
         singing.layout(base, height, lyricGap(GAP_DP), overlapSlots);
-        blurBmp = new Bitmap[n][BLUR_MAX_ROWS];
+        rowEffects = new LyricRenderBlur[n];
         if (!preserve) backingLit = new float[n][];
         for (int i = 0; i < n; i++) {
             float[] previous = backingLit[i];
@@ -1992,7 +1970,6 @@ final class LyricView extends View {
             if (y + height[i] >= bandTop && y <= bandBottom) delay += RIPPLE_MS;
         }
         if (reveal) transRevealAt = now;
-        prewarmBlur();
         invalidate();
         kick();
     }
@@ -2858,66 +2835,38 @@ final class LyricView extends View {
     }
 
     private void drawLine(Canvas canvas, int i, float x, float y, float a) {
-        LyricLine l = lines.get(i);
-        float e = emph[i], rowBlur = blur[i];
-        // In the AOD's still mode a word-timed line is drawn whole, like a line-timed one: a fill
-        // frozen at whatever syllable the one frame caught would be wrong for the whole line.
-        boolean still = LockLyrics.still();
-        boolean words = wordTimed(l) && e > 0f && !still;
-        int save = canvas.save();
-        canvas.translate(x, y);
-        if (words) {
-            // From the first frame of emphasis, so the first syllable lifts from the start. While
-            // the line's blur is still clearing, its blurred picture is crossfaded out underneath
-            // - handing over to the word path only once the blur had gone made the first word
-            // jump up already half lifted.
-            float k = rowBlur <= 0f ? 0f : clamp01(rowBlur / Math.max(0.01f, blurFor(1)));
-            drawWords(canvas, i, a * (1f - k), e);
-            if (k > 0f) {
-                float r = blurFor(1);
-                for (int d = 1; d <= BLUR_MAX_ROWS && blurFor(d) < rowBlur; d++) r = blurFor(d + 1);
-                drawBlurLevel(canvas, i, r, a * voiceOpacity(e) * k);
-            }
-        } else {
-            // The radius sits between two of the fixed ones - sharp, or a distance's blur - and is
-            // drawn as a crossfade of those two pictures, so each is blurred once, not per frame.
-            float r = rowBlur;
-            float lo = 0f, hi = 0f;
-            for (int d = 0; d <= BLUR_MAX_ROWS; d++) {
-                float v = blurFor(d);
-                if (v <= r + 0.01f) lo = v;
-                if (v >= r - 0.01f) {
-                    hi = v;
-                    break;
-                }
-                hi = v;
-            }
-            if (hi < lo) hi = lo;
-            float t = hi > lo ? clamp01((r - lo) / (hi - lo)) : 0f;
-            if (t < 1f) {
-                if (lo == 0f) drawStatic(canvas, i, a * (1f - t), true);
-                else drawBlurLevel(canvas, i, lo, a * voiceOpacity(e) * (1f - t));
-            }
-            if (t > 0f) drawBlurLevel(canvas, i, hi, a * voiceOpacity(e) * t);
-        }
-        canvas.restoreToCount(save);
-    }
-
-    private void drawBlurLevel(Canvas canvas, int i, float radius, float alpha) {
-        if (alpha <= 0.002f) return;
-        Bitmap b = blurredFor(i, rowsFor(radius));
-        if (b == null) {
-            drawStatic(canvas, i, alpha, false);
+        float pixels = blur[i];
+        if (pixels < 0.05f || !canvas.isHardwareAccelerated()) {
+            drawInkAt(canvas, i, x, y, a);
             return;
         }
-        // A blur spreads a glyph's ink over more pixels, so the same alpha reads fainter the more it
-        // is blurred. Compensated a little, so distance reads as depth rather than as fading out.
-        float boost = 1f + BLUR_ALPHA_PER_DP * (radius / density);
-        bmpPaint.setAlpha(Math.round(255f * Math.min(1f, alpha * boost)));
-        int w = main[i].getWidth() + 2 * blurPad;
-        int h = Math.round(height[i]) + 2 * blurPad;
-        bmpDst.set(-blurPad, -blurPad, w - blurPad, h - blurPad);
-        canvas.drawBitmap(b, null, bmpDst, bmpPaint);
+        if (!canvas.getClipBounds(rowClip)) return;
+        int left = Math.max(rowClip.left - blurPad, (int) Math.floor(x - blurPad));
+        int right = Math.min(rowClip.right + blurPad, (int) Math.ceil(x + main[i].getWidth() + blurPad));
+        int top = Math.max(rowClip.top - blurPad, (int) Math.floor(y - blurPad));
+        int bottom = Math.min(rowClip.bottom + blurPad, (int) Math.ceil(y + height[i] + blurPad));
+        if (right <= left || bottom <= top) return;
+        LyricRenderBlur effect = rowEffects[i];
+        if (effect == null) effect = rowEffects[i] = new LyricRenderBlur();
+        Canvas layer = effect.begin(left, top, right, bottom, pixels);
+        try {
+            drawInkAt(layer, i, x, y, a);
+        } finally {
+            effect.finish(canvas);
+        }
+    }
+
+    private void drawInkAt(Canvas canvas, int i, float x, float y, float a) {
+        int save = canvas.save();
+        canvas.translate(x, y);
+        // The still AOD draws whole lines; singing states still come from each voice's clock.
+        float highlight = emph[i];
+        if (wordTimed(lines.get(i)) && highlight > 0f && !LockLyrics.still()) {
+            drawWords(canvas, i, a, highlight);
+        } else {
+            drawStatic(canvas, i, a);
+        }
+        canvas.restoreToCount(save);
     }
 
     // ------------------------------------------------------------------ colour
@@ -2984,7 +2933,6 @@ final class LyricView extends View {
                 hsv[2] = 1f;
                 ti = android.graphics.Color.HSVToColor(hsv);
             }
-            int oldMainDim = baseMainDim, oldBgDim = baseBgDim, oldDuetDim = baseDuetDim;
             // HCT solving stays off the draw thread; until ready, retain the last palette.
             baseMainDim = resolveColor(next.mainMode, next.mainColor, ti, false, false, next.mainIntensity);
             baseMainLit = resolveColor(next.mainMode, next.mainColor, -1, false, true, next.mainIntensity);
@@ -2994,21 +2942,6 @@ final class LyricView extends View {
             baseBgLit = resolveColor(next.bgMode, next.bgColor, -1, true, true, next.bgIntensity);
             baseTranslation = resolveColor(next.transMode, next.transColor, ti, true, false, next.transIntensity);
             baseTranslationLit = resolveColor(next.transMode, next.transColor, -1, true, true, next.transIntensity);
-            // Blur pictures always contain saved colors and role-specific alpha. Only an
-            // actual base change rebuilds them, never the 300ms navigation color animation.
-            if (oldMainDim != baseMainDim || oldBgDim != baseBgDim ||
-                    oldDuetDim != baseDuetDim || builtDuetOpacity != next.duetOpacity ||
-                    builtMainOpacity != next.mainOpacity || builtBgOpacity != next.bgOpacity ||
-                    builtTransDim != baseTranslation || builtTransOpacity != next.transOpacity) {
-                builtMainOpacity = next.mainOpacity;
-                builtDuetOpacity = next.duetOpacity;
-                builtBgOpacity = next.bgOpacity;
-                builtTransDim = baseTranslation;
-                builtTransOpacity = next.transOpacity;
-                blurGeneration++;
-                blurBmp = new Bitmap[lines.size()][BLUR_MAX_ROWS];
-                blurPending.clear();
-            }
         }
         mainDim = navigationColor.apply(baseMainDim);
         mainLit = navigationColor.apply(baseMainLit);
@@ -3018,18 +2951,8 @@ final class LyricView extends View {
         bgLit = navigationColor.apply(baseBgLit);
         translationDim = navigationColor.apply(baseTranslation);
         translationLit = navigationColor.apply(baseTranslationLit);
-        if (colorChanged) {
-            if (navigationColor.identity()) bmpPaint.setColorFilter(null);
-            else {
-                navigationColor.matrix(navigationMatrix);
-                bmpPaint.setColorFilter(new android.graphics.ColorMatrixColorFilter(navigationMatrix));
-            }
-        }
         return true;
     }
-
-    private float builtDuetOpacity = -1f, builtMainOpacity = -1f, builtBgOpacity = -1f, builtTransOpacity = -1f;
-    private int builtTransDim;
 
     private void requestPalette(final int seed) {
         if (paletteWork != null) blurHandler().removeCallbacks(paletteWork);
@@ -3097,259 +3020,6 @@ final class LyricView extends View {
         return blendInk(translationDim, translationLit, whiteness, alpha * a.transOpacity, 1f);
     }
 
-    /** The distance a blur radius belongs to. */
-    private int rowsFor(float radius) {
-        for (int d = 1; d <= BLUR_MAX_ROWS; d++) {
-            if (Math.abs(blurFor(d) - radius) < 0.01f) return d;
-        }
-        return BLUR_MAX_ROWS;
-    }
-
-    /**
-     * The line's picture blurred for a distance, or the nearest one it has while that is still
-     * being made. Never made here: blurring on the UI thread, several lines at every line change,
-     * was the hitch the scroll showed (99th percentile 38ms, 2026-09-16).
-     */
-    private Bitmap blurredFor(int i, int rows) {
-        Bitmap[] have = blurBmp[i];
-        if (have[rows - 1] != null) return have[rows - 1];
-        requestBlur(i, rows, true);
-        for (int gap = 1; gap < BLUR_MAX_ROWS; gap++) {
-            if (rows - gap >= 1 && have[rows - gap - 1] != null) return have[rows - gap - 1];
-            if (rows + gap <= BLUR_MAX_ROWS && have[rows + gap - 1] != null) {
-                return have[rows + gap - 1];
-            }
-        }
-        return null;
-    }
-
-    /**
-     * The pictures the lines around the focus want now and at the next line change: their
-     * distance now and one less, and for the line being sung the distance it drops back to.
-     * Once made they stay, so after the first few lines this asks for one new line a change.
-     */
-    private void prewarmBlur() {
-        int n = lines.size();
-        blurWarmFocus = focus;
-        // Queue the nearby rows first: FIFO used to put several past/offscreen rows ahead of
-        // the next line, leaving the visible transition waiting behind their bitmap work.
-        for (int distance = 0; distance <= 10; distance++) {
-            int after = focus + distance;
-            if (after < n) prewarmBlurLine(after);
-            int before = focus - distance;
-            if (distance > 0 && distance <= 4 && before >= 0) prewarmBlurLine(before);
-        }
-    }
-
-    private void prewarmBlurLine(int i) {
-        int d = Math.min(rowsFromFocus(i), BLUR_MAX_ROWS);
-        if (d >= 1) requestBlur(i, d);
-        if (d >= 2) requestBlur(i, d - 1);
-        if (d <= 1) requestBlur(i, 2);
-        if (i < focus && d < BLUR_MAX_ROWS) requestBlur(i, d + 1);
-    }
-
-    private static final class BlurJob {
-        final LyricBlurWork ticket;
-        Runnable task;
-        BlurJob(int row) { ticket = new LyricBlurWork(row); }
-    }
-
-    private void requestBlur(final int i, final int rows) {
-        requestBlur(i, rows, false);
-    }
-
-    private void requestBlur(final int i, final int rows, boolean visible) {
-        if (rows < 1 || rows > BLUR_MAX_ROWS || i < 0 || i >= blurBmp.length) return;
-        if (blurBmp[i][rows - 1] != null) return;
-        final int key = i * 8 + rows;
-        BlurJob existing = blurPending.get(key);
-        if (existing != null) {
-            // A prewarm may be queued behind many earlier lines. Promote it once when it is
-            // actually drawn; the atomic claim still prevents duplicate work if it just started.
-            if (visible && existing.ticket.promote()) {
-                blurHandler().removeCallbacks(existing.task);
-                blurHandler().postAtFrontOfQueue(existing.task);
-            }
-            return;
-        }
-        final BlurJob job = new BlurJob(i);
-        if (visible) job.ticket.promote();
-        blurPending.put(key, job);
-        // Every radius in the same layout and palette uses the same immutable paint snapshot.
-        // A new focus can queue dozens of bitmaps; cloning three TextPaints for each of them on
-        // the UI thread caused allocation bursts on that frame. Clone per job on the worker.
-        final int gen = buildGen;
-        final int colorsGen = blurGeneration;
-        final BlurPaints style = blurPaints();
-        final LyricLine l = lines.get(i);
-        final int alignOn = builtAlign, transOn = builtTrans;
-        final boolean duet = builtDuet;
-        final int width = main[i].getWidth();
-        final int fullW = width + 2 * blurPad, fullH = Math.round(height[i]) + 2 * blurPad;
-        final float radius = blurFor(rows);
-        final int pad = blurPad;
-        final float transGap = lyricGap(TRANS_GAP_DP);
-        final float bgGap = lyricGap(BG_GAP_DP);
-        final int down = rows >= BLUR_QUARTER_ROWS ? 4 : 2;
-        job.task = new Runnable() {
-            @Override
-            public void run() {
-                if (!job.ticket.claim()) return;
-                // Fast openings and seeks leave old prewarms in the FIFO. Skip them before
-                // allocating a bitmap once their row has left the retained focus window.
-                if (gen != buildGen || colorsGen != blurGeneration) return;
-                final boolean skipped = job.ticket.obsolete(blurWarmFocus);
-                final Bitmap b = skipped ? null :
-                        makeBlurred(l, width, fullW, fullH, pad, radius, style,
-                                transGap, bgGap, down, alignOn, transOn, duet);
-                // Upload preparation belongs on the worker too. Otherwise the first frame that
-                // draws a fresh blur bitmap also has to stage its pixels for the renderer.
-                if (b != null && gen == buildGen && colorsGen == blurGeneration
-                        && Math.abs(i - blurWarmFocus) <= 2) {
-                    try { b.prepareToDraw(); } catch (Throwable ignored) {
-                        // The normal draw can still use the bitmap if preparation fails.
-                    }
-                }
-                if (!Gen.live() || gen != buildGen || colorsGen != blurGeneration) {
-                    if (b != null) b.recycle();
-                    return;
-                }
-                post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (!Gen.live() || gen != buildGen || colorsGen != blurGeneration || i >= blurBmp.length) {
-                            if (b != null) b.recycle();
-                            return;
-                        }
-                        if (blurPending.get(key) != job) {
-                            if (b != null) b.recycle();
-                            return;
-                        }
-                        blurPending.remove(key);
-                        if (b == null) {
-                            // A skipped row may have become visible before this callback.
-                            // A real allocation failure keeps the existing non-retrying behavior.
-                            if (skipped && isAttachedToWindow()) invalidate();
-                            return;
-                        }
-                        if (job.ticket.obsolete(blurWarmFocus)) {
-                            b.recycle();
-                            if (isAttachedToWindow()) invalidate();
-                            return;
-                        }
-                        blurBmp[i][rows - 1] = b;
-                        // While the loop runs its next frame draws it anyway.
-                        if (!frame.active()) invalidate();
-                    }
-                });
-            }
-        };
-        boolean queued = visible ? blurHandler().postAtFrontOfQueue(job.task) : blurHandler().post(job.task);
-        if (!queued) blurPending.remove(key);
-    }
-
-    /** Frozen main-thread paint values shared by blur jobs for one layout and palette. */
-    private static final class BlurPaints {
-        final int layout, colors;
-        final TextPaint main, trans, background, duet;
-        BlurPaints(int layout, int colors, TextPaint main, TextPaint trans, TextPaint background, TextPaint duet) {
-            this.layout = layout; this.colors = colors;
-            this.main = main; this.trans = trans; this.background = background; this.duet = duet;
-        }
-    }
-
-    private BlurPaints blurPaintSnapshot;
-
-    private BlurPaints blurPaints() {
-        BlurPaints cached = blurPaintSnapshot;
-        if (cached != null && cached.layout == buildGen && cached.colors == blurGeneration) return cached;
-        TextPaint p = new TextPaint(paint), tp = new TextPaint(transPaint), bp = new TextPaint(bgPaint);
-        LyricAppearance a = appearance == null ? LyricAppearance.DEFAULT : appearance;
-        p.setColor(android.graphics.Color.toArgb(
-                blendInk(baseMainDim, baseMainDim, 0f, a.mainOpacity, 1f)));
-        bp.setColor(android.graphics.Color.toArgb(
-                blendInk(baseBgDim, baseBgDim, 0f, a.bgOpacity, 1f)));
-        tp.setColor(android.graphics.Color.toArgb(
-                blendInk(baseTranslation, baseTranslation, 0f, a.transOpacity, 1f)));
-        TextPaint dp = new TextPaint(p);
-        dp.setColor(android.graphics.Color.toArgb(
-                blendInk(baseDuetDim, baseDuetDim, 0f, a.duetOpacity, 1f)));
-        return blurPaintSnapshot = new BlurPaints(buildGen, blurGeneration, p, tp, bp, dp);
-    }
-
-    /**
-     * Off the UI thread: the line at 1/down of the resolution, blurred. The blur scales with the
-     * canvas.
-     */
-    private static Bitmap makeBlurred(LyricLine l, int width, int fullW, int fullH, int pad,
-                                      float radius, BlurPaints style, float transGap, float bgGap,
-                                      int down, int alignOn, int transOn, boolean duet) {
-        try {
-            LyricLine.Voice voice = l.voice(duet);
-            TextPaint p = new TextPaint(voice == LyricLine.Voice.DUET ? style.duet : style.main),
-                    tp = new TextPaint(style.trans),
-                    bp = new TextPaint(style.background);
-            // A solo backing vocal uses a full-size layout but keeps the backing colour.
-            if (voice == LyricLine.Voice.BACKING) p.setColor(bp.getColor());
-            Bitmap b = Bitmap.createBitmap(Math.max(1, fullW / down), Math.max(1, fullH / down),
-                    Bitmap.Config.ARGB_8888);
-            Canvas c = new Canvas(b);
-            c.scale(1f / down, 1f / down);
-            c.translate(pad, pad);
-            BlurMaskFilter mf = new BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL);
-            Layout.Alignment align = alignFor(l.oppositeSide(duet), alignOn);
-            p.setShader(null);
-            p.clearShadowLayer();
-            p.setMaskFilter(mf);
-            StaticLayout lay = StaticLayout.Builder.obtain(l.text, 0, l.text.length(), p, width)
-                    .setAlignment(align)
-                    .setIncludePad(false)
-                    .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED)
-                    .build();
-            lay.draw(c);
-            float below = lay.getHeight();
-            for (LyricLine bg : l.backgrounds()) {
-                bp.setShader(null);
-                bp.setMaskFilter(mf);
-                StaticLayout bl = StaticLayout.Builder.obtain(bg.text, 0, bg.text.length(),
-                                bp, width)
-                        .setAlignment(alignFor(bg.opposite, alignOn))
-                        .setIncludePad(false)
-                        .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED)
-                        .build();
-                int save = c.save();
-                c.translate(0f, below + bgGap);
-                bl.draw(c);
-                c.restoreToCount(save);
-                below += bgGap + bl.getHeight();
-            }
-            String under = l.under(transOn);
-            if (under != null) {
-                tp.setMaskFilter(mf);
-                StaticLayout t = StaticLayout.Builder.obtain(under, 0, under.length(), tp, width)
-                        .setAlignment(align)
-                        .setIncludePad(false)
-                        .build();
-                c.translate(0f, below + transGap);
-                t.draw(c);
-            }
-            return b;
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    /**
-     * A line far from the focus lets its pictures go. Not recycled: the render thread may still be
-     * drawing one from the last frame. The collector frees them once nothing holds them.
-     */
-    private void dropBlurred(int i) {
-        if (i >= blurBmp.length) return;
-        Bitmap[] have = blurBmp[i];
-        for (int k = 0; k < have.length; k++) have[k] = null;
-    }
-
     private static android.os.Handler sBlurHandler;
 
     /** Keep only the singing passage and the next two lines, preparing before a held note. */
@@ -3412,11 +3082,11 @@ final class LyricView extends View {
         return INACTIVE + (1f - INACTIVE) * highlight;
     }
 
-    /** The sharp row uses each singer's own state; the blur fallback uses saved dim ink. */
-    private void drawStatic(Canvas c, int i, float a, boolean followsPlayback) {
+    /** A whole row uses each singer's independent brightness. */
+    private void drawStatic(Canvas c, int i, float a) {
         StaticLayout lay = main[i];
-        float w = followsPlayback ? lit[i] : 0f;
-        lay.getPaint().setColor(ink(a * (followsPlayback ? voiceOpacity(w) : 1f),
+        float w = lit[i];
+        lay.getPaint().setColor(ink(a * voiceOpacity(w),
                 w, lines.get(i).voice(builtDuet)));
         lay.draw(c);
         lay.getPaint().setColor(0xFFFFFFFF);
@@ -3425,15 +3095,15 @@ final class LyricView extends View {
             StaticLayout b = bgLay[i][k];
             int save = c.save();
             c.translate(0f, below + lyricGap(BG_GAP_DP));
-            w = followsPlayback ? backingLit[i][k] : 0f;
-            b.getPaint().setColor(ink(a * (followsPlayback ? voiceOpacity(w) : 1f),
+            w = backingLit[i][k];
+            b.getPaint().setColor(ink(a * voiceOpacity(w),
                     w, LyricLine.Voice.BACKING));
             b.draw(c);
             b.getPaint().setColor(0xFFFFFFFF);
             c.restoreToCount(save);
             below += lyricGap(BG_GAP_DP) + b.getHeight();
         }
-        drawTranslation(c, i, a * (followsPlayback ? voiceOpacity(emph[i]) : 1f));
+        drawTranslation(c, i, a * voiceOpacity(emph[i]));
     }
 
     /** How far down the translation starts: under the line and its background vocal. */

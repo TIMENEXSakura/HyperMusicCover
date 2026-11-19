@@ -132,10 +132,15 @@ public final class LockLyrics {
 
     /** End the explicit page request when its media session is destroyed. */
     public static void clearCapsulePage() {
+        clearCapsulePage(null);
+    }
+
+    public static void clearCapsulePage(Runnable releaseCover) {
         sCapsulePreparation = false;
         sCapsulePage = false;
         Main.setCapsuleArtworkOwner(false, null, null);
         Main.capsuleLyricsRequestEnded();
+        if (releaseCover != null) releaseCover.run();
         notifyAvailabilitySoon();
         Main.main().removeCallbacks(CAPSULE_DIAGNOSTIC);
         refresh();
@@ -1163,7 +1168,7 @@ public final class LockLyrics {
                 LyricBluetoothRoute.current(), Settings.LYRIC_BT_CLASSIC.get(), Settings.LYRIC_BT_LE.get());
     }
 
-    static long rawPositionMs() {
+    public static long rawPositionMs() {
         if (sDemo) return Math.max(0L, SystemClock.uptimeMillis() - sDemoT0);
         PlaybackState s = sState;
         if (s == null || s.getPosition() < 0L) return -1L;

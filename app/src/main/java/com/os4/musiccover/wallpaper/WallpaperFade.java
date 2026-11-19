@@ -153,6 +153,30 @@ public final class WallpaperFade {
 
     public static void startFade(final Bitmap from, final Bitmap to, final Runnable done,
                                   final long durMs) {
+        startFade(from, to, done, durMs, false);
+    }
+
+    /** An exit inherits the visible blend when a previous frosting fade is still moving. */
+    public static void startExitFade(Bitmap from, Bitmap to, Runnable done) {
+        Bitmap frame = WallpaperProbe.sFade;
+        if (sameSize(frame, to)) {
+            try {
+                Bitmap copy = frame.copy(Bitmap.Config.ARGB_8888, false);
+                if (copy != null) from = copy;
+            } catch (RuntimeException | OutOfMemoryError ignored) {
+                // A failed optional snapshot can still hand off the current cover.
+            }
+        }
+        startFade(from, to, done, WallpaperProbe.sFadeMs, true);
+    }
+
+    private static boolean sameSize(Bitmap first, Bitmap second) {
+        return first != null && second != null && !first.isRecycled() && !second.isRecycled()
+                && first.getWidth() == second.getWidth() && first.getHeight() == second.getHeight();
+    }
+
+    private static void startFade(final Bitmap from, final Bitmap to, final Runnable done,
+                                  final long durMs, boolean exactStart) {
         final Context ctx = WallpaperProbe.sCtx;
         if (ctx == null || from == null || to == null || from.isRecycled() || to.isRecycled()
                 || from.getWidth() != to.getWidth() || from.getHeight() != to.getHeight()) {
@@ -168,7 +192,7 @@ public final class WallpaperFade {
             return;
         }
         if (gpuFadeUsable()) {
-            startGpuFade(from, to, done, durMs);
+            startGpuFade(from, to, done, durMs, exactStart);
             return;
         }
         if (fadeTooExpensive(from)) {
@@ -374,7 +398,8 @@ public final class WallpaperFade {
         }
     }
 
-    private static void startGpuFade(Bitmap from, Bitmap to, Runnable done, long durMs) {
+    private static void startGpuFade(Bitmap from, Bitmap to, Runnable done, long durMs,
+                                     boolean exactStart) {
         boostForFade(true);
         // A CPU fade still running owns sFade; stop it before the texture changes hands. A GPU
         // fade overtaken by this one simply stops too, without running its completion - the
@@ -404,14 +429,18 @@ public final class WallpaperFade {
                 Xp.log(WallpaperProbe.TAG + "gpu fade reversed at alpha " + Math.round(a * 100f) / 100f
                         + " -> " + target);
             } else {
-                // A third picture - a skip while the last one was still fading. Only two
-                // pictures can be on screen, so start from whichever of the two dominates it
-                // now: the jump is at most half a fade instead of all of one.
-                Bitmap near = a >= 0.5f ? old.from : old.to;
-                if (near != null && !near.isRecycled() && near.getWidth() == to.getWidth()
-                        && near.getHeight() == to.getHeight()) {
-                    from = near;
+                Bitmap current = old.swapRequested ? old.dest : a >= 0.5f ? old.from : old.to;
+                if (exactStart && !old.swapRequested && a > 0f && a < 1f
+                        && sameSize(old.from, to) && sameSize(old.to, to)) {
+                    try {
+                        Bitmap blend = Bitmap.createBitmap(to.getWidth(), to.getHeight(), Bitmap.Config.ARGB_8888);
+                        blendInto(blend, old.to, old.from, a);
+                        current = blend;
+                    } catch (RuntimeException | OutOfMemoryError ignored) {
+                        // The nearer endpoint is available if the handoff buffer cannot be made.
+                    }
                 }
+                if (sameSize(current, to)) from = current;
                 f = startFreshGpuFade(from, to, done, durMs);
             }
         } else {

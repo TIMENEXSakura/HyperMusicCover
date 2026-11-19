@@ -15,8 +15,12 @@ import com.os4.musiccover.Gen;
 import com.os4.musiccover.lyrics.LockLyrics;
 import com.os4.musiccover.lyrics.TrackIdentity;
 import com.os4.musiccover.island.MiniPlayerRuntime;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.media.session.MediaController;
+import android.os.SystemClock;
 import android.text.Layout;
 import android.widget.TextView;
 import java.util.List;
@@ -182,10 +186,54 @@ public final class MediaCard {
                 sCardArtist = card.findViewById(card.getResources()
                         .getIdentifier("header_artist", "id", "com.android.systemui"));
                 assertMediaCard(card);
+                revealIdleMediaCard();
                 if (Main.sCoverMode && (Settings.MC_HIDE_ART.on() || Settings.MC_TITLE_TAP.on() || Settings.MC_PAGE_BUTTON.on())) guardCard(card);
                 else releaseCardGuard();
             }
         });
+    }
+
+    private static long sIdleRevealDeadline;
+    private static ValueAnimator sIdleReveal;
+
+    public static void expectIdleMediaCard() {
+        cancelIdleMediaCardReveal();
+        if (Main.screenOnCached() && Main.keyguardLocked()) {
+            sIdleRevealDeadline = SystemClock.uptimeMillis() + 1600L;
+        }
+    }
+
+    /** Lets an OEM idle header fade in after the music scene lets go of its space. */
+    public static void revealIdleMediaCard() {
+        if (sIdleRevealDeadline == 0L || Main.coverSceneActive()) return;
+        if (SystemClock.uptimeMillis() > sIdleRevealDeadline
+                || !Main.screenOnCached() || !Main.keyguardLocked()) {
+            sIdleRevealDeadline = 0L;
+            return;
+        }
+        View view = Main.miniPlayerMediaHeader();
+        if (view == null || !view.isShown() || view.getTransitionAlpha() <= 0.01f) return;
+        sIdleRevealDeadline = 0L;
+        float target = view.getTransitionAlpha();
+        view.setTransitionAlpha(0f);
+        ValueAnimator alpha = Gen.anim(ValueAnimator.ofFloat(0f, target));
+        sIdleReveal = alpha;
+        alpha.setDuration(280L);
+        alpha.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        alpha.addUpdateListener(frame -> view.setTransitionAlpha((Float) frame.getAnimatedValue()));
+        alpha.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator animation) {
+                if (sIdleReveal != animation) return;
+                view.setTransitionAlpha(target);
+                sIdleReveal = null;
+            }
+        });
+        alpha.start();
+    }
+
+    public static void cancelIdleMediaCardReveal() {
+        sIdleRevealDeadline = 0L;
+        if (sIdleReveal != null) sIdleReveal.cancel();
     }
 
     /**
@@ -784,6 +832,7 @@ public final class MediaCard {
      * card, and the video surface released. The card itself is the OEM's and stays as it is.
      */
     public static void retire() {
+        cancelIdleMediaCardReveal();
         unlisten();
         releaseCardGuard();
         CardVideo.retire();

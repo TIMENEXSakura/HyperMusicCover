@@ -36,6 +36,8 @@ public final class PageExitProbeActivity extends Activity {
     private static final int[] CUTS = {TOP, 177, 299, 458, 586, BOTTOM};
     private static final int FIRST = -2, LAST = 8;
     private static final int CLIP_FADE = LAST + 1;
+    private static final int SOFT_BLUR = LAST + 2;
+    private static final int WIDE_BLUR = LAST + 3;
     private static final int CLIP_FEATHER = 96;
     private int phase = FIRST, retries;
     private File output;
@@ -90,12 +92,14 @@ public final class PageExitProbeActivity extends Activity {
                     if (requested != page.lastPainted) throw new IllegalStateException("Unexpected committed frame");
                     String name = requested == FIRST ? "background" : requested == -1 ? "reference"
                             : requested == CLIP_FADE ? "clip-fade"
+                            : requested == SOFT_BLUR ? "blur-soft"
+                            : requested == WIDE_BLUR ? "blur-wide"
                             : String.format(Locale.ROOT, "step-%02d", requested);
                     try (FileOutputStream out = new FileOutputStream(new File(output, name + ".png"))) {
                         if (!frame.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IllegalStateException("PNG write failed");
                     }
                     retries = 0;
-                    if (phase == CLIP_FADE) {
+                    if (phase == WIDE_BLUR) {
                         JSONObject report = new JSONObject();
                         report.put("width", WIDTH).put("height", HEIGHT).put("hardwareCanvas", page.hardwareCanvas);
                         report.put("clipTop", TOP).put("clipBottom", BOTTOM).put("steps", LAST);
@@ -137,6 +141,7 @@ public final class PageExitProbeActivity extends Activity {
     private final class Page extends View {
         private final LyricPageExitMask mask = new LyricPageExitMask();
         private final LyricClipFade clipFade = new LyricClipFade();
+        private final LyricRenderBlur liveBlur = new LyricRenderBlur();
         private final RenderNode glyphs = new RenderNode("frozen Android lyric layouts");
         private final Paint backdrop = new Paint();
         private final int[] glyphCounts = new int[CENTRES.length];
@@ -166,8 +171,12 @@ public final class PageExitProbeActivity extends Activity {
                 c.drawRect(110, TOP - 40, 204, TOP + 160, backdrop);
                 clipFade.endRow(c, WIDTH, layer);
                 c.restoreToCount(saved);
-            }
-            else if (phase >= 0) {
+            } else if (phase == SOFT_BLUR || phase == WIDE_BLUR) {
+                Canvas layer = liveBlur.begin(70, 236, 222, 412, phase == SOFT_BLUR ? 2f : 12f);
+                backdrop.setColor(Color.WHITE);
+                layer.drawRect(140, 280, 172, 360, backdrop);
+                liveBlur.finish(c);
+            } else if (phase >= 0) {
                 mask.draw(c, TOP, BOTTOM, phase / (float) LAST, canvas -> canvas.drawRenderNode(glyphs));
             }
             lastPainted = phase;

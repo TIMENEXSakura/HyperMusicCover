@@ -2771,6 +2771,7 @@ internal class MiniPlayerController(
             view.visibility = state.visibility
             view.alpha = state.alpha
         }
+        MediaCard.revealIdleMediaCard()
     }
 
     /** The row laid out again on the next frame, for `op fod`. */

@@ -2753,6 +2753,7 @@ public class Main extends XposedModule {
      * the display is off, or nothing was taken over - it is handed back in one frame.
      */
     private static void exitCoverMode(boolean animate) {
+        if (animate) LockLyrics.animatePageRequest(false);
         if (!LockLyrics.capsulePageRequested()) LockLyrics.resetCapsuleLayoutOrigin();
         CoverCardLayer.leaving();
         sCoverMode = false;
@@ -2844,6 +2845,7 @@ public class Main extends XposedModule {
             sCapsuleKeepsMini = false;
         if (sCoverMode) return;
         MediaCard.sCardP = 0f;
+        MediaCard.revealIdleMediaCard();
         MediaCard.applyMediaCard();
         MiniPlayerRuntime.refresh();
     }
@@ -4516,6 +4518,10 @@ public class Main extends XposedModule {
         boolean same = c != null && sWatched != null
                 && c.getSessionToken().equals(sWatched.getSessionToken());
         if (!same) {
+            boolean hadMedia = sWatched != null;
+            cancelPlaybackFinishCheck();
+            sFinishedMediaKey = null;
+            if (c != null) MediaCard.cancelIdleMediaCardReveal();
             if (sWatched != null && sMediaCb != null) {
                 try {
                     Gen.unsessionCallback(sWatched, sMediaCb);
@@ -4559,10 +4565,16 @@ public class Main extends XposedModule {
                     public void onPlaybackStateChanged(PlaybackState state) {
                         if (!CapsuleSessionPolicy.same(c.getSessionToken(),
                                 sWatched == null ? null : sWatched.getSessionToken())) return;
+                        long previousPosition = LockLyrics.rawPositionMs();
                         LockLyrics.onPlaybackState(state);
                         boolean playing = state != null && state.getState() == PlaybackState.STATE_PLAYING;
                         boolean stoppedPlaying = sWatchedPlaying && !playing;
                         sWatchedPlaying = playing;
+                        if (playing) {
+                            cancelPlaybackFinishCheck();
+                            sFinishedMediaKey = null;
+                            MediaCard.cancelIdleMediaCardReveal();
+                        }
                         // Another already-active player may have started before this one paused.
                         if (stoppedPlaying) {
                             rebindSession();
@@ -4570,6 +4582,7 @@ public class Main extends XposedModule {
                                     sWatched == null ? null : sWatched.getSessionToken())) return;
                         }
                         updateCoverCardPlayback(state);
+                        if (stoppedPlaying) schedulePlaybackFinish(c, state, previousPosition);
                         MiniPlayerRuntime.refreshSoon();
                     }
 
@@ -4593,10 +4606,14 @@ public class Main extends XposedModule {
                 boolean capsuleRequested = LockLyrics.capsuleRequestActive();
                 // The lyric owner decides whether its cover can be released now or must wait
                 // for a navigation page to relinquish the wallpaper.
-                LockLyrics.clearCapsulePage();
-                LockLyrics.resetCapsuleLayoutOrigin();
-                sCapsuleKeepsMini = false;
-                if (capsuleRequested) LockLyrics.onTrack("", null);
+                if (hadMedia) {
+                    finishPlaybackScene();
+                } else {
+                    LockLyrics.clearCapsulePage();
+                    LockLyrics.resetCapsuleLayoutOrigin();
+                    if (!coverSceneActive()) sCapsuleKeepsMini = false;
+                    if (capsuleRequested) LockLyrics.onTrack("", null);
+                }
                 Xp.log(TAG + "no active media session");
             }
         }
@@ -4605,6 +4622,60 @@ public class Main extends XposedModule {
         onMediaUpdate();
         if (!same && c != null && !Settings.AUTO.on() && sCoverMode && !sCapsuleOverNavigation)
             CoverPush.pushArtAsync(true, true);
+    }
+
+    private static final long PLAYBACK_END_SETTLE_MS = 360L;
+    private static Runnable sPlaybackFinishCheck;
+    private static String sFinishedMediaKey;
+
+    private static void cancelPlaybackFinishCheck() {
+        if (sPlaybackFinishCheck == null) return;
+        main().removeCallbacks(sPlaybackFinishCheck);
+        sPlaybackFinishCheck = null;
+    }
+
+    private static void schedulePlaybackFinish(MediaController c, PlaybackState state, long before) {
+        if (!sCoverMode && !LockLyrics.capsuleRequestActive()) return;
+        MediaMetadata metadata = c.getMetadata();
+        long duration = metadata == null ? 0L : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        if (!reachedPlaybackEnd(state, before, duration)) return;
+        String key = trackKey(c, metadata);
+        if (key.isEmpty()) return;
+        cancelPlaybackFinishCheck();
+        sPlaybackFinishCheck = () -> {
+            sPlaybackFinishCheck = null;
+            if (sWatched == null || !CapsuleSessionPolicy.same(c.getSessionToken(), sWatched.getSessionToken())
+                    || !key.equals(trackKey(sWatched))) return;
+            PlaybackState current = sWatched.getPlaybackState();
+            if (!reachedPlaybackEnd(current, before, duration)) return;
+            sFinishedMediaKey = key;
+            finishPlaybackScene();
+        };
+        main().postDelayed(sPlaybackFinishCheck, PLAYBACK_END_SETTLE_MS);
+    }
+
+    private static boolean reachedPlaybackEnd(PlaybackState state, long before, long duration) {
+        int status = state == null ? PlaybackState.STATE_NONE : state.getState();
+        long position = state == null ? -1L : state.getPosition();
+        return PlaybackFinishPolicy.finished(status, position, before, duration);
+    }
+
+    private static void finishPlaybackScene() {
+        boolean leaving = sCoverMode || LockLyrics.capsuleRequestActive();
+        if (!leaving) return;
+        LockLyrics.animatePageRequest(false);
+        MediaCard.expectIdleMediaCard();
+        LockLyrics.clearCapsulePage(() -> {
+            // The currently frosted cover is the start of the wallpaper's handoff. Do
+            // this before clearing the lyric rows, which would otherwise sharpen it.
+            if (sCoverMode && !sCapsuleOverNavigation) setCoverEnabled(false, true, false);
+        });
+        LockLyrics.resetCapsuleLayoutOrigin();
+        LockLyrics.onTrack("", null);
+        if (!coverSceneActive()) {
+            sCapsuleKeepsMini = false;
+            MediaCard.revealIdleMediaCard();
+        }
     }
 
     /**
@@ -4759,6 +4830,11 @@ public class Main extends XposedModule {
         // refresh for as well (MiniPlayerRuntime.refreshSoon).
         if (explicitEntry) MiniPlayerRuntime.refresh();
         else MiniPlayerRuntime.refreshSoon();
+        if (sWatched == null) return;
+        if (sFinishedMediaKey != null) {
+            if (!explicitEntry && sFinishedMediaKey.equals(trackKey(sWatched))) return;
+            sFinishedMediaKey = null;
+        }
         // Preflight must not create a cover or change its background before lyrics exist.
         if (LockLyrics.capsulePreparing()) return;
         MediaController owned = LockLyrics.capsuleSession();
